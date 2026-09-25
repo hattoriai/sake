@@ -108,11 +108,19 @@ defmodule Sake.Content do
   def from_wire(%{"type" => "text", "text" => t} = w),
     do: %__MODULE__{type: :text, text: t} |> take_extras(w)
 
-  def from_wire(%{"type" => "image", "data" => d, "mimeType" => m} = w),
-    do: %__MODULE__{type: :image, data: Base.decode64!(d), mime_type: m} |> take_extras(w)
+  def from_wire(%{"type" => "image", "data" => d, "mimeType" => m} = w) do
+    case Base.decode64(d) do
+      {:ok, data} -> %__MODULE__{type: :image, data: data, mime_type: m} |> take_extras(w)
+      :error -> {:error, :unknown_content}
+    end
+  end
 
-  def from_wire(%{"type" => "audio", "data" => d, "mimeType" => m} = w),
-    do: %__MODULE__{type: :audio, data: Base.decode64!(d), mime_type: m} |> take_extras(w)
+  def from_wire(%{"type" => "audio", "data" => d, "mimeType" => m} = w) do
+    case Base.decode64(d) do
+      {:ok, data} -> %__MODULE__{type: :audio, data: data, mime_type: m} |> take_extras(w)
+      :error -> {:error, :unknown_content}
+    end
+  end
 
   def from_wire(%{"type" => "resource_link", "uri" => u} = w) do
     %__MODULE__{
@@ -127,14 +135,20 @@ defmodule Sake.Content do
   end
 
   def from_wire(%{"type" => "resource", "resource" => %{"uri" => u, "blob" => b} = r} = w) do
-    %__MODULE__{
-      type: :resource,
-      uri: u,
-      data: Base.decode64!(b),
-      blob: true,
-      mime_type: r["mimeType"]
-    }
-    |> take_extras(w)
+    case Base.decode64(b) do
+      {:ok, data} ->
+        %__MODULE__{
+          type: :resource,
+          uri: u,
+          data: data,
+          blob: true,
+          mime_type: r["mimeType"]
+        }
+        |> take_extras(w)
+
+      :error ->
+        {:error, :unknown_content}
+    end
   end
 
   def from_wire(%{"type" => "resource", "resource" => %{"uri" => u, "text" => t} = r} = w) do
@@ -169,13 +183,17 @@ defmodule Sake.Content do
   defp annotations_in(a) do
     a
     |> Enum.map(fn
-      {"audience", list} -> {:audience, Enum.map(list, &String.to_existing_atom/1)}
+      {"audience", list} -> {:audience, Enum.map(list, &safe_audience_atom/1)}
       {"priority", p} -> {:priority, p}
       {"lastModified", t} -> {:last_modified, t}
       {k, v} -> {k, v}
     end)
     |> Map.new()
   end
+
+  defp safe_audience_atom("user"), do: :user
+  defp safe_audience_atom("assistant"), do: :assistant
+  defp safe_audience_atom(s), do: s
 
   defp put_some(map, _key, nil), do: map
   defp put_some(map, key, value), do: Map.put(map, key, value)

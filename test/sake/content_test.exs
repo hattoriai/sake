@@ -67,4 +67,29 @@ defmodule Sake.ContentTest do
 
     assert Content.from_wire(%{"type" => "weird"}) == {:error, :unknown_content}
   end
+
+  test "from_wire handles malformed data gracefully" do
+    assert Content.from_wire(%{"type" => "image", "data" => "***", "mimeType" => "image/png"}) ==
+             {:error, :unknown_content}
+
+    assert Content.from_wire(%{
+             "type" => "resource",
+             "resource" => %{"uri" => "u://1", "blob" => "***"}
+           }) == {:error, :unknown_content}
+  end
+
+  test "annotations with unknown audience values pass through as strings" do
+    c =
+      Content.from_wire(%{
+        "type" => "text",
+        "text" => "x",
+        "annotations" => %{"audience" => ["user", "robot"]}
+      })
+
+    assert c.annotations == %{audience: [:user, "robot"]}
+  end
+
+  test "empty annotations are not wired" do
+    refute Map.has_key?(Content.to_wire(Content.text("x", annotations: %{})), "annotations")
+  end
 end
