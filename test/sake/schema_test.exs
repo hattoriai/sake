@@ -91,16 +91,12 @@ defmodule Sake.SchemaTest do
     assert {:ok, %{a: 1.5}} = Schema.validate(schema, %{a: 1.5})
     assert {:ok, %{"b" => "kept", a: 1}} = Schema.validate(schema, %{"a" => 1, "b" => "kept"})
 
-    # Test with a property name that is not an atom literal elsewhere
-    schema2 = %{
-      "type" => "object",
-      "properties" => %{"zq_never_seen_before_7" => %{"type" => "number"}},
-      "required" => ["zq_never_seen_before_7"]
-    }
-
-    assert {:ok, result} = Schema.validate(schema2, %{"zq_never_seen_before_7" => 1})
-    assert Map.keys(result) == [:zq_never_seen_before_7]
-    assert result.zq_never_seen_before_7 == 1
+    # The name is built at runtime so no atom for it exists before validate/2 runs.
+    name = "zq_novel_" <> Integer.to_string(System.unique_integer([:positive]))
+    schema2 = %{"type" => "object", "properties" => %{name => %{"type" => "integer"}}}
+    assert {:ok, result} = Schema.validate(schema2, %{name => 1})
+    assert Enum.map(Map.keys(result), &Atom.to_string/1) == [name]
+    assert Map.values(result) == [1]
   end
 
   test "pattern and length" do
