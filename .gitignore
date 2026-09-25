@@ -1,0 +1,11 @@
+/_build
+/deps
+/doc
+/cover
+/priv/plts
+/tmp
+conformance/node_modules
+conformance/results
+erl_crash.dump
+sake-*.tar
+*.ez
