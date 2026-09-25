@@ -84,8 +84,11 @@
           # You can customize the priority of any check
           # Priority values are: `low, normal, high, higher`
           #
+          # if_nested_deeper_than: 3 accommodates the `Sake.<Component>.Spec`
+          # and `Sake.Server.Notifier` naming this package uses throughout for
+          # its public structs; deeper nesting still triggers this check.
           {Credo.Check.Design.AliasUsage,
-           [priority: :low, if_nested_deeper_than: 2, if_called_more_often_than: 0]},
+           [priority: :low, if_nested_deeper_than: 3, if_called_more_often_than: 0]},
           {Credo.Check.Design.TagFIXME, []},
           # You can also customize the exit_status of each check.
           # If you don't want TODO comments to cause `mix credo` to fail, just

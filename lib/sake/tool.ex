@@ -1,0 +1,169 @@
+defmodule Sake.Tool do
+  @moduledoc """
+  A tool: `use Sake.Tool` with options, `arg` lines, an optional `output`
+  block, and `execute/2`.
+
+      defmodule MyApp.MCP.SearchIssues do
+        use Sake.Tool, name: "search_issues", description: "Search issues", scope: "issues:read"
+        arg :query, :string, required: true
+        @impl true
+        def execute(%{query: q}, ctx), do: {:ok, Issues.search(ctx.scope, q)}
+      end
+
+  Options: `name` (default: the module's last segment in snake case),
+  `title`, `description`, `icons`, `scope` (one or many), `annotations`
+  (`read_only`, `destructive`, `idempotent`, `open_world`), `stream`,
+  `ttl`, `meta`, `input_schema` (a schema map instead of `arg` lines).
+  """
+
+  alias Sake.Schema
+
+  @callback spec() :: Sake.Tool.Spec.t()
+  @callback execute(args :: map(), ctx :: Sake.Context.t()) ::
+              {:ok, term()} | {:ok, term(), keyword()} | {:error, String.t()}
+  @callback complete(arg :: String.t(), partial :: String.t(), ctx :: Sake.Context.t()) ::
+              {:ok, [String.t()]} | {:ok, [String.t()], keyword()}
+  @optional_callbacks complete: 3
+
+  @name_re ~r/^[A-Za-z0-9_.\-]{1,128}$/
+
+  defmodule Spec do
+    @moduledoc "The compiled definition of a tool."
+    @type t :: %__MODULE__{}
+    defstruct [
+      :module,
+      :name,
+      :title,
+      :description,
+      :output_schema,
+      :meta,
+      icons: [],
+      input_schema: %{},
+      annotations: %{},
+      scopes: [],
+      stream: false,
+      ttl: nil,
+      headers: %{}
+    ]
+
+    @spec to_wire(t(), String.t()) :: map()
+    def to_wire(%__MODULE__{} = s, revision) do
+      %{"name" => s.name, "description" => s.description || "", "inputSchema" => s.input_schema}
+      |> maybe_put("annotations", annotations(s.annotations))
+      |> maybe_put("title", if(revision >= "2025-06-18", do: s.title))
+      |> maybe_put("outputSchema", if(revision >= "2025-06-18", do: s.output_schema))
+      |> maybe_put("icons", if(revision >= "2025-11-25", do: Sake.Tool.icons_to_wire(s.icons)))
+      |> maybe_put("_meta", s.meta)
+    end
+
+    defp annotations(a) when a == %{}, do: nil
+
+    defp annotations(a) do
+      Map.new(a, fn
+        {:read_only, v} -> {"readOnlyHint", v}
+        {:destructive, v} -> {"destructiveHint", v}
+        {:idempotent, v} -> {"idempotentHint", v}
+        {:open_world, v} -> {"openWorldHint", v}
+        {:title, v} -> {"title", v}
+      end)
+    end
+
+    defp maybe_put(m, _k, nil), do: m
+    defp maybe_put(m, _k, []), do: m
+    defp maybe_put(m, k, v), do: Map.put(m, k, v)
+  end
+
+  defmacro __using__(opts) do
+    quote do
+      @behaviour Sake.Tool
+      @sake_opts unquote(opts)
+      Module.register_attribute(__MODULE__, :sake_args, accumulate: true)
+      Module.register_attribute(__MODULE__, :sake_output_args, accumulate: true)
+      @sake_in_output false
+      import Sake.Tool, only: [arg: 2, arg: 3, output: 1]
+      @before_compile Sake.Tool
+    end
+  end
+
+  @doc "Declares an argument (or, inside `output`, an output property)."
+  defmacro arg(name, type, opts \\ []) do
+    quote do
+      if @sake_in_output,
+        do: @sake_output_args({unquote(name), unquote(type), unquote(opts)}),
+        else: @sake_args({unquote(name), unquote(type), unquote(opts)})
+    end
+  end
+
+  @doc "Declares the output schema with `arg` lines."
+  defmacro output(do: block) do
+    quote do
+      @sake_in_output true
+      unquote(block)
+      @sake_in_output false
+    end
+  end
+
+  defmacro __before_compile__(env) do
+    opts = Module.get_attribute(env.module, :sake_opts)
+    args = env.module |> Module.get_attribute(:sake_args) |> Enum.reverse()
+    output_args = env.module |> Module.get_attribute(:sake_output_args) |> Enum.reverse()
+    name = validate_name!(opts[:name] || default_name(env.module))
+    spec = build_spec(env.module, name, opts, args, output_args)
+
+    quote do
+      @impl Sake.Tool
+      def spec, do: unquote(Macro.escape(spec))
+    end
+  end
+
+  @doc false
+  def validate_name!(name) do
+    unless is_binary(name) and Regex.match?(@name_re, name),
+      do:
+        raise(
+          ArgumentError,
+          "tool name #{inspect(name)} must be 1-128 characters of letters, digits, _ . -"
+        )
+
+    name
+  end
+
+  defp build_spec(module, name, opts, args, output_args) do
+    input_schema = opts[:input_schema] || Schema.build(args)
+    output_schema = opts[:output_schema] || output_schema(output_args)
+
+    %Spec{
+      module: module,
+      name: name,
+      title: opts[:title],
+      description: opts[:description],
+      icons: opts[:icons] || [],
+      input_schema: input_schema,
+      output_schema: output_schema,
+      annotations: Map.new(opts[:annotations] || []),
+      scopes: List.wrap(opts[:scope]),
+      stream: opts[:stream] || false,
+      ttl: opts[:ttl],
+      meta: opts[:meta],
+      headers: Schema.header_paths(input_schema)
+    }
+  end
+
+  defp output_schema([]), do: nil
+  defp output_schema(output_args), do: Schema.build(output_args)
+
+  @doc false
+  def default_name(module), do: module |> Module.split() |> List.last() |> Macro.underscore()
+
+  @doc false
+  def icons_to_wire([]), do: nil
+
+  def icons_to_wire(icons) do
+    Enum.map(icons, fn icon ->
+      %{"src" => icon[:src]}
+      |> then(&if(icon[:mime_type], do: Map.put(&1, "mimeType", icon[:mime_type]), else: &1))
+      |> then(&if(icon[:sizes], do: Map.put(&1, "sizes", icon[:sizes]), else: &1))
+      |> then(&if(icon[:theme], do: Map.put(&1, "theme", to_string(icon[:theme])), else: &1))
+    end)
+  end
+end
