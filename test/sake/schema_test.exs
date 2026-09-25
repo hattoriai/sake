@@ -90,6 +90,17 @@ defmodule Sake.SchemaTest do
 
     assert {:ok, %{a: 1.5}} = Schema.validate(schema, %{a: 1.5})
     assert {:ok, %{"b" => "kept", a: 1}} = Schema.validate(schema, %{"a" => 1, "b" => "kept"})
+
+    # Test with a property name that is not an atom literal elsewhere
+    schema2 = %{
+      "type" => "object",
+      "properties" => %{"zq_never_seen_before_7" => %{"type" => "number"}},
+      "required" => ["zq_never_seen_before_7"]
+    }
+
+    assert {:ok, result} = Schema.validate(schema2, %{"zq_never_seen_before_7" => 1})
+    assert Map.keys(result) == [:zq_never_seen_before_7]
+    assert result.zq_never_seen_before_7 == 1
   end
 
   test "pattern and length" do

@@ -131,49 +131,20 @@ defmodule Sake.Schema do
     end
   end
 
-  # credo:disable-for-lines:45 Credo.Check.Refactor.CyclomaticComplexity
-  # credo:disable-for-lines:45 Credo.Check.Refactor.Nesting
   defp check(%{"type" => "object"} = schema, value, path) when is_map(value) do
     props = schema["properties"] || %{}
     required = schema["required"] || []
     additional = Map.get(schema, "additionalProperties", true)
 
-    {results, errors} =
-      Enum.reduce(props, {%{}, []}, fn {name, prop}, {acc, errs} ->
-        key = String.to_existing_atom(name)
-
-        case Map.fetch(value, name) do
-          {:ok, v} ->
-            case check(prop, v, path ++ [name]) do
-              {:ok, v} -> {Map.put(acc, key, v), errs}
-              {:error, e} -> {acc, [e | errs]}
-            end
-
-          :error ->
-            cond do
-              name in required -> {acc, [%{path: path ++ [name], message: "is required"} | errs]}
-              Map.has_key?(prop, "default") -> {Map.put(acc, key, prop["default"]), errs}
-              true -> {Map.put(acc, key, nil), errs}
-            end
-        end
-      end)
-
-    extra = Map.drop(value, Map.keys(props))
+    {results, errors} = process_properties(props, required, value, path, {%{}, []})
 
     {results, errors} =
-      cond do
-        extra == %{} ->
-          {results, errors}
-
-        additional == false ->
-          {results,
-           Enum.map(extra, fn {k, _} ->
-             %{path: path ++ [k], message: "is not an accepted argument"}
-           end) ++ errors}
-
-        true ->
-          {Map.merge(results, extra), errors}
-      end
+      process_extra_properties(
+        Map.drop(value, Map.keys(props)),
+        additional,
+        path,
+        {results, errors}
+      )
 
     if errors == [], do: {:ok, results}, else: {:error, Enum.reverse(errors)}
   end
@@ -248,6 +219,53 @@ defmodule Sake.Schema do
     do: {:error, %{path: path, message: "must be a boolean"}}
 
   defp check(_schema, value, _path), do: {:ok, value}
+
+  defp process_properties(props, required, value, path, acc) do
+    Enum.reduce(props, acc, fn {name, prop}, {results, errors} ->
+      # Declared property names come from the host's schema, not from the client; undeclared keys stay strings.
+      key = String.to_atom(name)
+
+      case Map.fetch(value, name) do
+        {:ok, v} ->
+          validate_and_update(key, prop, v, path ++ [name], results, errors)
+
+        :error ->
+          handle_missing_property(name, prop, key, path, required, results, errors)
+      end
+    end)
+  end
+
+  defp validate_and_update(key, prop, value, path, results, errors) do
+    case check(prop, value, path) do
+      {:ok, v} -> {Map.put(results, key, v), errors}
+      {:error, e} -> {results, [e | errors]}
+    end
+  end
+
+  defp handle_missing_property(name, prop, key, path, required, results, errors) do
+    cond do
+      name in required -> {results, [%{path: path ++ [name], message: "is required"} | errors]}
+      Map.has_key?(prop, "default") -> {Map.put(results, key, prop["default"]), errors}
+      true -> {Map.put(results, key, nil), errors}
+    end
+  end
+
+  defp process_extra_properties(extra, additional, path, {results, errors}) do
+    cond do
+      extra == %{} ->
+        {results, errors}
+
+      additional == false ->
+        {results,
+         Enum.map(extra, fn {k, _} ->
+           %{path: path ++ [k], message: "is not an accepted argument"}
+         end) ++
+           errors}
+
+      true ->
+        {Map.merge(results, extra), errors}
+    end
+  end
 
   defp range(s, value, path) do
     cond do
