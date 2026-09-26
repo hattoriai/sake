@@ -292,6 +292,7 @@ defmodule Sake.Plug do
             era: :legacy,
             protocol_version: session.revision,
             client_capabilities: session.capabilities,
+            log_level: session.log_level,
             scope: opts.scope.(conn),
             token: conn.assigns[:sake_token],
             scopes: conn.assigns[:sake_scopes] || [],
@@ -301,17 +302,34 @@ defmodule Sake.Plug do
             reraise: opts.reraise
           )
 
-        conn =
-          if Session.renew?(session),
-            do:
-              put_resp_header(
-                conn,
-                "mcp-session-id",
-                Session.mint(secret(opts), session.revision, session.capabilities)
-              ),
-            else: conn
-
+        conn = renew_session(conn, opts, session, parsed)
         legacy_message(conn, opts, parsed, ctx)
+    end
+  end
+
+  # `logging/setLevel` takes effect at once (the level rides in the signed
+  # session ID, since the server keeps no per-session state): the response
+  # carries a re-minted ID, which every conformant client picks up from
+  # any response, not only `initialize`. Otherwise the ID is re-minted
+  # only when it is getting old, carrying the same level forward.
+  defp renew_session(conn, opts, session, {:request, _, "logging/setLevel", %{"level" => level}})
+       when is_binary(level) do
+    put_resp_header(
+      conn,
+      "mcp-session-id",
+      Session.mint(secret(opts), session.revision, session.capabilities, level)
+    )
+  end
+
+  defp renew_session(conn, opts, session, _parsed) do
+    if Session.renew?(session) do
+      put_resp_header(
+        conn,
+        "mcp-session-id",
+        Session.mint(secret(opts), session.revision, session.capabilities, session.log_level)
+      )
+    else
+      conn
     end
   end
 

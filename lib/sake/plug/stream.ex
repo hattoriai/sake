@@ -9,6 +9,14 @@ defmodule Sake.Plug.Stream do
   alias Sake.{Context, JSONRPC, Protocol}
   alias Sake.Plug.{SSE, Streams}
 
+  # `loop/5` demonitors `Task.async/1`'s own monitor ref by hand (there is
+  # no public `Task` API to do this outside a `receive`, which is exactly
+  # what it is inside); `Task.ref/0` is `@opaque`, and Dialyzer flags using
+  # the plain `reference()` it wraps for anything besides matching it back
+  # in a `receive`. The value is a `reference()` at runtime regardless —
+  # this silences a known-safe crossing of that opacity, not a real bug.
+  @dialyzer {:no_opaque, loop: 5}
+
   @spec respond(Plug.Conn.t(), map(), Sake.JSONRPC.parsed(), Context.t(), function()) ::
           Plug.Conn.t()
   def respond(conn, opts, {:request, id, method, params} = parsed, ctx, handler) do
@@ -111,7 +119,16 @@ defmodule Sake.Plug.Stream do
        }}
   end
 
+  @spec loop(Plug.Conn.t(), map(), term(), Context.t(), Task.t()) :: Plug.Conn.t()
   defp loop(conn, opts, id, ctx, task) do
+    # Matched by pinning, not `when ref == task.ref`: `Task.ref/0` is
+    # `@opaque`, and comparing an opaque value with `==` in a guard (rather
+    # than unifying it in a pattern) is exactly what Dialyzer's opaqueness
+    # check exists to catch. Extracting the field itself is unavoidable —
+    # `Task` has no public API to demonitor or pattern-match its own
+    # monitor ref outside a `receive` — hence `@dialyzer` below.
+    %Task{ref: task_ref} = task
+
     receive do
       {:sake_progress, token, current, total, message} ->
         params =
@@ -152,11 +169,11 @@ defmodule Sake.Plug.Stream do
           JSONRPC.request(request_id, "elicitation/create", params)
         )
 
-      {ref, outcome} when ref == task.ref ->
-        Process.demonitor(ref, [:flush])
+      {^task_ref, outcome} ->
+        Process.demonitor(task_ref, [:flush])
         finish(conn, id, ctx, after_outcome(outcome, ctx))
 
-      {:DOWN, ref, :process, _pid, reason} when ref == task.ref ->
+      {:DOWN, ^task_ref, :process, _pid, reason} ->
         finish(
           conn,
           id,
@@ -302,16 +319,22 @@ defmodule Sake.Plug.Stream do
   def legacy(conn, opts, _session, session_id) do
     Streams.register_legacy(opts.server, session_id)
     conn = SSE.start(conn)
-    legacy_loop(conn, opts, MapSet.new())
+    legacy_loop(conn, opts, %{})
   end
 
+  # `subscribed` is a set of URIs kept as a plain map (URI => true): a
+  # `MapSet` here defeats Dialyzer's opaqueness checking under the current
+  # toolchain (its `:sets` internals changed shape and the local recursive
+  # function's inferred success typing stops matching `MapSet.t()` at
+  # every call site) even though the code itself was correct.
+  @spec legacy_loop(Plug.Conn.t(), map(), %{String.t() => true}) :: Plug.Conn.t()
   defp legacy_loop(conn, opts, subscribed) do
     receive do
       {:sake_subscribe, uri} ->
-        legacy_loop(conn, opts, MapSet.put(subscribed, uri))
+        legacy_loop(conn, opts, Map.put(subscribed, uri, true))
 
       {:sake_unsubscribe, uri} ->
-        legacy_loop(conn, opts, MapSet.delete(subscribed, uri))
+        legacy_loop(conn, opts, Map.delete(subscribed, uri))
 
       {:sake_notify, {:list_changed, kind}} ->
         write_or_stop(
@@ -322,7 +345,7 @@ defmodule Sake.Plug.Stream do
         )
 
       {:sake_notify, {:resource_updated, uri}} ->
-        if MapSet.member?(subscribed, uri),
+        if Map.has_key?(subscribed, uri),
           do:
             write_or_stop(
               conn,
@@ -340,6 +363,7 @@ defmodule Sake.Plug.Stream do
     end
   end
 
+  @spec write_or_stop(Plug.Conn.t(), map(), %{String.t() => true}, map()) :: Plug.Conn.t()
   defp write_or_stop(conn, opts, subscribed, message) do
     case SSE.event(conn, message) do
       {:ok, conn} -> legacy_loop(conn, opts, subscribed)
