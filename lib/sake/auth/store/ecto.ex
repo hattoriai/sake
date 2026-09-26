@@ -79,7 +79,7 @@ if Code.ensure_loaded?(Ecto.Query) do
         scopes: c.scopes,
         resource: c.resource,
         subject_id: c.subject_id,
-        expires_at: c.expires_at
+        expires_at: DateTime.truncate(c.expires_at, :second)
       }
 
       {:ok, _} = repo.insert(row, prefix: s.prefix)
@@ -125,7 +125,11 @@ if Code.ensure_loaded?(Ecto.Query) do
       }
 
       {:ok, _} =
-        repo.insert(row, on_conflict: :replace_all, conflict_target: :id, prefix: s.prefix)
+        repo.insert(row,
+          on_conflict: {:replace_all_except, [:revoked_at, :used_at]},
+          conflict_target: :id,
+          prefix: s.prefix
+        )
 
       :ok
     end

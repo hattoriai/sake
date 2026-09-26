@@ -37,7 +37,7 @@ defmodule SakeTest.StoreCases do
           scopes: [],
           resource: "r",
           subject_id: "u",
-          expires_at: DateTime.add(DateTime.utc_now(), 600)
+          expires_at: DateTime.utc_now() |> DateTime.add(600) |> DateTime.truncate(:second)
         }
 
         assert :ok = mod.put_code(state, code)
@@ -98,14 +98,27 @@ defmodule SakeTest.StoreCases do
       test "prune removes expired codes and tokens", %{config: config} do
         {mod, state} = store(config)
         past = DateTime.add(DateTime.utc_now(), -10)
-        mod.put_code(state, %Code{hash: "old", expires_at: past})
+
+        mod.put_code(state, %Code{
+          hash: "old",
+          client_id: "c",
+          redirect_uri: "http://127.0.0.1:1/cb",
+          code_challenge: "x",
+          scopes: [],
+          resource: "r",
+          subject_id: "u9",
+          expires_at: past
+        })
 
         mod.put_token(state, %TokenRecord{
           id: "t-old",
           kind: :access,
           hash: "h-old",
           family_id: "f",
+          client_id: "c",
           subject_id: "u9",
+          scopes: [],
+          resource: "r",
           expires_at: past,
           inserted_at: past
         })

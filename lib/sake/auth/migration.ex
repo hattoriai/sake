@@ -34,13 +34,13 @@ if Code.ensure_loaded?(Ecto.Migration) do
 
       create table(:sake_oauth_codes, primary_key: false, prefix: prefix) do
         add(:hash, :string, primary_key: true)
-        add(:client_id, :string)
-        add(:redirect_uri, :text)
-        add(:code_challenge, :string)
+        add(:client_id, :string, null: false)
+        add(:redirect_uri, :text, null: false)
+        add(:code_challenge, :string, null: false)
         add(:scopes, {:array, :string}, null: false, default: [])
-        add(:resource, :text)
-        add(:subject_id, :string)
-        add(:expires_at, :utc_datetime_usec, null: false)
+        add(:resource, :text, null: false)
+        add(:subject_id, :string, null: false)
+        add(:expires_at, :utc_datetime, null: false)
         timestamps(type: :utc_datetime, updated_at: false)
       end
 
@@ -51,10 +51,10 @@ if Code.ensure_loaded?(Ecto.Migration) do
         add(:kind, :string, null: false)
         add(:hash, :string, null: false)
         add(:family_id, :string, null: false)
-        add(:client_id, :string)
+        add(:client_id, :string, null: false)
         add(:subject_id, :string, null: false)
         add(:scopes, {:array, :string}, null: false, default: [])
-        add(:resource, :text)
+        add(:resource, :text, null: false)
         add(:expires_at, :utc_datetime, null: false)
         add(:revoked_at, :utc_datetime)
         add(:used_at, :utc_datetime)
