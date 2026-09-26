@@ -8,14 +8,6 @@ server:
   # implemented on the conformance fixture server, so the scenario fails
   # with "Unknown tool" rather than a wrong answer.
   - tools-call-sampling
-  # Open defect (see guides/security.md, "Origin"): `origins: :any`
-  # disables Origin checking entirely, including for the DNS-rebinding
-  # case this scenario probes, and the default same-origin check also
-  # trusts the client-supplied Host header, so neither guards against a
-  # Host/Origin pair the client fully controls. A real fix needs a
-  # dedicated, separately-tested Host-validation option that does not
-  # misfire on a same-host reverse proxy.
-  - dns-rebinding-protection
 
 client:
   # Sake 0.1's client has no OAuth support at all (see README "status" and

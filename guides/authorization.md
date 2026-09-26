@@ -146,6 +146,13 @@ Both take `prefix:`. It creates `sake_oauth_clients`, `sake_oauth_codes`,
 (hashes and generated IDs, never the raw secrets). Point the auth config
 at it with `store: {Sake.Auth.Store.Ecto, repo: MyApp.Repo}`.
 
+The Ecto store's `put_token` never resurrects a token: it upserts on the
+token's `id` with `on_conflict: {:replace_all_except, [:revoked_at,
+:used_at]}`, so re-inserting a stale copy of a record (a retried write, a
+race with a concurrent revoke) replaces every column *except* those two —
+a token already marked revoked or used stays that way no matter what a
+later write for the same `id` says about it.
+
 ## The ETS store for development
 
 The default, `{Sake.Auth.Store.ETS, []}`, needs no database: an `Agent`

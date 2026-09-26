@@ -136,7 +136,8 @@ defmodule Sake.PlugTest do
           headers: [{"origin", "http://www.example.com"}]
         )
 
-      assert conn.status == 200
+      assert conn.status == 403 and
+               ModernClient.json(conn)["error"]["message"] == "Origin not allowed"
 
       conn =
         ModernClient.post(ModernClient.opts(origins: ["https://app.example"]), "tools/list", %{},

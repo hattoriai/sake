@@ -7,8 +7,11 @@ defmodule Sake.Plug do
   Options: `server:` (required), `auth:` (`true` protects the endpoint with
   `Sake.Auth`), `scope:` (a function of the conn that returns the host's
   principal; default `conn.assigns[:sake_scope]`), `origins:` (allowed
-  `Origin` values; default the host's own origin; `:any` disables the
-  check), `json_limit:` (bytes, default 4 MB), `keepalive:` (ms between SSE
+  `Origin` values for a request that sends one — a request with no `Origin`
+  header, which is how every non-browser MCP client connects, is always
+  allowed; default `nil` refuses any `Origin` at all, so a browser client
+  needs this set explicitly; `:any` allows any `Origin`), `json_limit:`
+  (bytes, default 4 MB), `keepalive:` (ms between SSE
   comments, default 15 000), `secret:` (binary or `{m, f, a}`; default the
   `Sake` configuration), `reraise:` (re-raise tool exceptions, for tests).
 

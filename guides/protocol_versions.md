@@ -78,12 +78,6 @@ session.
 fail on purpose; CI only turns red on a *new* failure. Currently:
 
 - **`tools-call-sampling`** (server) — no sampling support (above).
-- **`dns-rebinding-protection`** (server) — an open defect: the `origins:
-  :any` escape hatch (and, more subtly, the default same-origin check too)
-  trusts the incoming request's own `Host` header, so neither actually
-  stops a DNS-rebinding attack against an unauthenticated local endpoint.
-  See `guides/security.md`'s Origin section for the detail and the
-  mitigation until it is fixed at the library level.
 - **`sse-retry`** (client) — no resumability (above).
 - **`elicitation-sep1034-client-defaults`** (client) — the driver answers
   every elicitation with the request schema's declared defaults (what this

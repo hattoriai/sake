@@ -3,29 +3,25 @@
 ## Origin
 
 `Sake.Plug`'s `origins:` option checks the `Origin` header of every
-request (browser-originated cross-site requests carry one; most other
-clients do not, and a request with no `Origin` header at all is always
-allowed — this check is CORS-shaped, not a general access control).
-Default (`origins:` omitted): only the endpoint's own computed origin
-(scheme, host, port from the request itself) is accepted. A list accepts
-those values plus the endpoint's own origin. `origins: :any` disables the
-check entirely.
+request that sends one. Only a browser sends an `Origin` header at all —
+Claude Code, claude.ai's connectors, a CLI, a server-to-server
+integration, none of them do — so a request with no `Origin` header is
+always allowed, regardless of `origins:`; this check only ever matters for
+a browser-based client, and only once one shows up.
 
-**Open defect, read before setting `origins: :any` on an unauthenticated
-endpoint reachable from a browser:** the default same-origin check
-computes "the endpoint's own origin" from the *incoming request's own*
-`Host` header — the same thing an attacker attempting DNS rebinding
-controls — so an attacker whose `Origin` header simply matches whatever
-`Host` they sent already defeats it, on every endpoint, not only ones
-using `:any`. The official MCP conformance suite's `dns-rebinding-
-protection` scenario catches exactly this on an unauthenticated,
-plain-HTTP, localhost-bound endpoint (see `guides/protocol_versions.md`
-for its status in the conformance baseline). A safe fix needs a
-Host-validation check that does not simply widen what `origins:` already
-controls, since the naive version of that check misfires on legitimate
-same-host reverse-proxy setups — not yet done. Until it is: put `auth:
-true` on any endpoint a browser can reach, or terminate it behind TLS with
-a reverse proxy that validates `Host` itself.
+A request that *does* carry an `Origin` header must be allowed on
+purpose: the default (`origins:` omitted, i.e. `nil`) refuses it, full
+stop. There is deliberately no implicit "the endpoint's own origin"
+default computed from the request's own `Host` header — an earlier
+version of this check did exactly that, and since `Host` is exactly what
+an attacker performing DNS rebinding controls, an attacker whose `Origin`
+header simply matched whatever `Host` they sent defeated it trivially, on
+every endpoint. `origins: ["https://app.example.com", ...]` allows a
+request whose (lower-cased) `Origin` is in the list; `origins: :any`
+allows any `Origin` at all — reach for a list rather than `:any` unless
+the endpoint is genuinely meant to be called from arbitrary browser
+pages. A browser client of your own MCP server needs its origin added to
+the list; nothing else does.
 
 ## HTTPS
 
