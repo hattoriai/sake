@@ -102,7 +102,7 @@ defmodule Sake.Server.Dispatch do
     do: [Sake.Resource.Spec.to_wire(spec, ctx.protocol_version)]
 
   defp resource_entries(spec, ctx) do
-    if function_exported?(spec.module, :list, 1) do
+    if Code.ensure_loaded?(spec.module) and function_exported?(spec.module, :list, 1) do
       Enum.map(
         spec.module.list(ctx),
         &Sake.Resource.Spec.listed_to_wire(spec, &1, ctx.protocol_version)
