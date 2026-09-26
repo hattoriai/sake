@@ -100,8 +100,9 @@ defmodule Sake.Auth.Token do
   defp grant(config, client, %{"grant_type" => "refresh_token", "refresh_token" => refresh} = p)
        when is_binary(refresh) do
     {module, state} = Auth.store(config)
+    hash = Tokens.hash(refresh)
 
-    case module.consume_refresh(state, Tokens.hash(refresh)) do
+    case module.consume_refresh(state, hash) do
       :error ->
         {:error, "invalid_grant", "Unknown refresh token"}
 
@@ -110,14 +111,16 @@ defmodule Sake.Auth.Token do
         {:error, "invalid_grant", "The refresh token was already used"}
 
       {:ok, record} ->
-        rotate(config, client, record, p)
+        with {:ok, attrs} <- rotate(client, record, p) do
+          issued_unless_revoked(config, {module, state}, hash, attrs)
+        end
     end
   end
 
   defp grant(_config, _client, %{"grant_type" => "refresh_token"}),
     do: {:error, "invalid_request", "refresh_token is required"}
 
-  defp rotate(config, client, record, p) do
+  defp rotate(client, record, p) do
     with :ok <- fresh(record),
          true <-
            record.client_id == client.id ||
@@ -127,15 +130,35 @@ defmodule Sake.Auth.Token do
            p["resource"] in [nil, record.resource] ||
              {:error, "invalid_grant", "resource does not match"} do
       {:ok,
-       issue(config, %{
+       %{
          client_id: client.id,
          subject_id: record.subject_id,
          scopes: scopes,
          resource: record.resource,
          family_id: record.family_id
-       })}
+       }}
     else
       {:error, code, description} -> {:error, code, description}
+    end
+  end
+
+  # The store may only be able to revoke the rows that exist when
+  # `revoke_family/2` runs (a plain `UPDATE ... WHERE family_id = ?`, for
+  # instance): it cannot reach back and revoke a pair inserted after a
+  # concurrent request already swept the family. So the endpoint checks for
+  # itself, after inserting: if the token it just consumed shows revoked
+  # now, a concurrent reuse raced this request, and the new pair it just
+  # created must be revoked too, and denied, rather than handed out.
+  defp issued_unless_revoked(config, {module, state}, hash, attrs) do
+    response = issue(config, attrs)
+
+    case module.get_token(state, :refresh, hash) do
+      {:ok, %{revoked_at: at}} when not is_nil(at) ->
+        module.revoke_family(state, attrs.family_id)
+        {:error, "invalid_grant", "The refresh token was already used"}
+
+      _ ->
+        {:ok, response}
     end
   end
 

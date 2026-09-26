@@ -1,3 +1,45 @@
+defmodule Sake.Auth.TokenTest.RaceStore do
+  @moduledoc false
+  # A store that delegates to the ETS store, except that its first
+  # access-token insert revokes that token's own family first: it
+  # deterministically simulates a concurrent reuse revoking the family
+  # between a refresh request's `consume_refresh` and its `issue_pair`,
+  # without an actual race.
+  @behaviour Sake.Auth.Store
+  alias Sake.Auth.Store.ETS
+
+  def child_spec(opts), do: ETS.child_spec(opts)
+  def init(_opts), do: nil
+  def put_client(s, c), do: ETS.put_client(s, c)
+  def get_client(s, id), do: ETS.get_client(s, id)
+  def list_clients(s), do: ETS.list_clients(s)
+  def delete_client(s, id), do: ETS.delete_client(s, id)
+  def put_code(s, c), do: ETS.put_code(s, c)
+  def consume_code(s, hash), do: ETS.consume_code(s, hash)
+
+  def put_token(s, %{kind: :access} = token) do
+    unless Process.get(__MODULE__) do
+      Process.put(__MODULE__, true)
+      ETS.revoke_family(s, token.family_id)
+    end
+
+    ETS.put_token(s, token)
+  end
+
+  def put_token(s, token), do: ETS.put_token(s, token)
+
+  def get_token(s, kind, hash), do: ETS.get_token(s, kind, hash)
+  def mark_used(s, id), do: ETS.mark_used(s, id)
+  def consume_refresh(s, hash), do: ETS.consume_refresh(s, hash)
+  def revoke_token(s, id), do: ETS.revoke_token(s, id)
+  def revoke_family(s, family_id), do: ETS.revoke_family(s, family_id)
+  def tokens_for_subject(s, subject_id), do: ETS.tokens_for_subject(s, subject_id)
+  def put_consent(s, c), do: ETS.put_consent(s, c)
+  def get_consent(s, sub, client_id), do: ETS.get_consent(s, sub, client_id)
+  def delete_consent(s, sub, client_id), do: ETS.delete_consent(s, sub, client_id)
+  def prune(s, now), do: ETS.prune(s, now)
+end
+
 defmodule Sake.Auth.TokenTest do
   use SakeTest.AuthCase, async: false
   import Plug.Test
@@ -229,14 +271,26 @@ defmodule Sake.Auth.TokenTest do
     conn1 = Task.await(task1)
     conn2 = Task.await(task2)
 
-    assert Enum.sort([conn1.status, conn2.status]) == [200, 400]
-    winner = if conn1.status == 200, do: conn1, else: conn2
-    loser = if conn1.status == 200, do: conn2, else: conn1
-    assert body(loser)["error"] == "invalid_grant"
+    # Whoever wins the store-level race to consume r1 still may, or may
+    # not, beat the loser's family-wide revoke to finish issuing its own
+    # pair (the loser's revoke is one store round trip; the winner's issue
+    # is several) — so both requests answering invalid_grant is as valid an
+    # outcome as exactly one succeeding. What must never happen is a live
+    # duplicate pair surviving the race.
+    for conn <- [conn1, conn2], conn.status == 400 do
+      assert body(conn)["error"] == "invalid_grant"
+    end
 
-    %{"access_token" => a2} = body(winner)
     {mod, state} = Sake.Auth.store(config)
-    assert {:ok, %{revoked_at: %DateTime{}}} = mod.get_token(state, :access, Tokens.hash(a2))
+
+    for conn <- [conn1, conn2], conn.status == 200 do
+      %{"access_token" => access} = body(conn)
+
+      assert {:ok, %{revoked_at: %DateTime{}}} =
+               mod.get_token(state, :access, Tokens.hash(access))
+    end
+
+    assert Enum.all?([conn1.status, conn2.status], &(&1 in [200, 400]))
     assert {:ok, %{revoked_at: %DateTime{}}} = mod.get_token(state, :access, Tokens.hash(a1))
   end
 
@@ -246,5 +300,27 @@ defmodule Sake.Auth.TokenTest do
     assert conn.status == 405
     assert ["no-store"] = get_resp_header(conn, "cache-control")
     assert ["no-cache"] = get_resp_header(conn, "pragma")
+  end
+
+  @tag auth: [store: {Sake.Auth.TokenTest.RaceStore, []}]
+  test "a pair born into a family revoked mid-issue is denied, not handed out", %{config: config} do
+    client = public_client(config)
+
+    # Issued directly against the plain ETS store, bypassing the race
+    # store, so this setup does not itself trigger the simulated
+    # interleaving: only the refresh request below (through the endpoint,
+    # which reads the configured, race-simulating store) does.
+    plain = %{config | store: {Sake.Auth.Store.ETS, []}}
+    {_a1, r1, _} = issue(plain, %{client_id: client.id})
+
+    conn =
+      post(%{"grant_type" => "refresh_token", "refresh_token" => r1, "client_id" => client.id})
+
+    assert conn.status == 400
+    assert body(conn)["error"] == "invalid_grant"
+
+    {mod, state} = Sake.Auth.store(config)
+    assert [_, _, _, _] = tokens = mod.tokens_for_subject(state, "u1")
+    assert Enum.all?(tokens, &(&1.revoked_at != nil))
   end
 end
