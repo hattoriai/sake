@@ -38,7 +38,12 @@ defmodule Sake.Auth.Token do
     end
   end
 
-  def call(conn, _opts), do: send_resp(conn, 405, "")
+  def call(conn, _opts) do
+    conn
+    |> put_resp_header("cache-control", "no-store")
+    |> put_resp_header("pragma", "no-cache")
+    |> send_resp(405, "")
+  end
 
   defp authenticate_and_grant(conn, config, p) do
     case ClientAuth.authenticate(config, conn, p) do
@@ -96,8 +101,24 @@ defmodule Sake.Auth.Token do
        when is_binary(refresh) do
     {module, state} = Auth.store(config)
 
-    with {:ok, record} <- module.get_token(state, :refresh, Tokens.hash(refresh)),
-         :ok <- fresh(module, state, record),
+    case module.consume_refresh(state, Tokens.hash(refresh)) do
+      :error ->
+        {:error, "invalid_grant", "Unknown refresh token"}
+
+      {:error, :used, record} ->
+        module.revoke_family(state, record.family_id)
+        {:error, "invalid_grant", "The refresh token was already used"}
+
+      {:ok, record} ->
+        rotate(config, client, record, p)
+    end
+  end
+
+  defp grant(_config, _client, %{"grant_type" => "refresh_token"}),
+    do: {:error, "invalid_request", "refresh_token is required"}
+
+  defp rotate(config, client, record, p) do
+    with :ok <- fresh(record),
          true <-
            record.client_id == client.id ||
              {:error, "invalid_grant", "The refresh token belongs to another client"},
@@ -105,8 +126,6 @@ defmodule Sake.Auth.Token do
          true <-
            p["resource"] in [nil, record.resource] ||
              {:error, "invalid_grant", "resource does not match"} do
-      :ok = module.mark_used(state, record.id)
-
       {:ok,
        issue(config, %{
          client_id: client.id,
@@ -116,13 +135,9 @@ defmodule Sake.Auth.Token do
          family_id: record.family_id
        })}
     else
-      :error -> {:error, "invalid_grant", "Unknown refresh token"}
       {:error, code, description} -> {:error, code, description}
     end
   end
-
-  defp grant(_config, _client, %{"grant_type" => "refresh_token"}),
-    do: {:error, "invalid_request", "refresh_token is required"}
 
   defp check_code(record, client, uri, verifier, resource) do
     cond do
@@ -146,18 +161,10 @@ defmodule Sake.Auth.Token do
     end
   end
 
-  defp fresh(module, state, record) do
-    cond do
-      record.used_at != nil ->
-        module.revoke_family(state, record.family_id)
-        {:error, "invalid_grant", "The refresh token was already used"}
-
-      not Tokens.valid?(record, DateTime.utc_now()) ->
-        {:error, "invalid_grant", "The refresh token is expired or revoked"}
-
-      true ->
-        :ok
-    end
+  defp fresh(record) do
+    if Tokens.valid?(record, DateTime.utc_now()),
+      do: :ok,
+      else: {:error, "invalid_grant", "The refresh token is expired or revoked"}
   end
 
   defp narrowed(granted, nil), do: {:ok, granted}

@@ -35,4 +35,14 @@ defmodule Sake.Auth.RevokeTest do
 
     assert {:ok, %{revoked_at: %DateTime{}}} = mod.get_token(state, :access, at.hash)
   end
+
+  test "a non-POST request gets the no-store headers on its 405" do
+    conn =
+      conn(:get, "/oauth/revoke")
+      |> Sake.Auth.Revoke.call(Sake.Auth.Revoke.init([]))
+
+    assert conn.status == 405
+    assert ["no-store"] = get_resp_header(conn, "cache-control")
+    assert ["no-cache"] = get_resp_header(conn, "pragma")
+  end
 end

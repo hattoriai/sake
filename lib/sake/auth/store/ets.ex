@@ -15,14 +15,18 @@ defmodule Sake.Auth.Store.ETS do
   def child_spec(_opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [nil]}}
 
   # An `Agent`, not `use GenServer`: a GenServer's `init/1` callback would
-  # collide with the `Sake.Auth.Store` behaviour's `init/1` below.
+  # collide with the `Sake.Auth.Store` behaviour's `init/1` below. Its state
+  # is a map of `family_id => revoked_at`, so a family revocation is not
+  # just a sweep of the rows that exist when it runs: a token inserted for
+  # an already-revoked family (a race between rotating a refresh token and
+  # a concurrent reuse of it) is still born revoked.
   def start_link(_) do
     Agent.start_link(
       fn ->
         for {_k, name} <- @tables,
             do: :ets.new(name, [:named_table, :public, :set, read_concurrency: true])
 
-        nil
+        %{}
       end,
       name: __MODULE__
     )
@@ -54,8 +58,23 @@ defmodule Sake.Auth.Store.ETS do
     end
   end
 
+  # Goes through the Agent too, so it is serialized with `revoke_family/2`:
+  # whichever of the two runs last still sees the other's effect, so a
+  # token for an already-revoked family is inserted already revoked.
   @impl Sake.Auth.Store
-  def put_token(_s, token), do: insert(:tokens, token.id, token)
+  def put_token(_s, token) do
+    Agent.get_and_update(__MODULE__, fn revoked ->
+      insert(:tokens, token.id, born_revoked(token, revoked))
+      {:ok, revoked}
+    end)
+  end
+
+  defp born_revoked(token, revoked) do
+    case Map.get(revoked, token.family_id) do
+      nil -> token
+      at -> %{token | revoked_at: token.revoked_at || at}
+    end
+  end
 
   @impl Sake.Auth.Store
   def get_token(_s, kind, hash) do
@@ -67,15 +86,44 @@ defmodule Sake.Auth.Store.ETS do
 
   @impl Sake.Auth.Store
   def mark_used(_s, id), do: update(:tokens, id, &%{&1 | used_at: now()})
+
+  # Runs inside the owner Agent process, which serializes every call made
+  # through it: two concurrent callers can never both observe `used_at:
+  # nil` for the same hash, so exactly one of them marks it used.
+  @impl Sake.Auth.Store
+  def consume_refresh(_s, hash) do
+    Agent.get_and_update(__MODULE__, fn revoked ->
+      result =
+        case :ets.match_object(@tables.tokens, {:_, %{kind: :refresh, hash: hash}}) do
+          [{id, %{used_at: nil} = record}] ->
+            insert(:tokens, id, %{record | used_at: now()})
+            {:ok, record}
+
+          [{_id, record}] ->
+            {:error, :used, record}
+
+          [] ->
+            :error
+        end
+
+      {result, revoked}
+    end)
+  end
+
   @impl Sake.Auth.Store
   def revoke_token(_s, id), do: update(:tokens, id, &%{&1 | revoked_at: &1.revoked_at || now()})
 
+  # Also goes through the Agent: it records the family as revoked (so a
+  # token inserted for it afterward is born revoked, see `put_token/2`)
+  # and sweeps the rows that already exist, atomically in the same step.
   @impl Sake.Auth.Store
   def revoke_family(_s, family_id) do
-    for {id, %{family_id: ^family_id}} <- :ets.tab2list(@tables.tokens),
-        do: update(:tokens, id, &%{&1 | revoked_at: &1.revoked_at || now()})
+    Agent.get_and_update(__MODULE__, fn revoked ->
+      for {id, %{family_id: ^family_id}} <- :ets.tab2list(@tables.tokens),
+          do: update(:tokens, id, &%{&1 | revoked_at: &1.revoked_at || now()})
 
-    :ok
+      {:ok, Map.put_new(revoked, family_id, now())}
+    end)
   end
 
   @impl Sake.Auth.Store

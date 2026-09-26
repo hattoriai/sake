@@ -12,6 +12,13 @@ defmodule Sake.Auth.Store do
   @callback put_token(state(), TokenRecord.t()) :: :ok
   @callback get_token(state(), :access | :refresh, String.t()) :: {:ok, TokenRecord.t()} | :error
   @callback mark_used(state(), String.t()) :: :ok
+  @doc """
+  Marks a refresh token used now, if and only if it was unused, atomically:
+  two concurrent calls for the same hash must not both succeed. Returns the
+  record as it was *before* this call.
+  """
+  @callback consume_refresh(state(), String.t()) ::
+              {:ok, TokenRecord.t()} | {:error, :used, TokenRecord.t()} | :error
   @callback revoke_token(state(), String.t()) :: :ok
   @callback revoke_family(state(), String.t()) :: :ok
   @callback tokens_for_subject(state(), String.t()) :: [TokenRecord.t()]

@@ -205,4 +205,46 @@ defmodule Sake.Auth.TokenTest do
     assert {:ok, %{revoked_at: %DateTime{}}} = mod.get_token(state, :access, Tokens.hash(a2))
     assert {:ok, %{revoked_at: %DateTime{}}} = mod.get_token(state, :refresh, Tokens.hash(r2))
   end
+
+  test "a refresh token is consumed atomically: two concurrent uses, only one wins", %{
+    config: config
+  } do
+    client = public_client(config)
+    code = Authorize.issue_code(config, request(client), "u1")
+
+    %{"refresh_token" => r1, "access_token" => a1} =
+      body(
+        post(%{
+          "grant_type" => "authorization_code",
+          "code" => code,
+          "client_id" => client.id,
+          "redirect_uri" => hd(client.redirect_uris),
+          "code_verifier" => @verifier
+        })
+      )
+
+    params = %{"grant_type" => "refresh_token", "refresh_token" => r1, "client_id" => client.id}
+    task1 = Task.async(fn -> post(params) end)
+    task2 = Task.async(fn -> post(params) end)
+    conn1 = Task.await(task1)
+    conn2 = Task.await(task2)
+
+    assert Enum.sort([conn1.status, conn2.status]) == [200, 400]
+    winner = if conn1.status == 200, do: conn1, else: conn2
+    loser = if conn1.status == 200, do: conn2, else: conn1
+    assert body(loser)["error"] == "invalid_grant"
+
+    %{"access_token" => a2} = body(winner)
+    {mod, state} = Sake.Auth.store(config)
+    assert {:ok, %{revoked_at: %DateTime{}}} = mod.get_token(state, :access, Tokens.hash(a2))
+    assert {:ok, %{revoked_at: %DateTime{}}} = mod.get_token(state, :access, Tokens.hash(a1))
+  end
+
+  test "a non-POST request gets the no-store headers on its 405" do
+    conn = conn(:get, "/oauth/token") |> Sake.Auth.Token.call(Sake.Auth.Token.init([]))
+
+    assert conn.status == 405
+    assert ["no-store"] = get_resp_header(conn, "cache-control")
+    assert ["no-cache"] = get_resp_header(conn, "pragma")
+  end
 end

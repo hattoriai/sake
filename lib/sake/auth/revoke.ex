@@ -24,7 +24,12 @@ defmodule Sake.Auth.Revoke do
     end
   end
 
-  def call(conn, _opts), do: send_resp(conn, 405, "")
+  def call(conn, _opts) do
+    conn
+    |> put_resp_header("cache-control", "no-store")
+    |> put_resp_header("pragma", "no-cache")
+    |> send_resp(405, "")
+  end
 
   defp authenticate_and_revoke(conn, config, p) do
     case ClientAuth.authenticate(config, conn, p) do
