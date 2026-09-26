@@ -79,4 +79,21 @@ defmodule Sake.Auth.Clients do
     {module, state} = Sake.Auth.store(config)
     module.delete_client(state, id)
   end
+
+  @doc "Finds a client by id: a CIMD URL is fetched, anything else is looked up in the store."
+  @spec resolve(Config.t(), term()) ::
+          {:ok, Client.t()}
+          | {:error, :invalid_client | :not_allowed | :unreachable | :invalid_document}
+  def resolve(config, id) when is_binary(id) do
+    if String.starts_with?(id, "http") do
+      Sake.Auth.CIMD.fetch(config, id)
+    else
+      case get(config, id) do
+        {:ok, client} -> {:ok, client}
+        :error -> {:error, :invalid_client}
+      end
+    end
+  end
+
+  def resolve(_config, _id), do: {:error, :invalid_client}
 end
