@@ -2,6 +2,7 @@ defmodule SakeTest.AuthCase do
   @moduledoc false
   # Starts a Sake supervisor with the ETS store and the dev subject for one test.
   use ExUnit.CaseTemplate
+  alias Ecto.Adapters.SQL.Sandbox
 
   using do
     quote do
@@ -12,6 +13,15 @@ defmodule SakeTest.AuthCase do
   setup tags do
     overrides = tags[:auth] || []
 
+    store =
+      if tags[:store] == :ecto do
+        :ok = Sandbox.checkout(SakeTest.Repo)
+        Sandbox.mode(SakeTest.Repo, {:shared, self()})
+        {Sake.Auth.Store.Ecto, repo: SakeTest.Repo}
+      else
+        {Sake.Auth.Store.ETS, []}
+      end
+
     auth =
       Keyword.merge(
         [
@@ -19,7 +29,8 @@ defmodule SakeTest.AuthCase do
           issuer: "http://www.example.com",
           allow_insecure: true,
           servers: [SakeDev.Server],
-          resources: ["/mcp", "/:org/mcp"]
+          resources: ["/mcp", "/:org/mcp"],
+          store: store
         ],
         overrides
       )
