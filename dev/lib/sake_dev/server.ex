@@ -9,7 +9,14 @@ defmodule SakeDev.Server do
   scope "issues:read", "Read issues"
   scope "issues:write", "Change issues"
 
-  tools [SakeDev.Tools.Echo, SakeDev.Tools.Add, SakeDev.Tools.Slow]
+  tools [
+    SakeDev.Tools.Echo,
+    SakeDev.Tools.Add,
+    SakeDev.Tools.Slow,
+    SakeDev.Tools.Confirm,
+    SakeDev.Tools.Connect
+  ]
+
   resources [SakeDev.Resources.Readme, SakeDev.Resources.Issue]
   prompts [SakeDev.Prompts.Triage]
 end

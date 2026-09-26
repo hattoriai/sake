@@ -7,7 +7,15 @@ defmodule Sake.ServerTest do
     server = SakeDev.Server
     assert server.__sake__(:info) == %{name: "sake-dev", version: Sake.version()}
     assert server.__sake__(:instructions) =~ "example"
-    assert Enum.map(server.__sake__(:tools), & &1.name) == ["echo", "add", "slow"]
+
+    assert Enum.map(server.__sake__(:tools), & &1.name) == [
+             "echo",
+             "add",
+             "slow",
+             "confirm",
+             "connect"
+           ]
+
     assert Enum.map(server.__sake__(:resources), & &1.uri) == ["dev://readme", "issue://{id}"]
     assert Enum.map(server.__sake__(:prompts), & &1.name) == ["triage"]
 

@@ -170,18 +170,22 @@ defmodule Sake.Server.Dispatch do
   def call_tool(server, %{"name" => name} = params, ctx) when is_binary(name) do
     with {:ok, spec} <- find_tool(server, name),
          :ok <- allowed(spec, ctx) do
-      case Sake.Schema.validate(spec.input_schema, params["arguments"] || %{}) do
-        {:ok, args} ->
-          {:ok, run_tool(spec, args, ctx)}
-
-        {:error, errors} ->
-          {:ok, Results.tool({:error, "Invalid arguments: " <> format_errors(errors)}, spec, ctx)}
-      end
+      call_validated(spec, params, ctx)
     end
   end
 
   def call_tool(_server, _params, _ctx),
     do: {:error, JSONRPC.code(:invalid_params), "tools/call needs a tool name"}
+
+  defp call_validated(spec, params, ctx) do
+    case Sake.Schema.validate(spec.input_schema, params["arguments"] || %{}) do
+      {:ok, args} ->
+        with_inputs(spec.name, params, ctx, fn ctx -> {:ok, run_tool(spec, args, ctx)} end)
+
+      {:error, errors} ->
+        {:ok, Results.tool({:error, "Invalid arguments: " <> format_errors(errors)}, spec, ctx)}
+    end
+  end
 
   defp find_tool(server, name) do
     case Server.tool(server, name) do
@@ -216,18 +220,24 @@ defmodule Sake.Server.Dispatch do
 
   @doc false
   def read_resource(server, %{"uri" => uri}, ctx) when is_binary(uri) do
-    with {:ok, spec, params} <- find_resource(server, uri),
+    with {:ok, spec, uri_params} <- find_resource(server, uri),
          :ok <- allowed(spec, ctx) do
-      case Results.resource(spec.module.read(params, ctx), spec, uri, ctx) do
-        {:ok, result} -> {:ok, cacheable(result, server, ctx)}
-        {:error, :not_found} -> {:error, not_found_code(ctx), "Resource not found: #{uri}"}
-        {:error, text} -> {:error, JSONRPC.code(:internal), text}
-      end
+      with_inputs(uri, %{"arguments" => %{"uri" => uri}}, ctx, fn ctx ->
+        read_result(spec, uri_params, uri, server, ctx)
+      end)
     end
   end
 
   def read_resource(_server, _params, _ctx),
     do: {:error, JSONRPC.code(:invalid_params), "resources/read needs a uri"}
+
+  defp read_result(spec, uri_params, uri, server, ctx) do
+    case Results.resource(spec.module.read(uri_params, ctx), spec, uri, ctx) do
+      {:ok, result} -> {:ok, cacheable(result, server, ctx)}
+      {:error, :not_found} -> {:error, not_found_code(ctx), "Resource not found: #{uri}"}
+      {:error, text} -> {:error, JSONRPC.code(:internal), text}
+    end
+  end
 
   defp find_resource(server, uri) do
     case Server.resource(server, uri) do
@@ -246,15 +256,19 @@ defmodule Sake.Server.Dispatch do
     with {:ok, spec} <- find_prompt(server, name),
          :ok <- allowed(spec, ctx),
          {:ok, args} <- prompt_args(spec, params["arguments"] || %{}) do
-      case Results.prompt(spec.module.get(args, ctx), spec, ctx) do
-        {:ok, result} -> {:ok, result}
-        {:error, text} -> {:error, JSONRPC.code(:invalid_params), text}
-      end
+      with_inputs(name, params, ctx, fn ctx -> prompt_result(spec, args, ctx) end)
     end
   end
 
   def get_prompt(_server, _params, _ctx),
     do: {:error, JSONRPC.code(:invalid_params), "prompts/get needs a name"}
+
+  defp prompt_result(spec, args, ctx) do
+    case Results.prompt(spec.module.get(args, ctx), spec, ctx) do
+      {:ok, result} -> {:ok, result}
+      {:error, text} -> {:error, JSONRPC.code(:invalid_params), text}
+    end
+  end
 
   defp find_prompt(server, name) do
     case Server.prompt(server, name) do
@@ -280,6 +294,48 @@ defmodule Sake.Server.Dispatch do
           {:cont, {:ok, Map.put(acc, String.to_atom(arg.name), nil)}}
       end
     end)
+  end
+
+  # ---- the multi round-trip machinery shared by tools/call, resources/read
+  # and prompts/get: a component's elicitation call throws to unwind here,
+  # and the resulting `requestState` is verified on the next round-trip.
+
+  defp with_inputs(name, params, ctx, fun) do
+    args = params["arguments"] || %{}
+
+    case resolve_inputs(name, params, ctx, args) do
+      :error -> {:error, JSONRPC.code(:invalid_params), "Invalid request state"}
+      {:ok, inputs} -> run_with_inputs(name, args, ctx, inputs, fun)
+    end
+  end
+
+  defp resolve_inputs(name, %{"requestState" => state} = params, ctx, args) do
+    case Sake.Server.RequestState.verify(ctx, name, args, state) do
+      {:ok, previous} -> {:ok, Map.merge(previous, params["inputResponses"] || %{})}
+      :error -> :error
+    end
+  end
+
+  defp resolve_inputs(_name, %{"inputResponses" => responses}, _ctx, _args)
+       when is_map(responses),
+       do: {:ok, responses}
+
+  defp resolve_inputs(_name, _params, _ctx, _args), do: {:ok, %{}}
+
+  defp run_with_inputs(name, args, ctx, inputs, fun) do
+    ctx = %{ctx | inputs: inputs}
+
+    try do
+      fun.(ctx)
+    catch
+      :throw, {:sake_input_required, key, request} ->
+        {:ok,
+         %{
+           "resultType" => "input_required",
+           "inputRequests" => %{key => request},
+           "requestState" => Sake.Server.RequestState.sign(ctx, name, args, inputs)
+         }}
+    end
   end
 
   # ---- completion/complete
