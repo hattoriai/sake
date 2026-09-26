@@ -1,0 +1,42 @@
+defmodule SakeDev.ConformanceServer do
+  @moduledoc false
+  # The fixture server the official MCP conformance suite runs against
+  # (`/open/mcp` in `SakeDev.Router`, see `conformance/run.sh`). Every
+  # `test_*` tool, resource, and prompt here exists only to satisfy one
+  # scenario's "Server Implementation Requirements" — it is not an example
+  # of how to write a Sake server; see `SakeDev.Server` for that.
+  use Sake.Server,
+    name: "sake-conformance",
+    version: Sake.version(),
+    instructions: "Fixtures for the official MCP conformance suite."
+
+  alias SakeDev.Conformance.{Prompts, Resources, Tools}
+
+  tools [
+    Tools.TestSimpleText,
+    Tools.TestImageContent,
+    Tools.TestAudioContent,
+    Tools.TestEmbeddedResource,
+    Tools.TestMultipleContentTypes,
+    Tools.TestToolWithLogging,
+    Tools.TestErrorHandling,
+    Tools.TestToolWithProgress,
+    Tools.TestElicitation,
+    Tools.TestElicitationSep1034Defaults,
+    Tools.TestElicitationSep1330Enums
+  ]
+
+  resources [
+    Resources.TestStaticText,
+    Resources.TestStaticBinary,
+    Resources.TestTemplate,
+    Resources.TestWatched
+  ]
+
+  prompts [
+    Prompts.TestSimplePrompt,
+    Prompts.TestPromptWithArguments,
+    Prompts.TestPromptWithEmbeddedResource,
+    Prompts.TestPromptWithImage
+  ]
+end

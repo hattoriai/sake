@@ -1,1 +1,25 @@
-# The development server (`mix dev`). Nothing runs here yet.
+# The development server: `mix dev`, then http://localhost:4000.
+#
+#   claude mcp add --transport http sake-dev http://localhost:4000/acme/mcp
+#
+# Sign in as ana@example.com / secret when the browser opens.
+Logger.configure(level: :info)
+
+secret = String.duplicate("dev-secret-", 6)
+
+children = [
+  {Sake,
+   secret_key_base: secret,
+   auth: [
+     subject: SakeDev.Subject,
+     issuer: "http://localhost:4000",
+     allow_insecure: true,
+     servers: [SakeDev.Server],
+     resources: ["/mcp", "/acme/mcp", "/beta/mcp"]
+   ]},
+  {Bandit, plug: SakeDev.Router, port: 4000}
+]
+
+{:ok, _} = Supervisor.start_link(children, strategy: :one_for_one)
+IO.puts("Sake dev server on http://localhost:4000 (sign in: ana@example.com / secret)")
+Process.sleep(:infinity)

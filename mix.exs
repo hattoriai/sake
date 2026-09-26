@@ -32,7 +32,7 @@ defmodule Sake.MixProject do
   end
 
   def cli do
-    [preferred_envs: [precommit: :test, "test.conformance": :test]]
+    [preferred_envs: [precommit: :test, "test.conformance": :dev]]
   end
 
   # The development server modules (dev/lib) are the example server of the
@@ -107,20 +107,38 @@ defmodule Sake.MixProject do
           Sake.Elicit,
           Sake.Progress,
           Sake.Plug,
+          Sake.Plug.Streams,
+          Sake.Plug.Headers,
           Sake.Router
         ],
         Authorization: [
           Sake.Auth,
+          Sake.Auth.Config,
           Sake.Auth.Subject,
           Sake.Auth.Consent,
           Sake.Auth.Clients,
           Sake.Auth.Client,
+          Sake.Auth.Code,
+          Sake.Auth.TokenRecord,
+          Sake.Auth.Bearer,
+          Sake.Auth.WellKnown,
+          Sake.Auth.Authorize,
+          Sake.Auth.Token,
+          Sake.Auth.Revoke,
+          Sake.Auth.DCR,
+          Sake.Auth.CIMD,
+          Sake.Auth.RouterPlug,
           Sake.Auth.Store,
           Sake.Auth.Store.ETS,
           Sake.Auth.Store.Ecto,
           Sake.Auth.Migration
         ],
-        Client: [Sake.Client, Sake.Client.Session, Sake.Client.Challenge],
+        Client: [
+          Sake.Client,
+          Sake.Client.Session,
+          Sake.Client.Challenge,
+          Sake.Client.ToolResult
+        ],
         Protocol: [Sake.Protocol, Sake.JSONRPC, Sake.Schema]
       ]
     ]

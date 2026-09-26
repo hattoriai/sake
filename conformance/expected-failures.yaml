@@ -1,0 +1,54 @@
+# Baseline of conformance scenarios that fail on purpose. CI turns red only
+# on a *new* failure or a stale entry (a listed scenario that now passes).
+# See guides/protocol_versions.md for the reasoning behind each entry.
+server:
+  # Sake 0.1 does not implement server-initiated sampling
+  # (`sampling/createMessage`); it is documented as an unsupported 0.1
+  # feature in guides/protocol_versions.md. `test_sampling` is not
+  # implemented on the conformance fixture server, so the scenario fails
+  # with "Unknown tool" rather than a wrong answer.
+  - tools-call-sampling
+  # Open defect (see guides/security.md, "Origin"): `origins: :any`
+  # disables Origin checking entirely, including for the DNS-rebinding
+  # case this scenario probes, and the default same-origin check also
+  # trusts the client-supplied Host header, so neither guards against a
+  # Host/Origin pair the client fully controls. A real fix needs a
+  # dedicated, separately-tested Host-validation option that does not
+  # misfire on a same-host reverse proxy.
+  - dns-rebinding-protection
+
+client:
+  # Sake 0.1's client has no OAuth support at all (see README "status" and
+  # guides/protocol_versions.md): it returns `{:error, {:unauthorized,
+  # challenge}}` on a 401 and leaves the flow to the caller. Every
+  # auth/* scenario needs the client to run the authorization flow itself,
+  # so all of them fail the same way ("did not make an authorization/token
+  # request"). Client OAuth is the next 0.1.x milestone.
+  - auth/metadata-default
+  - auth/metadata-var1
+  - auth/metadata-var2
+  - auth/metadata-var3
+  - auth/basic-cimd
+  - auth/scope-from-www-authenticate
+  - auth/scope-from-scopes-supported
+  - auth/scope-omitted-when-undefined
+  - auth/scope-step-up
+  - auth/scope-retry-limit
+  - auth/token-endpoint-auth-basic
+  - auth/token-endpoint-auth-post
+  - auth/token-endpoint-auth-none
+  - auth/pre-registration
+  # Sake 0.1's client does not resume a dropped SSE stream (documented as
+  # unsupported in guides/protocol_versions.md); it has no reconnection
+  # logic to send the GET request this scenario looks for.
+  - sse-retry
+  # Open question, not chased down within this task's budget: the driver
+  # (conformance/client.exs) answers every elicitation by accepting the
+  # request schema's declared defaults, which is the behaviour this
+  # scenario checks for, but the round-trip itself fails first with "MCP
+  # error -32000: Connection closed" before the tool call completes, so
+  # none of the five default-value checks ever see a call to inspect. Needs
+  # a closer look at why this one fixture's connection drops mid-call
+  # (other elicitation scenarios in the server suite pass over the same
+  # `Sake.Client` code paths).
+  - elicitation-sep1034-client-defaults

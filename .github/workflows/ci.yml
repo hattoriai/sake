@@ -136,9 +136,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: .tool-versions
+          cache: npm
+          cache-dependency-path: conformance/package-lock.json
 
       - run: mix deps.get
 
+      # `test.conformance` runs `dev.exs` (the development server), which
+      # needs the `:dev` environment, not `:test`.
       - run: mix test.conformance
         env:
-          MIX_ENV: test
+          MIX_ENV: dev

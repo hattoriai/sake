@@ -6,6 +6,7 @@
 /tmp
 conformance/node_modules
 conformance/results
+conformance/results.log
 erl_crash.dump
 sake-*.tar
 *.ez
