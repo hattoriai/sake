@@ -323,5 +323,35 @@ defmodule Sake.PlugTest do
       conn = LegacyClient.post(opts, session, "resources/read", %{"uri" => "issue://9"})
       assert conn.status == 200 and LegacyClient.json(conn)["error"]["code"] == -32_002
     end
+
+    test "initialize with a modern version header still opens a legacy session", %{opts: opts} do
+      conn =
+        LegacyClient.raw(
+          opts,
+          nil,
+          Sake.JSONRPC.request(1, "initialize", %{
+            "protocolVersion" => "2025-06-18",
+            "capabilities" => %{}
+          }),
+          header: "2026-07-28"
+        )
+
+      assert conn.status == 200
+      assert LegacyClient.json(conn)["result"]["protocolVersion"] == "2025-06-18"
+      assert [_session] = get_resp_header(conn, "mcp-session-id")
+
+      conn =
+        LegacyClient.raw(
+          opts,
+          nil,
+          Sake.JSONRPC.request(1, "initialize", %{
+            "protocolVersion" => "2025-06-18",
+            "capabilities" => %{}
+          }),
+          header: "2099-01-01"
+        )
+
+      assert conn.status == 400 and LegacyClient.json(conn)["error"]["code"] == -32_022
+    end
   end
 end

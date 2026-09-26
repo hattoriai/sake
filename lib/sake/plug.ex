@@ -98,8 +98,8 @@ defmodule Sake.Plug do
             }
           )
 
-        {:modern, version} ->
-          modern(conn, opts, parsed, version)
+        {:modern, header_version} ->
+          initialize_or_modern(conn, opts, parsed, header_version)
 
         {:legacy, header_version} ->
           legacy(conn, opts, parsed, header_version)
@@ -155,6 +155,16 @@ defmodule Sake.Plug do
       parsed -> {:ok, parsed}
     end
   end
+
+  # An `initialize` request always opens a legacy session, even when the
+  # `MCP-Protocol-Version` header names the modern revision (the header
+  # describes the transport the client used for this one request, not the
+  # session it is asking to start).
+  defp initialize_or_modern(conn, opts, {:request, _, "initialize", _} = parsed, header_version),
+    do: legacy(conn, opts, parsed, header_version)
+
+  defp initialize_or_modern(conn, opts, parsed, header_version),
+    do: modern(conn, opts, parsed, header_version)
 
   # ---- modern
 
@@ -334,7 +344,7 @@ defmodule Sake.Plug do
   defp legacy_message(conn, opts, {:request, _, _, _} = parsed, ctx),
     do: respond(conn, opts, parsed, ctx, &Legacy.handle/3)
 
-  # ---- one request → one response (JSON here; Task 8 adds SSE)
+  # ---- one request → one response
 
   defp respond(conn, opts, {:request, _id, method, params} = parsed, ctx, handler) do
     meta = %{

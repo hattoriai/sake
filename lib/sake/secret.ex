@@ -1,7 +1,7 @@
 defmodule Sake.Secret do
   @moduledoc false
   # The signing secret: the `secret:` option, else the running `Sake`
-  # configuration (Task 10), else `config :sake, :secret_key_base`.
+  # configuration, else `config :sake, :secret_key_base`.
 
   @spec resolve(term()) :: binary()
   def resolve(secret) when is_binary(secret) and byte_size(secret) >= 32, do: secret

@@ -1,7 +1,6 @@
 defmodule Sake.Plug.Stream do
   @moduledoc false
-  # Runs one request and writes its response. Task 8 adds SSE streaming,
-  # the legacy GET stream and subscriptions/listen.
+  # Runs one request and writes its response.
 
   @spec respond(Plug.Conn.t(), map(), Sake.JSONRPC.parsed(), Sake.Context.t(), function()) ::
           Plug.Conn.t()
