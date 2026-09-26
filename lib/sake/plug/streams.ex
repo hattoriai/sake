@@ -7,7 +7,6 @@ defmodule Sake.Plug.Streams do
   """
 
   @registry __MODULE__
-  @topic "sake:streams"
 
   def child_spec(opts) do
     children = [{Registry, keys: :duplicate, name: @registry}] ++ relay(opts[:pubsub])
@@ -20,6 +19,9 @@ defmodule Sake.Plug.Streams do
          [children, [strategy: :one_for_one, name: __MODULE__.Supervisor]]}
     }
   end
+
+  @doc false
+  def topic, do: "sake:streams"
 
   defp relay(nil), do: []
   defp relay(pubsub), do: [{__MODULE__.Relay, pubsub}]
@@ -51,17 +53,19 @@ defmodule Sake.Plug.Streams do
         :ok
 
       pubsub ->
-        if Code.ensure_loaded?(Phoenix.PubSub) do
-          Phoenix.PubSub.broadcast_from(
-            pubsub,
-            self(),
-            @topic,
-            {:sake_broadcast, node(), server, event}
-          )
-        end
-
-        :ok
+        relay_broadcast(pubsub, {:sake_broadcast, node(), server, event})
     end
+  end
+
+  # Compiled only when the host has Phoenix.PubSub: a host without it never
+  # sets a pubsub, and must not see a warning for a module it does not have.
+  if Code.ensure_loaded?(Phoenix.PubSub) do
+    defp relay_broadcast(pubsub, message) do
+      Phoenix.PubSub.broadcast_from(pubsub, self(), topic(), message)
+      :ok
+    end
+  else
+    defp relay_broadcast(_pubsub, _message), do: :ok
   end
 
   @doc false
@@ -133,7 +137,7 @@ defmodule Sake.Plug.Streams do
       @impl true
       def init(pubsub) do
         :persistent_term.put({Sake.Plug.Streams, :pubsub}, pubsub)
-        :ok = Phoenix.PubSub.subscribe(pubsub, "sake:streams")
+        :ok = Phoenix.PubSub.subscribe(pubsub, Sake.Plug.Streams.topic())
         {:ok, pubsub}
       end
 

@@ -10,3 +10,4 @@ conformance/results.log
 erl_crash.dump
 sake-*.tar
 *.ez
+/_consumer

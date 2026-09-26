@@ -6,16 +6,17 @@ defmodule Sake.Auth.Consent do
 
   `render/1` receives: `client_name`, `client_host` (nil when unknown),
   `redirect_host`, `loopback?`, `subject_display`, `scopes` (`[{name,
-  description}]`), `request` (opaque, goes into a hidden field), `action`
-  (the POST path), `csrf_token`, `issuer_name`. `render_error/1` receives
-  `title`, `message`, `status`.
+  description}]`), `resource` (the endpoint URL the token will be for),
+  `request` (opaque, goes into a hidden field), `action` (the POST path),
+  `csrf_token` (empty when the host runs no CSRF middleware), `issuer_name`.
+  `render_error/1` receives `title`, `message`, `status`.
 
   A `Sake.Auth.Consent` struct is also a remembered approval of a client
-  by a subject, held by `Sake.Auth.Store`.
+  by a subject for one resource, held by `Sake.Auth.Store`.
   """
 
   @type t :: %__MODULE__{}
-  defstruct [:subject_id, :client_id, :inserted_at, scopes: []]
+  defstruct [:subject_id, :client_id, :resource, :inserted_at, scopes: []]
 
   @callback render(map()) :: iodata()
   @callback render_error(map()) :: iodata()

@@ -48,7 +48,7 @@ defmodule Sake.Auth do
     end)
   end
 
-  @doc "Revokes every token of a client for a person, and forgets the consent."
+  @doc "Revokes every token of a client for a person, and forgets every consent of that client for the person."
   @spec revoke_grant(Config.t(), String.t(), String.t()) :: :ok
   def revoke_grant(config, subject_id, client_id) do
     {module, state} = store(config)
@@ -59,13 +59,18 @@ defmodule Sake.Auth do
     |> Enum.uniq()
     |> Enum.each(&module.revoke_family(state, &1))
 
-    module.delete_consent(state, subject_id, client_id)
+    module.delete_consent(state, subject_id, client_id, :all)
   end
 
-  @doc "Deletes expired codes and tokens. Schedule it (a cron job, Oban, or a periodic task)."
+  @doc """
+  Deletes expired codes and tokens, and the remembered consents older than
+  the refresh token lifetime that no live token family still uses. Schedule
+  it (a cron job, Oban, or a periodic task).
+  """
   @spec prune(Config.t()) :: :ok
   def prune(config) do
     {module, state} = store(config)
-    module.prune(state, DateTime.utc_now())
+    now = DateTime.utc_now()
+    module.prune(state, now, DateTime.add(now, -config.refresh_token_ttl))
   end
 end

@@ -1,5 +1,9 @@
 defmodule Sake.Auth.Revoke do
-  @moduledoc "The revocation endpoint (RFC 7009). Revoking a refresh token revokes its whole family."
+  @moduledoc """
+  The revocation endpoint (RFC 7009). Revoking a refresh token revokes its
+  whole family. Revoking any token of a client also forgets the consents
+  that person gave that client, so the next connection asks again.
+  """
   @behaviour Plug
   import Plug.Conn
 
@@ -62,6 +66,7 @@ defmodule Sake.Auth.Revoke do
     with {:ok, %{client_id: cid} = record} <- module.get_token(state, kind, hash),
          true <- cid == client.id do
       revoke_record(module, state, kind, record)
+      module.delete_consent(state, record.subject_id, cid, :all)
     else
       _ -> :ok
     end

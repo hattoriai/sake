@@ -29,15 +29,17 @@ defmodule Sake.Auth.TokenTest.RaceStore do
   def put_token(s, token), do: ETS.put_token(s, token)
 
   def get_token(s, kind, hash), do: ETS.get_token(s, kind, hash)
-  def mark_used(s, id), do: ETS.mark_used(s, id)
   def consume_refresh(s, hash), do: ETS.consume_refresh(s, hash)
   def revoke_token(s, id), do: ETS.revoke_token(s, id)
   def revoke_family(s, family_id), do: ETS.revoke_family(s, family_id)
   def tokens_for_subject(s, subject_id), do: ETS.tokens_for_subject(s, subject_id)
   def put_consent(s, c), do: ETS.put_consent(s, c)
-  def get_consent(s, sub, client_id), do: ETS.get_consent(s, sub, client_id)
-  def delete_consent(s, sub, client_id), do: ETS.delete_consent(s, sub, client_id)
-  def prune(s, now), do: ETS.prune(s, now)
+  def get_consent(s, sub, client_id, resource), do: ETS.get_consent(s, sub, client_id, resource)
+
+  def delete_consent(s, sub, client_id, resource),
+    do: ETS.delete_consent(s, sub, client_id, resource)
+
+  def prune(s, now, consents_before), do: ETS.prune(s, now, consents_before)
 end
 
 defmodule Sake.Auth.TokenTest do
@@ -122,6 +124,38 @@ defmodule Sake.Auth.TokenTest do
 
     assert {:ok, %{revoked_at: %DateTime{}}} =
              mod.get_token(state, :refresh, Tokens.hash(refresh))
+  end
+
+  test "a grant the client did not register for is unauthorized_client", %{config: config} do
+    {mod, state} = Sake.Auth.store(config)
+    client = public_client(config)
+    code_only = %{client | grant_types: ["authorization_code"]}
+    :ok = mod.put_client(state, code_only)
+    {_a, refresh, _} = issue(config, %{client_id: client.id})
+
+    conn =
+      post(%{
+        "grant_type" => "refresh_token",
+        "refresh_token" => refresh,
+        "client_id" => client.id
+      })
+
+    assert conn.status == 400 and body(conn)["error"] == "unauthorized_client"
+    # the refused request did not consume the refresh token
+    assert {:ok, %{used_at: nil}} = mod.get_token(state, :refresh, Tokens.hash(refresh))
+
+    :ok = mod.put_client(state, %{client | grant_types: ["refresh_token"]})
+
+    conn =
+      post(%{
+        "grant_type" => "authorization_code",
+        "code" => Authorize.issue_code(config, request(client), "u1"),
+        "client_id" => client.id,
+        "redirect_uri" => hd(client.redirect_uris),
+        "code_verifier" => @verifier
+      })
+
+    assert conn.status == 400 and body(conn)["error"] == "unauthorized_client"
   end
 
   test "the code grant checks the client, redirect, verifier and resource", %{config: config} do

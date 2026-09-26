@@ -37,6 +37,24 @@ defmodule Sake.Auth.BearerTest do
              ~s(Bearer error="insufficient_scope", scope="issues:write", resource_metadata="http://www.example.com/.well-known/oauth-protected-resource/mcp")
   end
 
+  test "the scheme name is case-insensitive; the token follows one space", %{config: config} do
+    {access, _, _} = issue(config, %{scopes: ["issues:read"]})
+
+    for scheme <- ["Bearer", "bearer", "BEARER"] do
+      conn =
+        ModernClient.post(opts(), "tools/list", %{},
+          headers: [{"authorization", scheme <> " " <> access}]
+        )
+
+      assert conn.status == 200, scheme
+    end
+
+    for header <- ["Bearer  " <> access, "Bearer" <> access, "Basic " <> access, "bearer "] do
+      conn = ModernClient.post(opts(), "tools/list", %{}, headers: [{"authorization", header}])
+      assert conn.status == 401, header
+    end
+  end
+
   test "missing, unknown, expired, revoked and wrong-audience tokens are 401 with a challenge", %{
     config: config
   } do

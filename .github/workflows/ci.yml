@@ -120,6 +120,45 @@ jobs:
           MIX_ENV: test
           DATABASE_URL: "ecto://postgres:postgres@localhost/sake_test"
 
+  # A host with none of the optional dependencies (no Phoenix, no Ecto,
+  # no PubSub): Sake must compile there without a single warning.
+  consumer:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          version-file: .tool-versions
+          version-type: strict
+
+      - name: Generate a minimal host
+        run: |
+          mkdir -p _consumer
+          cd _consumer
+          mix new app
+          cat > app/mix.exs <<'EOF'
+          defmodule App.MixProject do
+            use Mix.Project
+
+            def project do
+              [app: :app, version: "0.1.0", elixir: "~> 1.18", deps: [{:sake, path: "../.."}]]
+            end
+
+            def application, do: [extra_applications: [:logger]]
+          end
+          EOF
+
+      - name: Compile Sake and the host with warnings as errors
+        working-directory: _consumer/app
+        run: |
+          mix deps.get
+          mix deps.compile
+          mix deps.compile sake --force 2>&1 | tee sake.log
+          if grep -q "warning:" sake.log; then exit 1; fi
+          mix compile --warnings-as-errors
+
   conformance:
     runs-on: ubuntu-latest
 

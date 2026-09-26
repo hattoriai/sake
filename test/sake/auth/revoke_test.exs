@@ -36,6 +36,29 @@ defmodule Sake.Auth.RevokeTest do
     assert {:ok, %{revoked_at: %DateTime{}}} = mod.get_token(state, :access, at.hash)
   end
 
+  test "revoking a token forgets the consents the person gave that client", %{config: config} do
+    client = public_client(config)
+    {mod, state} = Sake.Auth.store(config)
+
+    consent = %Sake.Auth.Consent{
+      subject_id: "u1",
+      client_id: client.id,
+      resource: "http://www.example.com/mcp",
+      scopes: [],
+      inserted_at: DateTime.utc_now()
+    }
+
+    :ok = mod.put_consent(state, consent)
+    :ok = mod.put_consent(state, %{consent | resource: "http://www.example.com/acme/mcp"})
+    :ok = mod.put_consent(state, %{consent | client_id: "other"})
+    {_a, r, _} = issue(config, %{client_id: client.id, subject_id: "u1"})
+
+    assert post(%{"token" => r, "client_id" => client.id}).status == 200
+    assert :error = mod.get_consent(state, "u1", client.id, "http://www.example.com/mcp")
+    assert :error = mod.get_consent(state, "u1", client.id, "http://www.example.com/acme/mcp")
+    assert {:ok, _} = mod.get_consent(state, "u1", "other", "http://www.example.com/mcp")
+  end
+
   test "a non-POST request gets the no-store headers on its 405" do
     conn =
       conn(:get, "/oauth/revoke")

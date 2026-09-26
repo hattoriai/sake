@@ -178,6 +178,107 @@ defmodule Sake.Auth.CIMDTest do
     refute CIMD.public_host?("fc00::1")
     refute CIMD.public_host?("fe80::1")
     assert CIMD.public_host?("93.184.216.34")
+
+    # addresses that tunnel or translate to IPv4, multicast, reserved, benchmarking
+    refute CIMD.public_host?("64:ff9b::7f00:1")
+    refute CIMD.public_host?("2002:7f00:1::1")
+    refute CIMD.public_host?("::ffff:93.184.216.34")
+    refute CIMD.public_host?("::127.0.0.1")
+    refute CIMD.public_host?("224.0.0.1")
+    refute CIMD.public_host?("239.255.255.250")
+    refute CIMD.public_host?("240.0.0.1")
+    refute CIMD.public_host?("255.255.255.255")
+    refute CIMD.public_host?("198.18.0.1")
+    refute CIMD.public_host?("198.19.255.1")
+    assert CIMD.public_host?("198.20.0.1")
+    assert CIMD.public_host?("2606:4700::1111")
+
+    # credentials in the URL are refused
+    refute CIMD.url?("https://user:pass@app.example/client.json")
+    refute CIMD.url?("https://user@app.example/client.json")
+
+    assert {:error, :invalid_client} =
+             CIMD.fetch(config, "http://user@localhost:1/client.json")
+  end
+
+  test "a document with more than 10 redirect URIs or mistyped metadata is invalid", %{
+    config: config,
+    bypass: bypass,
+    base: base
+  } do
+    uris = Enum.map(1..11, &"http://127.0.0.1:#{3000 + &1}/callback")
+
+    Bypass.expect(bypass, "GET", "/many.json", fn conn ->
+      Plug.Conn.resp(
+        conn,
+        200,
+        JSON.encode!(document(base <> "/many.json", %{"redirect_uris" => uris}))
+      )
+    end)
+
+    assert {:error, :invalid_document} = CIMD.fetch(config, base <> "/many.json")
+
+    for {field, value} <- [
+          {"client_uri", 1},
+          {"logo_uri", true},
+          {"application_type", 2},
+          {"scope", ["a"]},
+          {"grant_types", "authorization_code"}
+        ] do
+      path = "/typed-#{field}.json"
+
+      Bypass.expect_once(bypass, "GET", path, fn conn ->
+        Plug.Conn.resp(conn, 200, JSON.encode!(document(base <> path, %{field => value})))
+      end)
+
+      assert {:error, :invalid_document} = CIMD.fetch(config, base <> path), field
+    end
+  end
+
+  @tag timeout: 20_000
+  test "the whole download runs under one 5 second deadline", %{
+    config: config,
+    bypass: bypass,
+    base: base
+  } do
+    Bypass.expect(bypass, "GET", "/slow.json", fn conn ->
+      conn = Plug.Conn.send_chunked(conn, 200)
+
+      Enum.reduce_while(1..8, conn, fn _, conn ->
+        Process.sleep(1_000)
+
+        case Plug.Conn.chunk(conn, " ") do
+          {:ok, conn} -> {:cont, conn}
+          {:error, _} -> {:halt, conn}
+        end
+      end)
+    end)
+
+    started = System.monotonic_time(:millisecond)
+    assert {:error, :unreachable} = CIMD.fetch(config, base <> "/slow.json")
+    elapsed = System.monotonic_time(:millisecond) - started
+    assert elapsed >= 4_900 and elapsed < 6_500
+    Bypass.pass(bypass)
+  end
+
+  test "the cache holds at most its maximum; expired entries go first, then the oldest" do
+    max = CIMD.Cache.max_entries()
+    for i <- 1..max, do: CIMD.Cache.put({:test, i}, i, if(i == 5, do: -1, else: 60))
+
+    # full: the expired entry goes
+    CIMD.Cache.put({:test, :a}, :a, 60)
+    assert :ets.info(CIMD.Cache, :size) == max
+    assert :ets.lookup(CIMD.Cache, {:test, 5}) == []
+    assert {:ok, 1} = CIMD.Cache.get({:test, 1})
+
+    # full, nothing expired: the oldest goes
+    CIMD.Cache.put({:test, :b}, :b, 60)
+    assert :ets.info(CIMD.Cache, :size) == max
+    assert :error = CIMD.Cache.get({:test, 1})
+    assert {:ok, 2} = CIMD.Cache.get({:test, 2})
+    assert {:ok, :b} = CIMD.Cache.get({:test, :b})
+
+    :ets.match_delete(CIMD.Cache, {{:test, :_}, :_, :_, :_})
   end
 
   @tag auth: [allow_insecure: false, issuer: "https://www.example.com"]

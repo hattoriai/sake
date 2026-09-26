@@ -4,6 +4,23 @@ defmodule Sake.Auth.Authorize do
   consent page (or redirects at once when consent is remembered); `POST`
   records the decision. Mount it inside the pipeline that requires a
   signed-in person; Sake reads the person through `Sake.Auth.Subject`.
+
+  After it resolves the resource (the endpoint URL the token is for), it
+  asks the subject module's optional `authorize_resource?/2` whether this
+  person may authorize a client for it; a `false` answer sends the client
+  `access_denied`. A remembered consent is kept per person, client and
+  resource.
+
+  The consent form is protected in two layers. The hidden `request` field
+  is a signed blob bound to the signed-in person, and it expires after ten
+  minutes: a form posted by anyone else, or later, is refused. When the
+  host's pipeline runs `Plug.CSRFProtection` (`protect_from_forgery` in
+  Phoenix), the form also carries the CSRF token and the host's plug
+  checks it. A Plug-only host without CSRF middleware sends an empty
+  `_csrf_token` field and relies on the signed blob alone.
+
+  The consent and error pages refuse to be framed (`x-frame-options:
+  DENY` and `content-security-policy: frame-ancestors 'none'`).
   """
   @behaviour Plug
   import Plug.Conn
@@ -75,7 +92,17 @@ defmodule Sake.Auth.Authorize do
   defp authenticated(conn, config, client, request) do
     case config.subject.from_conn(conn) do
       {:ok, principal} ->
-        consent_or_issue(conn, config, client, request, principal)
+        if authorize_resource?(config.subject, principal, request.resource),
+          do: consent_or_issue(conn, config, client, request, principal),
+          else:
+            redirect_error(
+              conn,
+              config,
+              request.redirect_uri,
+              "access_denied",
+              "You may not authorize this resource",
+              request.state
+            )
 
       :error ->
         error_page(
@@ -86,6 +113,14 @@ defmodule Sake.Auth.Authorize do
           "Sign in to your account, then start the connection again from the app."
         )
     end
+  end
+
+  defp authorize_resource?(subject, principal, resource) do
+    Code.ensure_loaded(subject)
+
+    if function_exported?(subject, :authorize_resource?, 2),
+      do: subject.authorize_resource?(principal, resource) == true,
+      else: true
   end
 
   defp client(config, id) do
@@ -215,7 +250,7 @@ defmodule Sake.Auth.Authorize do
 
     remembered =
       config.remember_consent and
-        case module.get_consent(state, subject_id, client.id) do
+        case module.get_consent(state, subject_id, client.id, request.resource) do
           {:ok, %{scopes: granted}} -> request.scopes -- granted == []
           :error -> false
         end
@@ -238,6 +273,7 @@ defmodule Sake.Auth.Authorize do
         loopback?: Redirect.loopback?(request.redirect_uri),
         subject_display: config.subject.display(principal),
         scopes: Enum.map(request.scopes, &{&1, known[&1]}),
+        resource: request.resource,
         request: blob,
         action: conn.request_path,
         csrf_token: csrf_token(),
@@ -299,6 +335,7 @@ defmodule Sake.Auth.Authorize do
         module.put_consent(state, %Sake.Auth.Consent{
           subject_id: subject_id,
           client_id: request.client_id,
+          resource: request.resource,
           scopes: request.scopes,
           inserted_at: DateTime.utc_now()
         })
@@ -369,11 +406,17 @@ defmodule Sake.Auth.Authorize do
     conn
     |> put_resp_content_type("text/html")
     |> put_resp_header("cache-control", "no-store")
+    |> put_resp_header("x-frame-options", "DENY")
+    |> put_resp_header("content-security-policy", "frame-ancestors 'none'")
     |> send_resp(status, body)
   end
 
+  # `Plug.CSRFProtection` loads its state into the process dictionary when
+  # it runs; only then does a token exist that its own check accepts.
+  # Without it the field stays empty and the signed request blob is the
+  # defence.
   defp csrf_token do
-    if Code.ensure_loaded?(Plug.CSRFProtection) and Process.get(:plug_masked_csrf_token) != nil,
+    if Process.get(:plug_csrf_token_per_host) != nil,
       do: Plug.CSRFProtection.get_csrf_token(),
       else: ""
   end

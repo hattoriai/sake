@@ -11,10 +11,20 @@ defmodule Sake.Auth.Subject do
       end
 
   Sake stores only the string ID.
+
+  The optional `c:authorize_resource?/2` decides whether this person may
+  authorize a client for an endpoint URL; without it, every signed-in
+  person may. A multi-tenant host uses it to refuse a token for a tenant
+  the person does not belong to (see the tenants guide).
   """
 
   @callback from_conn(Plug.Conn.t()) :: {:ok, term()} | :error
   @callback id(term()) :: String.t()
   @callback fetch(String.t()) :: {:ok, term()} | :error
   @callback display(term()) :: String.t()
+
+  @doc "Whether this person may authorize a client for this endpoint URL; default true."
+  @callback authorize_resource?(principal :: term(), resource :: String.t()) :: boolean()
+
+  @optional_callbacks authorize_resource?: 2
 end

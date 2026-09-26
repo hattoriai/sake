@@ -7,6 +7,7 @@ if Code.ensure_loaded?(Ecto.Schema) do
     schema "sake_oauth_consents" do
       field(:subject_id, :string)
       field(:client_id, :string)
+      field(:resource, :string)
       field(:scopes, {:array, :string}, default: [])
       field(:inserted_at, :utc_datetime)
     end

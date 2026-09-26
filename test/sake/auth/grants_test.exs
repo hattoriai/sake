@@ -9,12 +9,15 @@ defmodule Sake.Auth.GrantsTest do
     issue(config, %{client_id: client.id, family_id: "f4", subject_id: "u2"})
     {mod, state} = Sake.Auth.store(config)
 
-    mod.put_consent(state, %Sake.Auth.Consent{
-      subject_id: "u1",
-      client_id: client.id,
-      scopes: ["issues:read"],
-      inserted_at: DateTime.utc_now()
-    })
+    for resource <- ["http://www.example.com/mcp", "http://www.example.com/acme/mcp"] do
+      mod.put_consent(state, %Sake.Auth.Consent{
+        subject_id: "u1",
+        client_id: client.id,
+        resource: resource,
+        scopes: ["issues:read"],
+        inserted_at: DateTime.utc_now()
+      })
+    end
 
     grants = Sake.Auth.list_grants(config, "u1")
     assert length(grants) == 2
@@ -33,7 +36,8 @@ defmodule Sake.Auth.GrantsTest do
 
     assert :ok = Sake.Auth.revoke_grant(config, "u1", client.id)
     assert [%{client_id: "other"}] = Sake.Auth.list_grants(config, "u1")
-    assert :error = mod.get_consent(state, "u1", client.id)
+    assert :error = mod.get_consent(state, "u1", client.id, "http://www.example.com/mcp")
+    assert :error = mod.get_consent(state, "u1", client.id, "http://www.example.com/acme/mcp")
     assert [%{client_id: _}] = Sake.Auth.list_grants(config, "u2")
 
     assert :ok = Sake.Auth.prune(config)

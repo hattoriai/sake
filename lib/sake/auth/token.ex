@@ -53,11 +53,19 @@ defmodule Sake.Auth.Token do
         |> error(401, "invalid_client", "Client authentication failed")
 
       {:ok, client} ->
-        case grant(config, client, p) do
-          {:ok, response} -> json(conn, 200, response)
+        with :ok <- client_grant(client, p["grant_type"]),
+             {:ok, response} <- grant(config, client, p) do
+          json(conn, 200, response)
+        else
           {:error, code, description} -> error(conn, 400, code, description)
         end
     end
+  end
+
+  defp client_grant(client, grant_type) do
+    if grant_type in client.grant_types,
+      do: :ok,
+      else: {:error, "unauthorized_client", "The client may not use the #{grant_type} grant"}
   end
 
   defp grant(

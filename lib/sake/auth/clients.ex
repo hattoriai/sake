@@ -96,4 +96,19 @@ defmodule Sake.Auth.Clients do
   end
 
   def resolve(_config, _id), do: {:error, :invalid_client}
+
+  @doc false
+  # The optional metadata of a registration request or a metadata
+  # document: each field is absent or of its one allowed type.
+  @spec metadata_types_valid?(map()) :: boolean()
+  def metadata_types_valid?(doc) do
+    Enum.all?(~w(client_uri logo_uri application_type scope), &optional_string?(doc[&1])) and
+      optional_strings?(doc["grant_types"])
+  end
+
+  defp optional_string?(value), do: is_nil(value) or is_binary(value)
+
+  defp optional_strings?(nil), do: true
+  defp optional_strings?(list) when is_list(list), do: Enum.all?(list, &is_binary/1)
+  defp optional_strings?(_), do: false
 end

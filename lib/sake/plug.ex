@@ -91,8 +91,7 @@ defmodule Sake.Plug do
 
   defp post(conn, opts) do
     with :ok <- accept(conn),
-         {:ok, body, conn} <- body(conn, opts),
-         {:ok, json} <- decode(body),
+         {:ok, json, conn} <- Sake.Plug.Body.json(conn, opts.json_limit),
          {:ok, parsed} <- parse(json) do
       case ProtocolVersion.detect(conn) do
         {:unsupported, v} ->
@@ -142,21 +141,6 @@ defmodule Sake.Plug do
          String.contains?(accept, "text/event-stream"),
        do: :ok,
        else: {:error, :accept}
-  end
-
-  defp body(conn, opts) do
-    case read_body(conn, length: opts.json_limit, read_length: opts.json_limit) do
-      {:ok, body, conn} -> {:ok, body, conn}
-      {:more, _partial, _conn} -> {:error, :too_large}
-      {:error, _} -> {:error, :json}
-    end
-  end
-
-  defp decode(body) do
-    case JSON.decode(body) do
-      {:ok, json} -> {:ok, json}
-      {:error, _} -> {:error, :json}
-    end
   end
 
   defp parse(json) do

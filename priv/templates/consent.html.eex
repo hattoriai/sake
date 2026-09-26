@@ -24,6 +24,7 @@ button.primary { background: var(--accent); color: var(--accent-fg); border-colo
 <body>
 <main>
 <h1><%= Plug.HTML.html_escape(@client_name) %> wants access to <%= Plug.HTML.html_escape(@issuer_name) %></h1>
+<p class="muted">for <%= Plug.HTML.html_escape(@resource) %></p>
 <%= if @client_host do %><p class="muted">From <%= Plug.HTML.html_escape(@client_host) %></p><% end %>
 <p>Signed in as <strong><%= Plug.HTML.html_escape(@subject_display) %></strong>.</p>
 <p>It will be able to:</p>

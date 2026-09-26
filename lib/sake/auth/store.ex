@@ -11,7 +11,6 @@ defmodule Sake.Auth.Store do
   @callback consume_code(state(), String.t()) :: {:ok, Code.t()} | :error
   @callback put_token(state(), TokenRecord.t()) :: :ok
   @callback get_token(state(), :access | :refresh, String.t()) :: {:ok, TokenRecord.t()} | :error
-  @callback mark_used(state(), String.t()) :: :ok
   @doc """
   Marks a refresh token used now, if and only if it was unused, atomically:
   two concurrent calls for the same hash must not both succeed. Returns the
@@ -22,8 +21,26 @@ defmodule Sake.Auth.Store do
   @callback revoke_token(state(), String.t()) :: :ok
   @callback revoke_family(state(), String.t()) :: :ok
   @callback tokens_for_subject(state(), String.t()) :: [TokenRecord.t()]
+  @doc "Remembers an approval, keyed by subject, client and resource (replacing an earlier one)."
   @callback put_consent(state(), Consent.t()) :: :ok
-  @callback get_consent(state(), String.t(), String.t()) :: {:ok, Consent.t()} | :error
-  @callback delete_consent(state(), String.t(), String.t()) :: :ok
-  @callback prune(state(), DateTime.t()) :: :ok
+  @callback get_consent(
+              state(),
+              subject_id :: String.t(),
+              client_id :: String.t(),
+              resource :: String.t()
+            ) ::
+              {:ok, Consent.t()} | :error
+  @doc "Forgets the approval for one resource, or for every resource with `:all`."
+  @callback delete_consent(
+              state(),
+              subject_id :: String.t(),
+              client_id :: String.t(),
+              resource :: String.t() | :all
+            ) :: :ok
+  @doc """
+  Deletes the codes and tokens that expired by `now`, and the consents
+  inserted before `consents_before` whose subject, client and resource
+  have no live (unexpired, unrevoked) refresh token left.
+  """
+  @callback prune(state(), now :: DateTime.t(), consents_before :: DateTime.t()) :: :ok
 end

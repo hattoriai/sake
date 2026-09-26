@@ -156,7 +156,7 @@ defmodule Sake.MixProject do
       ],
       precommit: [
         "compile --warnings-as-errors",
-        "deps.unlock --unused",
+        "deps.unlock --check-unused",
         "format",
         "credo --strict",
         "test"

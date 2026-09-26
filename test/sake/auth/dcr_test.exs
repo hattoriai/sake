@@ -82,6 +82,44 @@ defmodule Sake.Auth.DCRTest do
     assert conn.status == 400
   end
 
+  test "optional metadata must have its type" do
+    base = %{"client_name" => "x", "redirect_uris" => ["https://a.example/cb"]}
+
+    for {field, value} <- [
+          {"client_uri", 1},
+          {"logo_uri", %{}},
+          {"application_type", ["native"]},
+          {"scope", ["issues:read"]},
+          {"grant_types", "authorization_code"},
+          {"grant_types", [1]}
+        ] do
+      conn = register(Map.put(base, field, value))
+      assert conn.status == 400, field
+      assert JSON.decode!(conn.resp_body)["error"] == "invalid_client_metadata", field
+    end
+  end
+
+  test "a client that names no grant types may use both, and is told so", %{config: config} do
+    conn = register(%{"client_name" => "x", "redirect_uris" => ["https://a.example/cb"]})
+    body = JSON.decode!(conn.resp_body)
+    assert body["grant_types"] == ["authorization_code", "refresh_token"]
+
+    assert {:ok, %{grant_types: ["authorization_code", "refresh_token"]}} =
+             Sake.Auth.Clients.get(config, body["client_id"])
+  end
+
+  test "a body already parsed by Plug.Parsers is used as it is" do
+    doc = %{"client_name" => "Parsed", "redirect_uris" => ["https://a.example/cb"]}
+
+    conn =
+      conn(:post, "/oauth/register", JSON.encode!(doc))
+      |> put_req_header("content-type", "application/json")
+      |> Plug.Parsers.call(Plug.Parsers.init(parsers: [:json], pass: ["*/*"], json_decoder: JSON))
+      |> Sake.Auth.DCR.call([])
+
+    assert conn.status == 201 and JSON.decode!(conn.resp_body)["client_name"] == "Parsed"
+  end
+
   @tag auth: [dcr: false]
   test "off" do
     assert register(%{"client_name" => "x", "redirect_uris" => ["https://a.example/cb"]}).status ==

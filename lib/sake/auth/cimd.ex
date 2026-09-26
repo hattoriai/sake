@@ -3,21 +3,24 @@ defmodule Sake.Auth.CIMD do
   Client ID Metadata Documents: a client identifies itself with an HTTPS
   URL, and the authorization server fetches the JSON document there.
 
-  The fetch is guarded: HTTPS only (unless `allow_insecure`), the host
-  must resolve to public addresses, no redirects are followed, the body is
-  limited to 64 KB, and the request times out after 5 seconds. Documents
-  are cached for their `max-age`, clamped to one minute–one day.
+  The fetch is guarded: HTTPS only (unless `allow_insecure`), no
+  credentials in the URL, the host must resolve to public addresses, no
+  redirects are followed, the body is limited to 64 KB, and the whole
+  download must finish within 5 seconds. A document may list at most 10
+  redirect URIs. Documents are cached for their `max-age`, clamped to one
+  minute–one day; the cache holds at most 1000 documents.
   """
 
   alias Sake.Auth.{Client, Config, Redirect}
 
   @max_body 65_536
   @timeout 5_000
+  @max_redirect_uris 10
 
   @spec url?(term()) :: boolean()
   def url?(id) when is_binary(id) do
     match?(
-      %URI{scheme: "https", host: h, path: p, fragment: nil}
+      %URI{scheme: "https", host: h, path: p, fragment: nil, userinfo: nil}
       when is_binary(h) and is_binary(p) and p != "/" and p != "",
       URI.parse(id)
     )
@@ -28,7 +31,7 @@ defmodule Sake.Auth.CIMD do
   defp url?(id, %Config{allow_insecure: true}) when is_binary(id) do
     url?(id) or
       match?(
-        %URI{scheme: "http", host: h, path: p}
+        %URI{scheme: "http", host: h, path: p, userinfo: nil}
         when is_binary(h) and is_binary(p) and p not in ["", "/"],
         URI.parse(id)
       )
@@ -107,6 +110,8 @@ defmodule Sake.Auth.CIMD do
     end
   end
 
+  defp public_ip?({a, _, _, _}) when a >= 224, do: false
+  defp public_ip?({198, b, _, _}) when b in 18..19, do: false
   defp public_ip?({10, _, _, _}), do: false
   defp public_ip?({127, _, _, _}), do: false
   defp public_ip?({169, 254, _, _}), do: false
@@ -118,14 +123,30 @@ defmodule Sake.Auth.CIMD do
   defp public_ip?({0, 0, 0, 0, 0, 0, 0, 1}), do: false
   defp public_ip?({0, 0, 0, 0, 0, 0, 0, 0}), do: false
 
-  defp public_ip?({0, 0, 0, 0, 0, 0xFFFF, a, b}),
-    do: public_ip?({div(a, 256), rem(a, 256), div(b, 256), rem(b, 256)})
+  # IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d)
+  # addresses, NAT64 (64:ff9b::/96) and 6to4 (2002::/16) all reach an
+  # IPv4 address a guard on IPv4 alone would not see; they are refused.
+  defp public_ip?({0, 0, 0, 0, 0, 0xFFFF, _, _}), do: false
+  defp public_ip?({0, 0, 0, 0, 0, 0, _, _}), do: false
+  defp public_ip?({0x64, 0xFF9B, 0, 0, 0, 0, _, _}), do: false
+  defp public_ip?({0x2002, _, _, _, _, _, _, _}), do: false
 
   defp public_ip?({a, _, _, _, _, _, _, _}) when a in 0xFC00..0xFDFF, do: false
   defp public_ip?({a, _, _, _, _, _, _, _}) when a in 0xFE80..0xFEBF, do: false
   defp public_ip?(_), do: true
 
+  # The whole download runs under one deadline: Req's own timeouts bound
+  # the connect and each receive, not a server that trickles bytes.
   defp download(uri) do
+    task = Task.async(fn -> download_now(uri) end)
+
+    case Task.yield(task, @timeout) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      _ -> {:error, :unreachable}
+    end
+  end
+
+  defp download_now(uri) do
     request =
       Req.new(
         url: URI.to_string(uri),
@@ -175,7 +196,9 @@ defmodule Sake.Auth.CIMD do
           %{"client_id" => ^id, "client_name" => name, "redirect_uris" => [_ | _] = uris} = doc} <-
            JSON.decode(body),
          true <- is_binary(name) and String.length(name) in 1..100,
+         true <- length(uris) <= @max_redirect_uris,
          true <- Enum.all?(uris, &Redirect.valid?/1),
+         true <- Sake.Auth.Clients.metadata_types_valid?(doc),
          method = doc["token_endpoint_auth_method"] || "none",
          true <- method == "none" do
       {:ok,
@@ -214,7 +237,7 @@ defmodule Sake.Auth.CIMD.Cache do
 
   def get(key) do
     case :ets.lookup(@table, key) do
-      [{^key, value, expires_at}] ->
+      [{^key, value, expires_at, _inserted}] ->
         if System.system_time(:second) < expires_at, do: {:ok, value}, else: :error
 
       [] ->
@@ -222,8 +245,33 @@ defmodule Sake.Auth.CIMD.Cache do
     end
   end
 
+  @max_entries 1_000
+
+  @doc false
+  def max_entries, do: @max_entries
+
+  # Bounded: when full, expired entries go first, then, if the cache is
+  # still full, the oldest entry.
   def put(key, value, ttl) do
-    :ets.insert(@table, {key, value, System.system_time(:second) + ttl})
+    now = System.system_time(:second)
+
+    if :ets.info(@table, :size) >= @max_entries and not :ets.member(@table, key) do
+      :ets.select_delete(@table, [{{:_, :_, :"$1", :_}, [{:"=<", :"$1", now}], [true]}])
+      evict_oldest()
+    end
+
+    :ets.insert(@table, {key, value, now + ttl, System.unique_integer([:monotonic])})
     :ok
   end
+
+  defp evict_oldest do
+    if :ets.info(@table, :size) >= @max_entries do
+      {key, _} = :ets.foldl(&older/2, nil, @table)
+      :ets.delete(@table, key)
+    end
+  end
+
+  defp older({k, _, _, at}, nil), do: {k, at}
+  defp older({k, _, _, at}, {_, oldest}) when at < oldest, do: {k, at}
+  defp older(_entry, acc), do: acc
 end

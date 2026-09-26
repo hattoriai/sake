@@ -147,15 +147,6 @@ if Code.ensure_loaded?(Ecto.Query) do
     end
 
     @impl true
-    def mark_used(%{repo: repo} = s, id) do
-      repo.update_all(from(t in S.Token, where: t.id == ^id), [set: [used_at: now()]],
-        prefix: s.prefix
-      )
-
-      :ok
-    end
-
-    @impl true
     def consume_refresh(%{repo: repo} = s, hash) do
       query =
         from(t in S.Token,
@@ -228,6 +219,7 @@ if Code.ensure_loaded?(Ecto.Query) do
       row = %S.Consent{
         subject_id: c.subject_id,
         client_id: c.client_id,
+        resource: c.resource,
         scopes: c.scopes,
         inserted_at: DateTime.truncate(c.inserted_at, :second)
       }
@@ -235,7 +227,7 @@ if Code.ensure_loaded?(Ecto.Query) do
       {:ok, _} =
         repo.insert(row,
           on_conflict: {:replace, [:scopes, :inserted_at]},
-          conflict_target: [:subject_id, :client_id],
+          conflict_target: [:subject_id, :client_id, :resource],
           prefix: s.prefix
         )
 
@@ -243,10 +235,12 @@ if Code.ensure_loaded?(Ecto.Query) do
     end
 
     @impl true
-    def get_consent(%{repo: repo} = s, subject_id, client_id) do
+    def get_consent(%{repo: repo} = s, subject_id, client_id, resource) do
       case repo.one(
              from(c in S.Consent,
-               where: c.subject_id == ^subject_id and c.client_id == ^client_id
+               where:
+                 c.subject_id == ^subject_id and c.client_id == ^client_id and
+                   c.resource == ^resource
              ),
              prefix: s.prefix
            ) do
@@ -258,6 +252,7 @@ if Code.ensure_loaded?(Ecto.Query) do
            %Consent{
              subject_id: r.subject_id,
              client_id: r.client_id,
+             resource: r.resource,
              scopes: r.scopes,
              inserted_at: r.inserted_at
            }}
@@ -265,19 +260,38 @@ if Code.ensure_loaded?(Ecto.Query) do
     end
 
     @impl true
-    def delete_consent(%{repo: repo} = s, subject_id, client_id) do
-      repo.delete_all(
-        from(c in S.Consent, where: c.subject_id == ^subject_id and c.client_id == ^client_id),
-        prefix: s.prefix
-      )
+    def delete_consent(%{repo: repo} = s, subject_id, client_id, resource) do
+      query =
+        from(c in S.Consent, where: c.subject_id == ^subject_id and c.client_id == ^client_id)
 
+      query = if resource == :all, do: query, else: where(query, [c], c.resource == ^resource)
+      repo.delete_all(query, prefix: s.prefix)
       :ok
     end
 
     @impl true
-    def prune(%{repo: repo} = s, now) do
+    def prune(%{repo: repo} = s, now, consents_before) do
       repo.delete_all(from(c in S.Code, where: c.expires_at <= ^now), prefix: s.prefix)
       repo.delete_all(from(t in S.Token, where: t.expires_at <= ^now), prefix: s.prefix)
+
+      live =
+        from(t in S.Token,
+          where:
+            t.kind == "refresh" and is_nil(t.revoked_at) and t.expires_at > ^now and
+              t.subject_id == parent_as(:consent).subject_id and
+              t.client_id == parent_as(:consent).client_id and
+              t.resource == parent_as(:consent).resource,
+          select: 1
+        )
+
+      repo.delete_all(
+        from(c in S.Consent,
+          as: :consent,
+          where: c.inserted_at < ^consents_before and not exists(live)
+        ),
+        prefix: s.prefix
+      )
+
       :ok
     end
 

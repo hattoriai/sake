@@ -84,9 +84,6 @@ defmodule Sake.Auth.Store.ETS do
     end
   end
 
-  @impl Sake.Auth.Store
-  def mark_used(_s, id), do: update(:tokens, id, &%{&1 | used_at: now()})
-
   # Runs inside the owner Agent process, which serializes every call made
   # through it: two concurrent callers can never both observe `used_at:
   # nil` for the same hash, so exactly one of them marks it used.
@@ -132,18 +129,43 @@ defmodule Sake.Auth.Store.ETS do
 
   @impl Sake.Auth.Store
   def put_consent(_s, consent),
-    do: insert(:consents, {consent.subject_id, consent.client_id}, consent)
+    do: insert(:consents, {consent.subject_id, consent.client_id, consent.resource}, consent)
 
   @impl Sake.Auth.Store
-  def get_consent(_s, subject_id, client_id), do: lookup(:consents, {subject_id, client_id})
+  def get_consent(_s, subject_id, client_id, resource),
+    do: lookup(:consents, {subject_id, client_id, resource})
+
   @impl Sake.Auth.Store
-  def delete_consent(_s, subject_id, client_id) do
-    :ets.delete(@tables.consents, {subject_id, client_id})
+  def delete_consent(_s, subject_id, client_id, :all) do
+    :ets.match_delete(@tables.consents, {{subject_id, client_id, :_}, :_})
+    :ok
+  end
+
+  def delete_consent(_s, subject_id, client_id, resource) do
+    :ets.delete(@tables.consents, {subject_id, client_id, resource})
     :ok
   end
 
   @impl Sake.Auth.Store
-  def prune(_s, now) do
+  def prune(_s, now, consents_before) do
+    prune_expired(now)
+    tokens = :ets.tab2list(@tables.tokens)
+
+    for {key, %{inserted_at: at} = consent} <- :ets.tab2list(@tables.consents),
+        DateTime.compare(at, consents_before) == :lt,
+        not Enum.any?(tokens, &live_refresh?(&1, consent, now)),
+        do: :ets.delete(@tables.consents, key)
+
+    :ok
+  end
+
+  defp live_refresh?({_, t}, consent, now) do
+    t.kind == :refresh and t.subject_id == consent.subject_id and
+      t.client_id == consent.client_id and t.resource == consent.resource and
+      t.revoked_at == nil and DateTime.compare(t.expires_at, now) == :gt
+  end
+
+  defp prune_expired(now) do
     for {hash, %{expires_at: exp}} <- :ets.tab2list(@tables.codes),
         DateTime.compare(exp, now) != :gt,
         do: :ets.delete(@tables.codes, hash)

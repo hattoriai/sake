@@ -69,11 +69,15 @@ if Code.ensure_loaded?(Ecto.Migration) do
       create table(:sake_oauth_consents, primary_key: false, prefix: prefix) do
         add(:subject_id, :string, null: false)
         add(:client_id, :string, null: false)
+        add(:resource, :text, null: false)
         add(:scopes, {:array, :string}, null: false, default: [])
         add(:inserted_at, :utc_datetime, null: false)
       end
 
-      create(unique_index(:sake_oauth_consents, [:subject_id, :client_id], prefix: prefix))
+      create(
+        unique_index(:sake_oauth_consents, [:subject_id, :client_id, :resource], prefix: prefix)
+      )
+
       :ok
     end
 

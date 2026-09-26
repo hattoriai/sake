@@ -13,7 +13,8 @@ defmodule Sake.Auth.Bearer do
     {module, state} = Auth.store(config)
     resource = Resource.canonical(conn, plug_opts)
 
-    with ["Bearer " <> token] <- get_req_header(conn, "authorization"),
+    with [header] <- get_req_header(conn, "authorization"),
+         {:ok, token} <- token(header),
          {:ok, record} <- module.get_token(state, :access, Tokens.hash(token)),
          true <- Tokens.valid?(record, DateTime.utc_now()),
          true <- record.resource == resource,
@@ -27,6 +28,14 @@ defmodule Sake.Auth.Bearer do
       _ -> {:error, unauthorized(conn, config)}
     end
   end
+
+  # The scheme name is case-insensitive (RFC 9110 §11.1); one space
+  # separates it from the token.
+  defp token(<<scheme::binary-size(6), " ", token::binary>>) when token != "" do
+    if String.downcase(scheme) == "bearer", do: {:ok, token}, else: :error
+  end
+
+  defp token(_header), do: :error
 
   defp unauthorized(conn, config) do
     challenge =

@@ -3,6 +3,10 @@ defmodule Sake.Auth.DCR do
   Dynamic Client Registration (RFC 7591) for clients that do not use Client
   ID Metadata Documents. Public clients only; no authentication. Put a rate
   limit in front of it.
+
+  A client that sends no `grant_types` is registered for both the
+  authorization code and the refresh token grants, and the response says
+  so.
   """
   @behaviour Plug
   import Plug.Conn
@@ -19,8 +23,7 @@ defmodule Sake.Auth.DCR do
     config = Sake.Auth.config()
 
     if config.dcr do
-      with {:ok, body, conn} <- read_body(conn, length: 65_536),
-           {:ok, doc} when is_map(doc) <- JSON.decode(body),
+      with {:ok, doc, conn} when is_map(doc) <- Sake.Plug.Body.json(conn, 65_536),
            {:ok, client} <- build(doc) do
         {module, state} = Sake.Auth.store(config)
         :ok = module.put_client(state, client)
@@ -60,9 +63,16 @@ defmodule Sake.Auth.DCR do
   defp validate(doc) do
     with :ok <- validate_redirect_uris(doc["redirect_uris"]),
          :ok <- validate_name(doc["client_name"] || "Unnamed client"),
-         :ok <- validate_auth_method(doc["token_endpoint_auth_method"]) do
-      validate_grants(doc["grant_types"] || ["authorization_code"])
+         :ok <- validate_auth_method(doc["token_endpoint_auth_method"]),
+         :ok <- validate_types(doc) do
+      validate_grants(doc["grant_types"] || @grant_types)
     end
+  end
+
+  defp validate_types(doc) do
+    if Sake.Auth.Clients.metadata_types_valid?(doc),
+      do: :ok,
+      else: {:error, "invalid_client_metadata"}
   end
 
   defp validate_redirect_uris(uris) do
@@ -100,7 +110,7 @@ defmodule Sake.Auth.DCR do
       name: doc["client_name"] || "Unnamed client",
       kind: :dynamic,
       redirect_uris: doc["redirect_uris"],
-      grant_types: doc["grant_types"] || ["authorization_code"],
+      grant_types: doc["grant_types"] || @grant_types,
       token_endpoint_auth_method: "none",
       client_uri: doc["client_uri"],
       logo_uri: doc["logo_uri"],

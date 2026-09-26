@@ -5,7 +5,6 @@ defmodule Sake.Auth.AuthorizeTest do
 
   alias Sake.Auth.Authorize
 
-  @verifier "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
   @challenge "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
 
   defp params(client, extra \\ %{}) do
@@ -72,7 +71,49 @@ defmodule Sake.Auth.AuthorizeTest do
             }} = mod.consume_code(state, Sake.Auth.Tokens.hash(code))
 
     assert client_id == client.id
-    assert {:ok, %{scopes: ["issues:read"]}} = mod.get_consent(state, "u1", client.id)
+
+    assert {:ok, %{scopes: ["issues:read"]}} =
+             mod.get_consent(state, "u1", client.id, "http://www.example.com/mcp")
+  end
+
+  test "the consent and error pages refuse to be framed and name the resource", %{
+    config: config
+  } do
+    client = public_client(config)
+    conn = get(params(client, %{"resource" => "http://www.example.com/acme/mcp"}))
+    assert conn.resp_body =~ "for http://www.example.com/acme/mcp"
+
+    for conn <- [conn, get(params(client, %{"client_id" => "nope"}))] do
+      assert get_resp_header(conn, "x-frame-options") == ["DENY"]
+      assert get_resp_header(conn, "content-security-policy") == ["frame-ancestors 'none'"]
+    end
+  end
+
+  test "a remembered consent covers only the resource it was given for", %{config: config} do
+    client = public_client(config)
+    acme = params(client, %{"resource" => "http://www.example.com/acme/mcp"})
+    [_, request] = Regex.run(~r/name="request" value="([^"]+)"/, get(acme).resp_body)
+    post(%{"decision" => "approve", "request" => request})
+    assert get(acme).status == 302
+
+    beta = params(client, %{"resource" => "http://www.example.com/beta/mcp"})
+    assert get(beta).status == 200
+  end
+
+  @tag auth: [subject: SakeTest.TenantSubject]
+  test "authorize_resource?/2 refuses a resource the person may not authorize", %{
+    config: config
+  } do
+    client = public_client(config)
+
+    assert {"127.0.0.1",
+            %{
+              "error" => "access_denied",
+              "error_description" => "You may not authorize this resource",
+              "state" => "xyz"
+            }} = location(get(params(client, %{"resource" => "http://www.example.com/beta/mcp"})))
+
+    assert get(params(client, %{"resource" => "http://www.example.com/acme/mcp"})).status == 200
   end
 
   test "a remembered consent skips the page; a wider scope asks again", %{config: config} do
@@ -160,7 +201,7 @@ defmodule Sake.Auth.AuthorizeTest do
     assert post(%{"decision" => "approve", "request" => request <> "x"}).status == 400
   end
 
-  test "a CIMD client is fetched and its name shown", %{config: config} do
+  test "a CIMD client is fetched and its name shown" do
     bypass = Bypass.open()
     id = "http://localhost:#{bypass.port}/claude.json"
 
