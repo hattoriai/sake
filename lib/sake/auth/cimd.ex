@@ -82,8 +82,21 @@ defmodule Sake.Auth.CIMD do
         public_ip?(ip)
 
       {:error, _} ->
-        addrs = resolve(host, :inet) ++ resolve(host, :inet6)
-        addrs != [] and Enum.all?(addrs, &public_ip?/1)
+        case resolve_all(host) do
+          :timeout -> false
+          addrs -> addrs != [] and Enum.all?(addrs, &public_ip?/1)
+        end
+    end
+  end
+
+  # Bounded to `@timeout`, same as the HTTP fetch: an unresponsive DNS
+  # server must not be able to hang the fetch indefinitely.
+  defp resolve_all(host) do
+    task = Task.async(fn -> resolve(host, :inet) ++ resolve(host, :inet6) end)
+
+    case Task.yield(task, @timeout) || Task.shutdown(task, :brutal_kill) do
+      {:ok, addrs} -> addrs
+      _ -> :timeout
     end
   end
 
@@ -121,7 +134,13 @@ defmodule Sake.Auth.CIMD do
         retry: false,
         receive_timeout: @timeout,
         connect_options: [timeout: @timeout],
-        decode_body: false,
+        # Never negotiate or apply compression: `compressed: false` sends no
+        # `accept-encoding` header, and `raw: true` disables both the
+        # `decompress_body` and `decode_body` steps, so a server-supplied
+        # `content-encoding` is never inflated and the 64 KB cap below is
+        # always a cap on the real (decompressed) bytes we hold.
+        compressed: false,
+        raw: true,
         into: fn {:data, data}, {req, resp} ->
           body = (resp.body || "") <> data
 

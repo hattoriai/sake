@@ -135,6 +135,31 @@ defmodule Sake.Auth.CIMDTest do
     assert {:error, :unreachable} = CIMD.fetch(config, base <> "/down.json")
   end
 
+  test "never decompresses: a gzip content-encoding is not inflated", %{
+    config: config,
+    bypass: bypass,
+    base: base
+  } do
+    Bypass.expect(bypass, "GET", "/bomb.json", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-encoding", "gzip")
+      |> Plug.Conn.resp(200, :zlib.gzip(String.duplicate("x", 200_000)))
+    end)
+
+    assert CIMD.fetch(config, base <> "/bomb.json") in [
+             {:error, :invalid_document},
+             {:error, :unreachable}
+           ]
+
+    Bypass.expect(bypass, "GET", "/gz.json", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-encoding", "gzip")
+      |> Plug.Conn.resp(200, :zlib.gzip(JSON.encode!(document(base <> "/gz.json"))))
+    end)
+
+    refute match?({:ok, _}, CIMD.fetch(config, base <> "/gz.json"))
+  end
+
   test "client_id URL rules and host checks", %{config: config} do
     assert CIMD.url?("https://app.example/client.json")
     refute CIMD.url?("https://app.example")
