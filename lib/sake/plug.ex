@@ -30,7 +30,7 @@ defmodule Sake.Plug do
     %{
       server: server,
       auth: opts[:auth] || false,
-      scope: opts[:scope] || fn conn -> conn.assigns[:sake_scope] end,
+      scope: opts[:scope] || (&Sake.Plug.default_scope/1),
       origins: opts[:origins],
       json_limit: opts[:json_limit] || 4_000_000,
       keepalive: opts[:keepalive] || 15_000,
@@ -277,7 +277,9 @@ defmodule Sake.Plug do
       :none ->
         send_error(conn, 404, id_of(parsed), JSONRPC.code(:invalid_request), "Unknown session")
 
-      {:ok, session, _id} ->
+      {:ok, session, id} ->
+        conn = assign(conn, :sake_session_id, id)
+
         ctx =
           Context.new(
             era: :legacy,
@@ -362,6 +364,12 @@ defmodule Sake.Plug do
   end
 
   # ---- helpers
+
+  # The default `scope:` function, as a remote capture so `init/1` can
+  # return it from contexts (Plug.Router, Plug.Builder pipelines) that
+  # need to store the initialized options as a compile-time literal.
+  @doc false
+  def default_scope(conn), do: conn.assigns[:sake_scope]
 
   @doc false
   def secret(opts), do: Sake.Secret.resolve(opts.secret)

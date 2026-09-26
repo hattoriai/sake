@@ -172,17 +172,11 @@ defmodule Sake.Server do
   @doc "Tells listening clients that the list of tools, resources or prompts changed."
   @spec notify_list_changed(module(), :tools | :resources | :prompts) :: :ok
   def notify_list_changed(server, kind) when kind in [:tools, :resources, :prompts] do
-    Sake.Server.Notifier.broadcast(server, {:list_changed, kind})
+    Sake.Plug.Streams.broadcast(server, {:list_changed, kind})
   end
 
   @doc "Tells subscribed clients that a resource changed."
   @spec resource_updated(module(), String.t()) :: :ok
   def resource_updated(server, uri),
-    do: Sake.Server.Notifier.broadcast(server, {:resource_updated, uri})
-end
-
-defmodule Sake.Server.Notifier do
-  @moduledoc false
-  # Placeholder for the stream registry: no listeners exist yet.
-  def broadcast(_server, _event), do: :ok
+    do: Sake.Plug.Streams.broadcast(server, {:resource_updated, uri})
 end

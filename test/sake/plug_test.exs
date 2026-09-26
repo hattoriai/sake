@@ -222,6 +222,8 @@ defmodule Sake.PlugTest do
       assert {:ok, %{revision: "2025-06-18", capabilities: %{"elicitation" => %{}}}} =
                Sake.Server.Session.verify(ModernClient.secret(), session.id)
 
+      # The session declares the `elicitation` capability, so this
+      # tools/call streams (legacy elicitation may need the open channel).
       conn =
         LegacyClient.post(opts, session, "tools/call", %{
           "name" => "echo",
@@ -229,8 +231,10 @@ defmodule Sake.PlugTest do
         })
 
       assert conn.status == 200
-      assert %{"result" => %{"content" => [%{"text" => "hi"}]}} = LegacyClient.json(conn)
-      refute Map.has_key?(LegacyClient.json(conn)["result"], "resultType")
+      assert ["text/event-stream" <> _] = get_resp_header(conn, "content-type")
+      assert [%{"result" => result}] = ModernClient.events(conn.resp_body)
+      assert %{"content" => [%{"text" => "hi"}]} = result
+      refute Map.has_key?(result, "resultType")
       assert get_resp_header(conn, "mcp-session-id") == []
     end
 

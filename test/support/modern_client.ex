@@ -20,14 +20,13 @@ defmodule SakeTest.ModernClient do
     version = Keyword.get(opts, :version, "2026-07-28")
 
     meta =
-      Map.merge(
-        %{
-          "io.modelcontextprotocol/protocolVersion" => version,
-          "io.modelcontextprotocol/clientCapabilities" => Keyword.get(opts, :capabilities, %{}),
-          "io.modelcontextprotocol/clientInfo" => %{"name" => "test", "version" => "0"}
-        },
-        Keyword.get(opts, :meta, %{})
-      )
+      %{
+        "io.modelcontextprotocol/protocolVersion" => version,
+        "io.modelcontextprotocol/clientCapabilities" => Keyword.get(opts, :capabilities, %{}),
+        "io.modelcontextprotocol/clientInfo" => %{"name" => "test", "version" => "0"}
+      }
+      |> Map.merge(params["_meta"] || %{})
+      |> Map.merge(Keyword.get(opts, :meta, %{}))
 
     params = Map.put(params, "_meta", meta)
 
