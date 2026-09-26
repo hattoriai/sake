@@ -1,6 +1,5 @@
 defmodule Sake.ElicitTest do
   use ExUnit.Case, async: false
-  import Plug.Conn
 
   alias SakeTest.{HTTP, ModernClient}
 
@@ -212,6 +211,95 @@ defmodule Sake.ElicitTest do
         )
 
       assert %{"result" => %{"content" => [%{"text" => "Connected."}]}} = ModernClient.json(conn)
+    end
+
+    test "inputResponses without a request state are rejected" do
+      conn =
+        ModernClient.post(
+          ModernClient.opts(),
+          "tools/call",
+          %{
+            "name" => "confirm",
+            "arguments" => %{},
+            "inputResponses" => %{
+              "who" => %{"action" => "accept", "content" => %{"name" => "Mallory"}}
+            }
+          },
+          capabilities: @caps
+        )
+
+      assert %{"error" => %{"code" => -32_602, "message" => "Missing request state"}} =
+               ModernClient.json(conn)
+    end
+
+    test "a resource can elicit and complete on retry" do
+      defmodule Secret do
+        use Sake.Resource, uri: "secret://{id}", name: "secret", mime_type: "text/plain"
+
+        def read(%{id: id}, ctx) do
+          case Sake.Elicit.form(ctx, :pin, "PIN?", %{
+                 "type" => "object",
+                 "properties" => %{"pin" => %{"type" => "string"}}
+               }) do
+            {:ok, %{"pin" => pin}} -> {:ok, "secret #{id} unlocked with #{pin}"}
+            _ -> {:error, "no pin"}
+          end
+        end
+      end
+
+      defmodule SecretServer do
+        use Sake.Server, name: "s", version: "1"
+        resources [Secret]
+      end
+
+      opts = ModernClient.opts(server: SecretServer)
+
+      conn =
+        ModernClient.post(opts, "resources/read", %{"uri" => "secret://7"}, capabilities: @caps)
+
+      assert %{
+               "result" => %{
+                 "resultType" => "input_required",
+                 "inputRequests" => %{"pin" => _},
+                 "requestState" => state
+               }
+             } = ModernClient.json(conn)
+
+      conn =
+        ModernClient.post(
+          opts,
+          "resources/read",
+          %{
+            "uri" => "secret://7",
+            "inputResponses" => %{
+              "pin" => %{"action" => "accept", "content" => %{"pin" => "1234"}}
+            },
+            "requestState" => state
+          },
+          capabilities: @caps,
+          id: 2
+        )
+
+      assert %{"result" => %{"contents" => [%{"text" => "secret 7 unlocked with 1234"}]}} =
+               ModernClient.json(conn)
+
+      conn =
+        ModernClient.post(
+          opts,
+          "resources/read",
+          %{
+            "uri" => "secret://8",
+            "inputResponses" => %{
+              "pin" => %{"action" => "accept", "content" => %{"pin" => "1234"}}
+            },
+            "requestState" => state
+          },
+          capabilities: @caps,
+          id: 3
+        )
+
+      assert %{"error" => %{"code" => -32_602, "message" => "Invalid request state"}} =
+               ModernClient.json(conn)
     end
   end
 

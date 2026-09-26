@@ -178,9 +178,13 @@ defmodule Sake.Server.Dispatch do
     do: {:error, JSONRPC.code(:invalid_params), "tools/call needs a tool name"}
 
   defp call_validated(spec, params, ctx) do
-    case Sake.Schema.validate(spec.input_schema, params["arguments"] || %{}) do
+    raw_args = params["arguments"] || %{}
+
+    case Sake.Schema.validate(spec.input_schema, raw_args) do
       {:ok, args} ->
-        with_inputs(spec.name, params, ctx, fn ctx -> {:ok, run_tool(spec, args, ctx)} end)
+        with_inputs(spec.name, raw_args, params, ctx, fn ctx ->
+          {:ok, run_tool(spec, args, ctx)}
+        end)
 
       {:error, errors} ->
         {:ok, Results.tool({:error, "Invalid arguments: " <> format_errors(errors)}, spec, ctx)}
@@ -219,10 +223,10 @@ defmodule Sake.Server.Dispatch do
   # ---- resources/read
 
   @doc false
-  def read_resource(server, %{"uri" => uri}, ctx) when is_binary(uri) do
+  def read_resource(server, %{"uri" => uri} = params, ctx) when is_binary(uri) do
     with {:ok, spec, uri_params} <- find_resource(server, uri),
          :ok <- allowed(spec, ctx) do
-      with_inputs(uri, %{"arguments" => %{"uri" => uri}}, ctx, fn ctx ->
+      with_inputs(uri, %{"uri" => uri}, params, ctx, fn ctx ->
         read_result(spec, uri_params, uri, server, ctx)
       end)
     end
@@ -256,7 +260,9 @@ defmodule Sake.Server.Dispatch do
     with {:ok, spec} <- find_prompt(server, name),
          :ok <- allowed(spec, ctx),
          {:ok, args} <- prompt_args(spec, params["arguments"] || %{}) do
-      with_inputs(name, params, ctx, fn ctx -> prompt_result(spec, args, ctx) end)
+      with_inputs(name, params["arguments"] || %{}, params, ctx, fn ctx ->
+        prompt_result(spec, args, ctx)
+      end)
     end
   end
 
@@ -300,27 +306,33 @@ defmodule Sake.Server.Dispatch do
   # and prompts/get: a component's elicitation call throws to unwind here,
   # and the resulting `requestState` is verified on the next round-trip.
 
-  defp with_inputs(name, params, ctx, fun) do
-    args = params["arguments"] || %{}
+  defp with_inputs(name, args, params, ctx, fun) do
+    case resolve_inputs(name, args, params, ctx) do
+      :error ->
+        {:error, JSONRPC.code(:invalid_params), "Invalid request state"}
 
-    case resolve_inputs(name, params, ctx, args) do
-      :error -> {:error, JSONRPC.code(:invalid_params), "Invalid request state"}
-      {:ok, inputs} -> run_with_inputs(name, args, ctx, inputs, fun)
+      {:error, :missing_state} ->
+        {:error, JSONRPC.code(:invalid_params), "Missing request state"}
+
+      {:ok, inputs} ->
+        run_with_inputs(name, args, ctx, inputs, fun)
     end
   end
 
-  defp resolve_inputs(name, %{"requestState" => state} = params, ctx, args) do
+  defp resolve_inputs(name, args, %{"requestState" => state} = params, ctx) do
     case Sake.Server.RequestState.verify(ctx, name, args, state) do
       {:ok, previous} -> {:ok, Map.merge(previous, params["inputResponses"] || %{})}
       :error -> :error
     end
   end
 
-  defp resolve_inputs(_name, %{"inputResponses" => responses}, _ctx, _args)
-       when is_map(responses),
-       do: {:ok, responses}
+  # `inputResponses` are only ever honoured alongside the signed
+  # `requestState` that proves Sake asked for them; on its own it would let
+  # any client inject forged elicitation answers on the first call.
+  defp resolve_inputs(_name, _args, %{"inputResponses" => _responses}, _ctx),
+    do: {:error, :missing_state}
 
-  defp resolve_inputs(_name, _params, _ctx, _args), do: {:ok, %{}}
+  defp resolve_inputs(_name, _args, _params, _ctx), do: {:ok, %{}}
 
   defp run_with_inputs(name, args, ctx, inputs, fun) do
     ctx = %{ctx | inputs: inputs}

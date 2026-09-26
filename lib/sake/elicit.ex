@@ -44,22 +44,28 @@ defmodule Sake.Elicit do
   end
 
   defp ask(ctx, key, params) do
+    if Map.has_key?(ctx.client_capabilities, "elicitation") do
+      answer(ctx, key, params)
+    else
+      {:error, :unsupported}
+    end
+  end
+
+  # An answer in `ctx.inputs` is only ever honoured once the capability
+  # check above has passed, so a client that never declared `elicitation`
+  # cannot have its `inputResponses` read back as one.
+  defp answer(ctx, key, params) do
     case Map.fetch(ctx.inputs, key) do
       {:ok, answer} ->
         normalize(answer)
 
       :error ->
-        cond do
-          not Map.has_key?(ctx.client_capabilities, "elicitation") ->
-            {:error, :unsupported}
-
-          ctx.era == :modern ->
-            throw(
-              {:sake_input_required, key, %{"method" => "elicitation/create", "params" => params}}
-            )
-
-          true ->
-            legacy(ctx, key, params)
+        if ctx.era == :modern do
+          throw(
+            {:sake_input_required, key, %{"method" => "elicitation/create", "params" => params}}
+          )
+        else
+          legacy(ctx, key, params)
         end
     end
   end
