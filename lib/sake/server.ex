@@ -14,6 +14,12 @@ defmodule Sake.Server do
   300 000 ms), `cache_scope` (`:public` or `:private`; default: private
   when the endpoint has authorization, public otherwise), `page_size`
   (default 100), `extensions` (a map for extension negotiation).
+
+  On the modern protocol, list and read results carry `ttlMs`: the
+  server's `ttl`, or less. A tool, resource or prompt with its own `ttl:`
+  shortens the `ttlMs` of every list page that includes it, and a
+  resource's `ttl:` also sets the `ttlMs` of its `resources/read` result
+  (the shortest ttl always wins).
   """
 
   @callback __sake__(atom()) :: term()

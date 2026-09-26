@@ -28,7 +28,8 @@ defmodule Sake.Plug.Stream do
         stream(conn, opts, parsed, ctx, handler)
 
       true ->
-        Sake.Plug.outcome_to_response(conn, id, run(parsed, ctx, handler) |> after_outcome(ctx))
+        outcome = parsed |> run_safely(ctx, handler) |> after_outcome(ctx)
+        Sake.Plug.outcome_to_response(conn, id, outcome)
     end
   end
 
@@ -37,19 +38,19 @@ defmodule Sake.Plug.Stream do
   # Legacy subscribe/unsubscribe reach the session's GET stream.
   defp after_outcome({:subscribe, uri} = o, %{
          era: :legacy,
-         conn_assigns: %{sake_session_id: sid},
+         conn_assigns: %{sake_session_nonce: nonce},
          server: server
        }) do
-    Streams.session_subscribe(server, sid, uri)
+    Streams.session_subscribe(server, nonce, uri)
     o
   end
 
   defp after_outcome({:unsubscribe, uri} = o, %{
          era: :legacy,
-         conn_assigns: %{sake_session_id: sid},
+         conn_assigns: %{sake_session_nonce: nonce},
          server: server
        }) do
-    Streams.session_unsubscribe(server, sid, uri)
+    Streams.session_unsubscribe(server, nonce, uri)
     o
   end
 
@@ -93,10 +94,11 @@ defmodule Sake.Plug.Stream do
     loop(conn, opts, id, ctx, task)
   end
 
-  # The task is linked (a dead connection must kill the handler), so its
-  # body must never exit abnormally: a raise or throw here would tear
-  # down the SSE connection via the link before the outcome could become
-  # a proper JSON-RPC error.
+  # A failing handler becomes a JSON-RPC error on both paths; the stack
+  # trace goes only to the log. On the stream path the task is linked (a
+  # dead connection must kill the handler), so its body must never exit
+  # abnormally: a raise or throw there would tear down the SSE connection
+  # via the link before the outcome could become a proper JSON-RPC error.
   defp run_safely(parsed, ctx, handler) do
     run(parsed, ctx, handler)
   rescue
@@ -290,6 +292,7 @@ defmodule Sake.Plug.Stream do
         {_, conn} =
           SSE.event(conn, JSONRPC.result(id, %{"resultType" => "complete", "_meta" => meta}))
 
+        Streams.unregister_listen(opts.server)
         conn
     after
       opts.keepalive ->
@@ -315,9 +318,9 @@ defmodule Sake.Plug.Stream do
 
   # ---- legacy GET stream
 
-  @spec legacy(Plug.Conn.t(), map(), map(), String.t()) :: Plug.Conn.t()
-  def legacy(conn, opts, _session, session_id) do
-    Streams.register_legacy(opts.server, session_id)
+  @spec legacy(Plug.Conn.t(), map(), Sake.Server.Session.session()) :: Plug.Conn.t()
+  def legacy(conn, opts, session) do
+    Streams.register_legacy(opts.server, session.nonce)
     conn = SSE.start(conn)
     legacy_loop(conn, opts, %{})
   end

@@ -19,4 +19,14 @@ defmodule Sake.Server.SessionTest do
     refute Session.renew?(%{minted_at: System.system_time(:second)})
     assert Session.renew?(%{minted_at: System.system_time(:second) - 90_000})
   end
+
+  test "every session has its own nonce, and a renewal keeps it" do
+    {:ok, a} = Session.verify(@secret, Session.mint(@secret, "2025-06-18", %{}))
+    {:ok, b} = Session.verify(@secret, Session.mint(@secret, "2025-06-18", %{}))
+    assert byte_size(Base.url_decode64!(a.nonce, padding: false)) == 16
+    assert a.nonce != b.nonce
+
+    {:ok, renewed} = Session.verify(@secret, Session.renew(@secret, a, "debug"))
+    assert renewed.nonce == a.nonce and renewed.log_level == "debug"
+  end
 end

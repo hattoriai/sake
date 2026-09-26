@@ -16,7 +16,11 @@ defmodule Sake.Client do
   alias Sake.Client.{Session, ToolResult, Transport}
   alias Sake.{Content, JSONRPC, Protocol, Schema}
 
-  @modern_errors [-32_020, -32_021, -32_022, -32_601, -32_602]
+  # The errors only a modern server sends; a legacy server answers the
+  # `server/discover` probe with "method not found" (-32601) or "invalid
+  # params" (-32602), or with no JSON-RPC body at all.
+  @modern_errors [-32_020, -32_021, -32_022]
+  @legacy_errors [-32_601, -32_602]
   @max_retries 3
 
   @spec connect(String.t(), keyword()) :: {:ok, Session.t()} | {:error, term()}
@@ -64,6 +68,9 @@ defmodule Sake.Client do
       {:error, {:rpc, %{"code" => code} = error}} when code in @modern_errors ->
         {:error, {:rpc, error}}
 
+      {:error, {:rpc, %{"code" => code}}} when code in @legacy_errors ->
+        legacy_connect(%{session | era: :legacy}, legacy_version)
+
       {:error, {:http, _status, body}} ->
         handle_probe_http_error(body, session, legacy_version)
 
@@ -76,7 +83,8 @@ defmodule Sake.Client do
   # the client's revision is unsupported (retry with the server's list is
   # pointless, since Sake only speaks one modern revision, so this is
   # reported directly); the other modern error codes are reported as-is;
-  # anything else (no recognisable modern error body) means legacy.
+  # anything else (-32601, -32602, or no recognisable error body) means
+  # legacy.
   defp handle_probe_http_error(
          %{"error" => %{"code" => -32_022, "data" => %{"supported" => supported}}},
          _session,

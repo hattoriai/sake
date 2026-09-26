@@ -30,6 +30,36 @@ defmodule Sake.Server.DispatchTest do
     assert r["ttlMs"] == 300_000 and r["cacheScope"] == "public"
   end
 
+  defmodule ShortTool do
+    @moduledoc false
+    use Sake.Tool, name: "short", description: "short-lived", ttl: 5_000
+    def execute(_, _), do: {:ok, "x"}
+  end
+
+  defmodule ShortResource do
+    @moduledoc false
+    use Sake.Resource, uri: "short://one", name: "short", ttl: 7_000
+    def read(_, _), do: {:ok, "x"}
+  end
+
+  defmodule TtlServer do
+    @moduledoc false
+    use Sake.Server, name: "ttl", version: "1", ttl: 60_000
+    tools [SakeDev.Tools.Echo, ShortTool]
+    resources [SakeDev.Resources.Readme, ShortResource]
+  end
+
+  test "ttlMs is the shortest of the server's and every listed component's ttl" do
+    ctx = ctx(server: TtlServer)
+    handle = &Dispatch.handle(TtlServer, {:request, 1, &1, &2}, ctx)
+
+    assert {:reply, %{"ttlMs" => 5_000}} = handle.("tools/list", %{})
+    assert {:reply, %{"ttlMs" => 7_000}} = handle.("resources/list", %{})
+    assert {:reply, %{"ttlMs" => 7_000}} = handle.("resources/read", %{"uri" => "short://one"})
+    assert {:reply, %{"ttlMs" => 60_000}} = handle.("resources/read", %{"uri" => "dev://readme"})
+    assert {:reply, %{"ttlMs" => 60_000}} = handle.("prompts/list", %{})
+  end
+
   test "tools/list with cache fields, deterministic order and pagination" do
     assert {:reply, r} = call("tools/list")
     assert Enum.map(r["tools"], & &1["name"]) == ["echo", "add", "slow", "confirm", "connect"]

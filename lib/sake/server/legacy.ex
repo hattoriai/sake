@@ -51,7 +51,13 @@ defmodule Sake.Server.Legacy do
   end
 
   defp dispatch(_server, "ping", _params, _ctx), do: {:ok, %{}}
-  defp dispatch(_server, "logging/setLevel", _params, _ctx), do: {:ok, %{}}
+
+  defp dispatch(_server, "logging/setLevel", params, _ctx) do
+    if Sake.Progress.level?(params["level"]),
+      do: {:ok, %{}},
+      else: {:error, JSONRPC.code(:invalid_params), "Unknown log level"}
+  end
+
   defp dispatch(server, "tools/list", params, ctx), do: Dispatch.list_tools(server, params, ctx)
   defp dispatch(server, "tools/call", params, ctx), do: Dispatch.call_tool(server, params, ctx)
 

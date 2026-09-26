@@ -19,12 +19,14 @@ defmodule Sake.Progress do
     :ok
   end
 
+  @names Enum.map(@levels, &Atom.to_string/1)
+
   @spec log(Sake.Context.t(), atom(), term()) :: :ok
   def log(%Sake.Context{log_level: nil}, _level, _data), do: :ok
 
   def log(%Sake.Context{log_level: min, transport: pid}, level, data)
-      when level in @levels and is_pid(pid) do
-    if index(level) >= index(String.to_existing_atom(min)),
+      when level in @levels and is_pid(pid) and min in @names do
+    if index(Atom.to_string(level)) >= index(min),
       do: send(pid, {:sake_log, level, data})
 
     :ok
@@ -32,5 +34,10 @@ defmodule Sake.Progress do
 
   def log(_ctx, _level, _data), do: :ok
 
-  defp index(level), do: Enum.find_index(@levels, &(&1 == level))
+  @doc false
+  # Whether a client-sent level is one of the eight syslog levels MCP uses.
+  @spec level?(term()) :: boolean()
+  def level?(level), do: level in @names
+
+  defp index(name), do: Enum.find_index(@names, &(&1 == name))
 end

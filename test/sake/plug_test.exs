@@ -9,6 +9,89 @@ defmodule Sake.PlugTest do
     %{opts: ModernClient.opts()}
   end
 
+  defmodule BoomPrompt do
+    @moduledoc false
+    use Sake.Prompt, name: "boom", description: "fails"
+
+    @impl true
+    def get(%{mode: "throw"}, _ctx), do: throw(:nope)
+    def get(%{mode: "exit"}, _ctx), do: exit(:gone)
+    def get(_args, _ctx), do: raise("kaboom")
+
+    arg :mode, :string
+  end
+
+  defmodule BoomServer do
+    @moduledoc false
+    use Sake.Server, name: "boom", version: "1"
+    prompts [BoomPrompt]
+  end
+
+  describe "failures and malformed parameters" do
+    test "a failing handler on the plain JSON path is -32603, on both eras" do
+      opts = ModernClient.opts(server: BoomServer)
+
+      for mode <- ["raise", "throw", "exit"] do
+        conn =
+          ModernClient.post(opts, "prompts/get", %{
+            "name" => "boom",
+            "arguments" => %{"mode" => mode}
+          })
+
+        assert conn.status == 200, mode
+        assert ["application/json" <> _] = get_resp_header(conn, "content-type")
+
+        assert %{
+                 "id" => 1,
+                 "error" => %{"code" => -32_603, "message" => "The request failed: " <> _}
+               } =
+                 ModernClient.json(conn)
+      end
+
+      session = LegacyClient.initialize(opts, "2025-06-18")
+      conn = LegacyClient.post(opts, session, "prompts/get", %{"name" => "boom"})
+
+      assert %{"error" => %{"code" => -32_603, "message" => "The request failed: kaboom"}} =
+               LegacyClient.json(conn)
+    end
+
+    test "non-object arguments, _meta or inputResponses are -32602", %{opts: opts} do
+      for {params, name} <- [
+            {%{"name" => "echo", "arguments" => ["hi"]}, "arguments"},
+            {%{"name" => "echo", "arguments" => %{}, "inputResponses" => "x"}, "inputResponses"}
+          ] do
+        conn = ModernClient.post(opts, "tools/call", params, mirror: false)
+        assert conn.status == 400
+
+        assert %{"error" => %{"code" => -32_602, "message" => message}} = ModernClient.json(conn)
+        assert message == "#{name} must be an object"
+      end
+
+      conn =
+        conn(
+          :post,
+          "/mcp",
+          JSON.encode!(Sake.JSONRPC.request(3, "tools/list", %{"_meta" => [1]}))
+        )
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("accept", "application/json, text/event-stream")
+        |> put_req_header("mcp-protocol-version", "2026-07-28")
+        |> Sake.Plug.call(opts)
+
+      assert conn.status == 400
+
+      assert %{"id" => 3, "error" => %{"code" => -32_602, "message" => "_meta must be an object"}} =
+               ModernClient.json(conn)
+
+      session = LegacyClient.initialize(opts, "2025-06-18")
+
+      conn =
+        LegacyClient.post(opts, session, "tools/call", %{"name" => "echo", "arguments" => 1})
+
+      assert %{"error" => %{"code" => -32_602}} = LegacyClient.json(conn)
+    end
+  end
+
   describe "modern POST" do
     test "tools/list and tools/call", %{opts: opts} do
       conn = ModernClient.post(opts, "tools/list")

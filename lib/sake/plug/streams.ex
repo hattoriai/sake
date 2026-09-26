@@ -9,7 +9,11 @@ defmodule Sake.Plug.Streams do
   @registry __MODULE__
 
   def child_spec(opts) do
-    children = [{Registry, keys: :duplicate, name: @registry}] ++ relay(opts[:pubsub])
+    # The shutdown notifier starts after the registry, so it stops before
+    # it: open listen streams still get to finish while the registry runs.
+    children =
+      [{Registry, keys: :duplicate, name: @registry}, __MODULE__.Shutdown] ++
+        relay(opts[:pubsub])
 
     %{
       id: __MODULE__,
@@ -30,9 +34,24 @@ defmodule Sake.Plug.Streams do
   def register_listen(server, subscription_id, filter),
     do: register({server, :listen}, {subscription_id, filter})
 
-  @doc "Registers the calling process as a legacy GET stream for the session."
-  def register_legacy(server, session_id),
-    do: register({server, :legacy, :erlang.phash2(session_id)}, nil)
+  @doc false
+  # A listen stream that has sent its final result leaves the registry.
+  def unregister_listen(server) do
+    if Process.whereis(@registry), do: Registry.unregister(@registry, {server, :listen})
+    :ok
+  end
+
+  @doc false
+  # Every listen stream on this node, of any server.
+  def listen_pids do
+    if Process.whereis(@registry),
+      do: Registry.select(@registry, [{{{:_, :listen}, :"$1", :_}, [], [:"$1"]}]),
+      else: []
+  end
+
+  @doc "Registers the calling process as a legacy GET stream for the session (by its nonce)."
+  def register_legacy(server, session_nonce),
+    do: register({server, :legacy, session_nonce}, nil)
 
   @doc "Registers the calling process as waiting for the client's answer to request `id`."
   def register_elicit(id), do: register({:elicit, id}, nil)
@@ -107,17 +126,17 @@ defmodule Sake.Plug.Streams do
   end
 
   @doc false
-  def session_subscribe(server, session_id, uri),
-    do: send_session(server, session_id, {:sake_subscribe, uri})
+  def session_subscribe(server, session_nonce, uri),
+    do: send_session(server, session_nonce, {:sake_subscribe, uri})
 
   @doc false
-  def session_unsubscribe(server, session_id, uri),
-    do: send_session(server, session_id, {:sake_unsubscribe, uri})
+  def session_unsubscribe(server, session_nonce, uri),
+    do: send_session(server, session_nonce, {:sake_unsubscribe, uri})
 
-  defp send_session(server, session_id, message) do
+  defp send_session(server, session_nonce, message) do
     ensure_started!()
 
-    Registry.dispatch(@registry, {server, :legacy, :erlang.phash2(session_id)}, fn entries ->
+    Registry.dispatch(@registry, {server, :legacy, session_nonce}, fn entries ->
       for {pid, _} <- entries, do: send(pid, message)
     end)
   end
@@ -125,6 +144,47 @@ defmodule Sake.Plug.Streams do
   defp ensure_started! do
     Process.whereis(@registry) ||
       raise "Sake.Plug.Streams is not running: add {Sake, ...} to your supervision tree"
+  end
+
+  defmodule Shutdown do
+    @moduledoc false
+    # When the node shuts down (or the stream supervisor stops), every open
+    # `subscriptions/listen` stream sends its final result, so a client
+    # sees the subscription end cleanly instead of a dropped connection.
+    use GenServer
+
+    @grace 2_000
+
+    def start_link(_), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+
+    @impl true
+    def init(nil) do
+      Process.flag(:trap_exit, true)
+      {:ok, nil}
+    end
+
+    @impl true
+    def terminate(_reason, _state) do
+      pids = Sake.Plug.Streams.listen_pids()
+      Enum.each(pids, &send(&1, :sake_shutdown))
+      wait(pids, System.monotonic_time(:millisecond) + @grace)
+    end
+
+    # Waits until the streams have left the registry (each does after its
+    # final write), or the grace period ends.
+    defp wait([], _deadline), do: :ok
+
+    defp wait(pids, deadline) do
+      open = Sake.Plug.Streams.listen_pids()
+      pids = Enum.filter(pids, &(&1 in open))
+
+      if pids != [] and System.monotonic_time(:millisecond) < deadline do
+        Process.sleep(10)
+        wait(pids, deadline)
+      else
+        :ok
+      end
+    end
   end
 
   if Code.ensure_loaded?(Phoenix.PubSub) do

@@ -14,8 +14,38 @@ defmodule Sake.Client.ProbeTest do
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.resp(status, JSON.encode!(body))
 
-  defp read(conn),
-    do: ({:ok, body, conn} = Plug.Conn.read_body(conn)) && {JSON.decode!(body), conn}
+  defp read(conn) do
+    {:ok, body, conn} = Plug.Conn.read_body(conn)
+    {JSON.decode!(body), conn}
+  end
+
+  # A legacy server: discover is answered by `discover`, then the handshake.
+  defp legacy_server(bypass, discover) do
+    Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+      {msg, conn} = read(conn)
+
+      case msg["method"] do
+        "server/discover" ->
+          discover.(conn, msg)
+
+        "initialize" ->
+          conn
+          |> Plug.Conn.put_resp_header("mcp-session-id", "s1")
+          |> json(200, %{
+            "jsonrpc" => "2.0",
+            "id" => msg["id"],
+            "result" => %{
+              "protocolVersion" => "2025-06-18",
+              "capabilities" => %{},
+              "serverInfo" => %{"name" => "L", "version" => "1"}
+            }
+          })
+
+        "notifications/initialized" ->
+          Plug.Conn.resp(conn, 202, "")
+      end
+    end)
+  end
 
   test "a modern server is detected from server/discover", %{bypass: bypass, url: url} do
     Bypass.expect(bypass, "POST", "/mcp", fn conn ->
@@ -117,21 +147,42 @@ defmodule Sake.Client.ProbeTest do
     assert {:error, {:unauthorized, %Sake.Client.Challenge{scope: ["a"]}}} = Client.connect(url)
   end
 
-  test "a recognized modern error over HTTP 200 is reported as an RPC error", %{
+  test "method not found or invalid params from discover means legacy, over 200 or 4xx", %{
     bypass: bypass,
     url: url
   } do
-    Bypass.expect(bypass, "POST", "/mcp", fn conn ->
-      {msg, conn} = read(conn)
+    for {status, code} <- [{200, -32_601}, {200, -32_602}, {400, -32_601}, {400, -32_602}] do
+      legacy_server(bypass, fn conn, msg ->
+        json(conn, status, %{
+          "jsonrpc" => "2.0",
+          "id" => msg["id"],
+          "error" => %{"code" => code, "message" => "No"}
+        })
+      end)
 
-      json(conn, 200, %{
-        "jsonrpc" => "2.0",
-        "id" => msg["id"],
-        "error" => %{"code" => -32_602, "message" => "Invalid params"}
-      })
-    end)
+      assert {:ok, %{era: :legacy, revision: "2025-06-18", session_id: "s1"}} =
+               Client.connect(url),
+             "#{status} #{code}"
+    end
+  end
 
-    assert {:error, {:rpc, %{"code" => -32_602}}} = Client.connect(url)
+  test "a modern-only error over HTTP 200 is reported as an RPC error", %{
+    bypass: bypass,
+    url: url
+  } do
+    for code <- [-32_020, -32_021] do
+      Bypass.expect_once(bypass, "POST", "/mcp", fn conn ->
+        {msg, conn} = read(conn)
+
+        json(conn, 200, %{
+          "jsonrpc" => "2.0",
+          "id" => msg["id"],
+          "error" => %{"code" => code, "message" => "Modern"}
+        })
+      end)
+
+      assert {:error, {:rpc, %{"code" => ^code}}} = Client.connect(url)
+    end
   end
 
   test "static headers are sent", %{bypass: bypass, url: url} do

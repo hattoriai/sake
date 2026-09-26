@@ -19,7 +19,12 @@ defmodule SakeTest.HTTP do
   def start(plug \\ Router) do
     pid =
       ExUnit.Callbacks.start_supervised!(
-        {Bandit, plug: plug, ip: {127, 0, 0, 1}, port: 0, startup_log: false}
+        {Bandit,
+         plug: plug,
+         ip: {127, 0, 0, 1},
+         port: 0,
+         startup_log: false,
+         thousand_island_options: [shutdown_timeout: 100]}
       )
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)

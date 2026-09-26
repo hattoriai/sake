@@ -81,7 +81,7 @@ defmodule Sake.Server.Dispatch do
       {:ok,
        %{"tools" => Enum.map(page, &Sake.Tool.Spec.to_wire(&1, ctx.protocol_version))}
        |> next_cursor(next, ctx)
-       |> cacheable(server, ctx)}
+       |> cacheable(server, ctx, Enum.map(page, & &1.ttl))}
     end
   end
 
@@ -94,18 +94,21 @@ defmodule Sake.Server.Dispatch do
         |> Enum.flat_map(&resource_entries(&1, ctx))
 
       {page, next} = page(entries, offset, server)
-      {:ok, %{"resources" => page} |> next_cursor(next, ctx) |> cacheable(server, ctx)}
+      {ttls, page} = Enum.unzip(page)
+
+      {:ok, %{"resources" => page} |> next_cursor(next, ctx) |> cacheable(server, ctx, ttls)}
     end
   end
 
+  # Each entry travels with its component's ttl, for the page's `ttlMs`.
   defp resource_entries(%{template: false} = spec, ctx),
-    do: [Sake.Resource.Spec.to_wire(spec, ctx.protocol_version)]
+    do: [{spec.ttl, Sake.Resource.Spec.to_wire(spec, ctx.protocol_version)}]
 
   defp resource_entries(spec, ctx) do
     if Code.ensure_loaded?(spec.module) and function_exported?(spec.module, :list, 1) do
       Enum.map(
         spec.module.list(ctx),
-        &Sake.Resource.Spec.listed_to_wire(spec, &1, ctx.protocol_version)
+        &{spec.ttl, Sake.Resource.Spec.listed_to_wire(spec, &1, ctx.protocol_version)}
       )
     else
       []
@@ -126,7 +129,7 @@ defmodule Sake.Server.Dispatch do
            Enum.map(page, &Sake.Resource.Spec.template_to_wire(&1, ctx.protocol_version))
        }
        |> next_cursor(next, ctx)
-       |> cacheable(server, ctx)}
+       |> cacheable(server, ctx, Enum.map(page, & &1.ttl))}
     end
   end
 
@@ -139,7 +142,7 @@ defmodule Sake.Server.Dispatch do
       {:ok,
        %{"prompts" => Enum.map(page, &Sake.Prompt.Spec.to_wire(&1, ctx.protocol_version))}
        |> next_cursor(next, ctx)
-       |> cacheable(server, ctx)}
+       |> cacheable(server, ctx, Enum.map(page, & &1.ttl))}
     end
   end
 
@@ -237,7 +240,7 @@ defmodule Sake.Server.Dispatch do
 
   defp read_result(spec, uri_params, uri, server, ctx) do
     case Results.resource(spec.module.read(uri_params, ctx), spec, uri, ctx) do
-      {:ok, result} -> {:ok, cacheable(result, server, ctx)}
+      {:ok, result} -> {:ok, cacheable(result, server, ctx, [spec.ttl])}
       {:error, :not_found} -> {:error, not_found_code(ctx), "Resource not found: #{uri}"}
       {:error, text} -> {:error, JSONRPC.code(:internal), text}
     end
@@ -398,16 +401,23 @@ defmodule Sake.Server.Dispatch do
 
   # ---- wrapping
 
+  # `ttlMs` is the shortest of the server's ttl and the ttl of every
+  # component the result lists (or, for a read, the one component read):
+  # a client that caches the result must not keep any entry longer than
+  # its own component allows.
   @doc false
-  def cacheable(result, server, %Context{era: :modern} = ctx) do
+  def cacheable(result, server, ctx, component_ttls \\ [])
+
+  def cacheable(result, server, %Context{era: :modern} = ctx, component_ttls) do
     scope =
       server.__sake__(:cache_scope) ||
         if(ctx.token == nil and ctx.conn_assigns[:sake_auth] != true, do: :public, else: :private)
 
-    result |> Map.put("ttlMs", server.__sake__(:ttl)) |> Map.put("cacheScope", to_string(scope))
+    ttl = Enum.min([server.__sake__(:ttl) | Enum.reject(component_ttls, &is_nil/1)])
+    result |> Map.put("ttlMs", ttl) |> Map.put("cacheScope", to_string(scope))
   end
 
-  def cacheable(result, _server, _ctx), do: result
+  def cacheable(result, _server, _ctx, _component_ttls), do: result
 
   @doc false
   def finish(result, server, %Context{era: :modern}) do

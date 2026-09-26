@@ -64,7 +64,7 @@ defmodule Sake.Plug do
 
   defp route(%{method: "GET"} = conn, opts) do
     case legacy_session(conn, opts) do
-      {:ok, session, id} -> Sake.Plug.Stream.legacy(conn, opts, session, id)
+      {:ok, session, _id} -> Sake.Plug.Stream.legacy(conn, opts, session)
       :none -> send_resp(conn, 405, "")
     end
   end
@@ -92,7 +92,8 @@ defmodule Sake.Plug do
   defp post(conn, opts) do
     with :ok <- accept(conn),
          {:ok, json, conn} <- Sake.Plug.Body.json(conn, opts.json_limit),
-         {:ok, parsed} <- parse(json) do
+         {:ok, parsed} <- parse(json),
+         :ok <- shape(parsed) do
       case ProtocolVersion.detect(conn) do
         {:unsupported, v} ->
           send_error(
@@ -131,6 +132,33 @@ defmodule Sake.Plug do
 
       {:error, :malformed} ->
         send_error(conn, 400, nil, JSONRPC.code(:invalid_request), "Invalid request")
+
+      {:error, :params, id, message} ->
+        send_error(conn, 400, id, JSONRPC.code(:invalid_params), message)
+    end
+  end
+
+  # The parameters Sake reads as objects must be objects: a client that
+  # sends anything else gets -32602, never a crash.
+  @object_params ["_meta", "arguments", "inputResponses"]
+
+  defp shape({:batch, items}) do
+    Enum.reduce_while(items, :ok, fn item, :ok ->
+      case shape(item) do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp shape({:request, id, _method, params}), do: object_params(id, params)
+  defp shape({:notification, _method, params}), do: object_params(nil, params)
+  defp shape(_parsed), do: :ok
+
+  defp object_params(id, params) do
+    case Enum.find(@object_params, &(Map.has_key?(params, &1) and not is_map(params[&1]))) do
+      nil -> :ok
+      name -> {:error, :params, id, "#{name} must be an object"}
     end
   end
 
@@ -197,6 +225,10 @@ defmodule Sake.Plug do
           JSONRPC.code(:invalid_params),
           "Missing #{Protocol.meta(:client_capabilities)} in _meta"
         )
+
+      not (is_nil(meta[Protocol.meta(:log_level)]) or
+               Sake.Progress.level?(meta[Protocol.meta(:log_level)])) ->
+        send_error(conn, 400, id, JSONRPC.code(:invalid_params), "Unknown log level")
 
       true ->
         modern_request(conn, opts, parsed, version, meta)
@@ -272,7 +304,7 @@ defmodule Sake.Plug do
         send_error(conn, 404, id_of(parsed), JSONRPC.code(:invalid_request), "Unknown session")
 
       {:ok, session, id} ->
-        conn = assign(conn, :sake_session_id, id)
+        conn = conn |> assign(:sake_session_id, id) |> assign(:sake_session_nonce, session.nonce)
 
         ctx =
           Context.new(
@@ -301,11 +333,9 @@ defmodule Sake.Plug do
   # only when it is getting old, carrying the same level forward.
   defp renew_session(conn, opts, session, {:request, _, "logging/setLevel", %{"level" => level}})
        when is_binary(level) do
-    put_resp_header(
-      conn,
-      "mcp-session-id",
-      Session.mint(secret(opts), session.revision, session.capabilities, level)
-    )
+    if Sake.Progress.level?(level),
+      do: put_resp_header(conn, "mcp-session-id", Session.renew(secret(opts), session, level)),
+      else: conn
   end
 
   defp renew_session(conn, opts, session, _parsed) do
@@ -313,7 +343,7 @@ defmodule Sake.Plug do
       put_resp_header(
         conn,
         "mcp-session-id",
-        Session.mint(secret(opts), session.revision, session.capabilities, session.log_level)
+        Session.renew(secret(opts), session, session.log_level)
       )
     else
       conn

@@ -1,6 +1,5 @@
 defmodule Sake.Plug.StreamTest do
   use ExUnit.Case, async: false
-  import Plug.Test
   import Plug.Conn
 
   alias SakeTest.{HTTP, LegacyClient, ModernClient}
@@ -220,6 +219,81 @@ defmodule Sake.Plug.StreamTest do
     assert List.last(events)["params"] == %{"uri" => "issue://1"}
   end
 
+  test "a renewed session ID keeps the session: its GET stream still gets the updates" do
+    url = HTTP.start()
+    session = LegacyClient.initialize(ModernClient.opts(), "2025-06-18")
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        Req.get!(url <> "/mcp",
+          headers: [
+            {"accept", "text/event-stream"},
+            {"mcp-session-id", session.id},
+            {"mcp-protocol-version", "2025-06-18"}
+          ],
+          receive_timeout: 5_000,
+          into: fn {:data, d}, acc ->
+            send(parent, {:sse_data, d})
+            {:cont, acc}
+          end
+        )
+      end)
+
+    Process.sleep(200)
+
+    # setLevel renews the ID; the client carries on with the new one
+    conn =
+      LegacyClient.post(ModernClient.opts(), session, "logging/setLevel", %{"level" => "info"})
+
+    assert conn.status == 200
+    [renewed] = get_resp_header(conn, "mcp-session-id")
+    assert renewed != session.id
+    renewed_session = %{session | id: renewed}
+
+    conn =
+      LegacyClient.post(ModernClient.opts(), renewed_session, "resources/subscribe", %{
+        "uri" => "issue://1"
+      })
+
+    assert conn.status == 200
+    Process.sleep(100)
+    Sake.Server.resource_updated(SakeDev.Server, "issue://1")
+
+    data = receive_all("", 1_000)
+    Task.shutdown(task, :brutal_kill)
+
+    assert [%{"method" => "notifications/resources/updated", "params" => %{"uri" => "issue://1"}}] =
+             ModernClient.events(data)
+  end
+
+  test "an unknown log level is refused on both eras" do
+    session = LegacyClient.initialize(ModernClient.opts(), "2025-06-18")
+
+    conn =
+      LegacyClient.post(ModernClient.opts(), session, "logging/setLevel", %{"level" => "loud"})
+
+    assert %{"error" => %{"code" => -32_602}} = LegacyClient.json(conn)
+    assert get_resp_header(conn, "mcp-session-id") == []
+
+    conn =
+      ModernClient.post(ModernClient.opts(), "tools/list", %{},
+        meta: %{"io.modelcontextprotocol/logLevel" => "not_an_existing_atom_level"}
+      )
+
+    assert conn.status == 400
+
+    assert %{"error" => %{"code" => -32_602, "message" => "Unknown log level"}} =
+             ModernClient.json(conn)
+
+    conn =
+      ModernClient.post(ModernClient.opts(), "tools/list", %{},
+        meta: %{"io.modelcontextprotocol/logLevel" => "warning"}
+      )
+
+    assert conn.status == 200
+  end
+
   defp receive_all(acc, timeout) do
     receive do
       {:sse_data, d} -> receive_all(acc <> d, timeout)
@@ -279,6 +353,39 @@ defmodule Sake.Plug.StreamTest do
              }
            ] =
              ModernClient.events(conn.resp_body)
+  end
+
+  test "stopping the stream supervisor ends every open listen stream with its result" do
+    url = HTTP.start()
+
+    headers = [
+      {"accept", "application/json, text/event-stream"},
+      {"mcp-protocol-version", "2026-07-28"},
+      {"mcp-method", "subscriptions/listen"}
+    ]
+
+    body =
+      modern_body("sub-9", "subscriptions/listen", %{
+        "notifications" => %{"toolsListChanged" => true}
+      })
+
+    on_exit(fn -> Supervisor.restart_child(SakeTest.Supervisor, Sake.Plug.Streams) end)
+
+    spawn(fn ->
+      Process.sleep(200)
+      :ok = Supervisor.terminate_child(SakeTest.Supervisor, Sake.Plug.Streams)
+    end)
+
+    assert {:done, 200, [ack, done]} = HTTP.sse(url <> "/mcp", body, headers, fn _ -> false end)
+    assert ack["method"] == "notifications/subscriptions/acknowledged"
+
+    assert %{
+             "id" => "sub-9",
+             "result" => %{
+               "resultType" => "complete",
+               "_meta" => %{"io.modelcontextprotocol/subscriptionId" => "sub-9"}
+             }
+           } = done
   end
 
   test "deliver_response raises a clear error when the registry is not running" do
