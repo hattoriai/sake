@@ -33,10 +33,11 @@ text content block joined), and `meta` (the result's `_meta`).
 ## Era probing
 
 `connect/2` with no `era:` option tries the modern handshake
-(`server/discover`) first; a server that does not speak it responds with
-either a recognizable modern JSON-RPC error (reported as-is) or something
-else entirely, which is treated as "this must be a legacy server" and
-retried with the legacy `initialize` handshake. Force one era directly
+(`server/discover`) first. An error only a modern server sends (`-32020`,
+`-32021`, `-32022`) is reported as-is. "Method not found" (`-32601`) or
+"invalid params" (`-32602`) — over HTTP 200 or a 4xx — or a failure with
+no JSON-RPC error at all means "this is a legacy server", and the client
+retries with the legacy `initialize` handshake. Force one era directly
 with `era: :modern` or `era: :legacy` (plus `legacy_version:` to pick which
 of the three legacy revisions to offer) when you already know which the
 server speaks — skipping the probe saves a round trip.

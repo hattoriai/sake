@@ -18,11 +18,18 @@ replace or extend.
 3. The client registers itself — dynamically (see DCR below), or by
    presenting a Client ID Metadata Document — and opens the authorize URL
    in a browser.
-4. Your app's own login runs first if the person is not signed in
-   (`Sake.Auth.Authorize` reads the principal through your
-   `Sake.Auth.Subject` module and redirects to your login page otherwise).
+4. The person must be signed in. `Sake.Auth.Authorize` reads the
+   principal through your `Sake.Auth.Subject` module; for a signed-out
+   person it answers a 401 page ("Sign in first"). To send the person to
+   your login page instead, put your own plug in front of the route — the
+   generated `require_authenticated_user` plug in a Phoenix app does
+   exactly that, and returns the person to the authorize URL after login.
+   A subject module that defines `authorize_resource?/2` may refuse the
+   endpoint the client asked for (see `guides/tenants.md`); the client
+   then gets `access_denied`.
 5. The consent page (`Sake.Auth.Consent.Default`, or your own) shows the
-   client's name and the scopes it asked for. Approving redirects back to
+   client's name, the endpoint URL (the resource) and the scopes it asked
+   for. Approving redirects back to
    the client with an authorization code.
 6. The client exchanges the code (with its PKCE verifier) for an access
    token and a refresh token at `/oauth/token`.
@@ -58,10 +65,13 @@ auth: [
 ```
 
 Every fetch is guarded regardless of policy: HTTPS only (unless
-`allow_insecure: true`), the host's resolved addresses must all be public
-unicast (no loopback, link-local or private ranges), no redirects are
-followed, the body is capped at 64 KB, and the request times out after 5
-seconds. See `guides/security.md` for what this guard does and does not
+`allow_insecure: true`), no credentials in the URL, the host's resolved
+addresses must all be public unicast (no loopback, link-local, private,
+multicast, reserved or IPv4-translating ranges), no redirects are
+followed, the body is capped at 64 KB, and the whole download must finish
+within 5 seconds. A document may list at most 10 redirect URIs, and its
+optional fields must have their JSON types. The cache holds at most 1000
+documents. See `guides/security.md` for what this guard does and does not
 protect against.
 
 ## DCR and rate limiting
@@ -87,7 +97,10 @@ legitimate client has moved on. Two concurrent refreshes of the same token
 both fail closed (the store consumes it atomically); a refresh token
 presented by the wrong `client_id` is burned (marked used) even though the
 request is denied, so it cannot be retried against the right client
-either.
+either. A client may use only the grant types it registered: a client
+without `refresh_token` in its `grant_types` gets `unauthorized_client`
+for a refresh (dynamic registration grants both when the client names
+none).
 
 ## The consent page and how to replace it
 
@@ -96,15 +109,21 @@ sheet and needs nothing from your app. Replace it with `consent:
 MyAppWeb.MCPConsent` in the auth config; your module implements the
 `Sake.Auth.Consent` behaviour: `render/1` (client name, host, redirect
 host, whether the redirect is a loopback address, the signed-in person's
-display string, `{scope, description}` pairs, an opaque `request` blob for
-a hidden field, the form's `action`, a CSRF token, and your issuer's
-display name) and `render_error/1` (`title`, `message`, `status`) for the
+display string, `{scope, description}` pairs, the `resource` URL, an
+opaque `request` blob for a hidden field, the form's `action`, a CSRF
+token — empty when your pipeline runs no CSRF protection — and your
+issuer's display name) and `render_error/1` (`title`, `message`, `status`) for the
 handful of error pages (unknown client, bad redirect, expired request).
 
-Consent is remembered by default (`remember_consent: true`): approving a
-client once skips the page on a later request for the same or a narrower
-set of scopes, until the grant is revoked. Set it to `false` to ask every
-time.
+Both pages are sent with `x-frame-options: DENY` and
+`content-security-policy: frame-ancestors 'none'`, so no other site can
+frame them.
+
+Consent is remembered by default (`remember_consent: true`), per person,
+client and resource: approving a client once for an endpoint skips the
+page on a later request for the same endpoint and the same or a narrower
+set of scopes, until the grant is revoked. A request for another endpoint
+asks again. Set it to `false` to ask every time.
 
 ## The grants API for a settings page
 
@@ -113,8 +132,11 @@ Sake.Auth.list_grants(config, subject_id)
 # => [%{client_id:, client_name:, scopes:, resource:, granted_at:, family_ids: [...]}]
 
 Sake.Auth.revoke_grant(config, subject_id, client_id)
-# revokes every token family the client holds for that person, and forgets the consent
+# revokes every token family the client holds for that person, and forgets its consents
 ```
+
+The revocation endpoint (`POST /oauth/revoke`) also forgets the consents
+the person gave the revoking client, so its next connection asks again.
 
 `list_grants/2` groups a person's live (unexpired, unused) refresh tokens
 by client — one row per client, even if it holds tokens for more than one
@@ -126,7 +148,8 @@ resource or scope set — for an "apps connected to your account" page.
 Sake.Auth.prune(config)
 ```
 
-Deletes expired codes and tokens. Schedule it — a cron job, an Oban
+Deletes expired codes and tokens, and remembered consents older than the
+refresh token lifetime that no live token family still uses. Schedule it — a cron job, an Oban
 worker, a periodic `Task` — since neither store does this on its own; the
 ETS store especially will otherwise keep every expired row in memory
 forever.

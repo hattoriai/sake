@@ -61,9 +61,15 @@ to mint a fresh pair once the legitimate holder has moved past it. See
 
 `Sake.Auth.CIMD.fetch/2` resolves the client-supplied HTTPS host's
 addresses and refuses to proceed unless every one of them is a public
-unicast address (no loopback, link-local, or RFC 1918 range) — this stops
-a client from pointing your server's outbound fetch at its own internal
-network. It does **not** pin the actual HTTP connection to the address it
+unicast address (no loopback, link-local, RFC 1918, carrier-grade NAT,
+multicast, reserved or benchmarking range, and no IPv6 address that
+embeds or translates to an IPv4 one: IPv4-mapped, IPv4-compatible,
+NAT64 `64:ff9b::/96`, 6to4 `2002::/16`) — this stops a client from
+pointing your server's outbound fetch at its own internal network. A
+`client_id` URL with credentials in it is refused, the whole download
+runs under one 5-second deadline (a server that trickles bytes cannot
+hold a request open), a document may list at most 10 redirect URIs, and
+the document cache holds at most 1000 entries. It does **not** pin the actual HTTP connection to the address it
 just checked: the check-then-connect happens as two separate steps
 (`:inet.getaddrs/2`, then `Req`'s own connection), and a hostile or
 compromised DNS resolver that returns a public address to the check and a
@@ -95,6 +101,26 @@ reasonably terminate TLS on a local port. A loopback redirect's *port* is
 allowed to differ from what was registered (the OS assigns an ephemeral
 port to the client's local listener each run); everything else about the
 URI must match exactly.
+
+## The consent form
+
+The consent form is protected in two layers:
+
+- **The signed request blob.** The form's hidden `request` field is
+  signed with your `secret_key_base`, bound to the signed-in person's
+  subject ID, and expires after ten minutes. A form posted for anyone
+  else, or later, is refused.
+- **CSRF protection, when your pipeline has it.** When the authorize
+  routes run behind `Plug.CSRFProtection` (`protect_from_forgery` in a
+  Phoenix `:browser` pipeline), the consent form carries the real CSRF
+  token and your pipeline checks it. A Plug-only host without CSRF
+  middleware gets an empty `_csrf_token` field and relies on the signed
+  blob alone — which is bound to the signed-in subject and expires in ten
+  minutes.
+
+The consent and error pages are sent with `x-frame-options: DENY` and
+`content-security-policy: frame-ancestors 'none'`, so no other site can
+frame them and trick a person into clicking "Allow" (clickjacking).
 
 ## Rate limiting
 

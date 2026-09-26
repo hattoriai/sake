@@ -22,7 +22,10 @@ First release.
   Document support, dynamic client registration (RFC 7591), the
   authorize/consent flow, the token endpoint (authorization code + PKCE,
   refresh token rotation with reuse detection and family revocation), and
-  revocation (RFC 7009).
+  revocation (RFC 7009). Consent is remembered per person, client and
+  resource; a subject module's optional `authorize_resource?/2` refuses a
+  tenant the person does not belong to. Works under a generated Phoenix
+  endpoint (its parsed body, its `protect_from_forgery`).
 - `Sake.Auth.Store.ETS` (development) and `Sake.Auth.Store.Ecto`
   (production) token/client/code/consent stores, plus a grants API for a
   settings page and `Sake.Auth.prune/1` for expired rows.
@@ -32,4 +35,5 @@ First release.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite wired into CI, with a baseline of
-  known, documented gaps (sampling, SSE resumability, client-side OAuth).
+  known, documented gaps (sampling, SSE resumability, the client's
+  standalone GET stream, client-side OAuth).

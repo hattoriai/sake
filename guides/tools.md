@@ -29,11 +29,10 @@ end
 snake-cased — `MyApp.MCP.Add` becomes `"add"`), `title`, `description`,
 `icons`, `scope` (a string, or a list — see Scopes below), `annotations`
 (`read_only`, `destructive`, `idempotent`, `open_world` — all booleans, plus
-`title`), `stream` (see Streaming below), `ttl` (milliseconds; adds
-`cacheScope`/`ttlMs` hints to a `resources/read`-shaped result — mostly a
-resource concern, but tools accept it too), `meta` (a map merged into the
-tool's `_meta`), and `input_schema` (a raw JSON Schema map instead of `arg`
-lines, for a shape `arg` cannot express).
+`title`), `stream` (see Streaming below), `ttl` (milliseconds; see Caching
+below), `meta` (a map merged into the tool's `_meta`), and `input_schema`
+(a raw JSON Schema map instead of `arg` lines, for a shape `arg` cannot
+express).
 
 List the tool on a server:
 
@@ -46,21 +45,33 @@ end
 
 ## Arguments
 
-`arg name, type, opts`. Types: `:string`, `:number`, `:integer`,
-`:boolean`, `:array` (with `items:`), `:object` (with `properties:`, a
-keyword list of `{name, type, opts}` the same shape as top-level `arg`
-lines). Common options: `required: true`, `description`, `default`,
-`enum` (a list of allowed values), `min`/`max` (numbers: value bounds;
-strings and arrays: length bounds), `pattern` (strings, a regex source),
-`format` (a JSON Schema format string, e.g. `"date-time"`).
+`arg name, type, opts`. Types:
 
-`header: "Name"` (as on `precision` above) additionally accepts the
-argument as an HTTP header on the request, named `Name` — a client that
-cannot easily set JSON body fields (a thin proxy, a browser extension) can
-still supply it. The header name becomes the schema's `x-mcp-header`
-extension; names must be unique (case-insensitively) across one tool's
-arguments and are only honoured on top-level, `properties`-reachable
-fields.
+- `:string`, `:integer`, `:number`, `:boolean`, and `:any` (no type
+  constraint).
+- `{:array, type}` — a list whose items all have `type`, e.g.
+  `{:array, :string}`.
+- `{:object, [{name, type, opts}, ...]}` — a nested object; each entry has
+  the same shape as a top-level `arg` line, e.g.
+  `{:object, [{:city, :string, required: true}, {:zip, :string, []}]}`.
+- `{:enum, values}` — a string that must be one of `values`, e.g.
+  `{:enum, ["open", "closed"]}`.
+
+Options: `required: true`, `description`, `default`, `min`/`max` (numeric
+bounds, for `:integer` and `:number`), `min_length`/`max_length` (string
+length bounds), `pattern` (strings, a regex source), `format` (a JSON
+Schema format string, e.g. `"date-time"`), and `header` (below).
+
+`header: "Precision"` (as on `precision` above) mirrors the argument into
+the `Mcp-Param-Precision` request header, so a gateway can route or
+rate-limit on it without reading the body. It is not another way to send
+the value: the value still travels in the JSON `arguments`, and the header
+must carry the same value. When the body has the argument, a request
+without the header is refused (and so is a header whose value differs
+from the body's); `Sake.Client` sets these headers itself. The header name
+becomes the schema's `x-mcp-header` extension; it applies to `:string`,
+`:integer` and `:boolean` arguments reachable through object properties,
+and names must be unique (case-insensitively) across one tool.
 
 Declared arguments become the map `execute/2` receives, with atom keys
 exactly as declared (no camelCase conversion — an argument written
@@ -70,18 +81,26 @@ and pattern-matched as `%{resourceUri: ...}`).
 ## Output and results
 
 `output do ... end` declares the tool's `outputSchema` with the same `arg`
-syntax; when present, a map result is also mirrored into
-`structuredContent`. `execute/2` returns:
+syntax. `execute/2` returns:
 
 - `{:ok, text}` — a single text content block.
-- `{:ok, %{...} | [...]}` — JSON-encoded as text, and (if `output` is
-  declared) as `structuredContent` too.
+- `{:ok, %{...} | [...]}` — a map or a list is sent as JSON text *and* as
+  `structuredContent`, whether or not `output` is declared.
 - `{:ok, [%Sake.Content{}, ...]}` — full control: `Sake.Content.text/2`,
   `image/3`, `audio/3`, `resource/3` (embedded), `resource_link/2`.
 - `{:ok, value, meta: %{...}}` — the three shapes above, plus a `_meta` map
   on the result.
 - `{:error, text}` — `isError: true` with one text content block (not a
   JSON-RPC error: the call succeeded, the *tool* failed).
+
+## Caching
+
+On the modern protocol, list results carry `ttlMs` and `cacheScope`. The
+server's `ttl:` (default five minutes) is the ceiling; a tool, resource or
+prompt with its own `ttl:` shortens the `ttlMs` of every list page it
+appears on — the page's `ttlMs` is the shortest ttl among the server and
+the components on it. A resource's `ttl:` also sets the `ttlMs` of its
+`resources/read` result.
 
 ## Annotations
 

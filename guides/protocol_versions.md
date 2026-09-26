@@ -14,9 +14,12 @@ Sake serves both eras on the *same endpoint path*: a `POST` whose body's
 method is `initialize` always opens a legacy session, regardless of what
 the `MCP-Protocol-Version` header says (the header describes the one
 request's transport, not the session it is asking to start); every other
-modern-tagged request is dispatched statelessly. `Sake.Client.connect/2`
-mirrors this from the other side — it tries the modern handshake first and
-falls back to legacy automatically (see `guides/client.md`).
+modern-tagged request is dispatched statelessly, and a modern client never
+opens a session. `Sake.Client.connect/2` mirrors this from the other side
+— it tries the modern `server/discover` first and falls back to the legacy
+`initialize` when the server answers "method not found" (`-32601`),
+"invalid params" (`-32602`) or with no JSON-RPC error at all (see
+`guides/client.md`).
 
 ## What Sake serves and speaks
 
@@ -40,9 +43,11 @@ name and (encoded) arguments onto `Mcp-Method`, `Mcp-Name` and
 every request — a proxy or gateway can route or log on headers alone
 without parsing JSON. `Accept` must list both `application/json` and
 `text/event-stream`; `MCP-Protocol-Version` selects the era as described
-above; `Mcp-Session-Id` carries a legacy session (see
-`guides/authorization.md` for how it also carries the current log level,
-re-minted with no server-side session state).
+above; `Mcp-Session-Id` carries a legacy session. The session ID is a
+signed token that also carries the log level `logging/setLevel` last set
+(the server keeps no session state; see `Sake.Server.Session`): after
+`logging/setLevel`, and when an ID gets old, the response carries a
+re-minted ID for the same session, which the client uses from then on.
 
 ## What is not supported
 
@@ -51,6 +56,12 @@ re-minted with no server-side session state).
 - **Resumability** — reconnecting a dropped SSE stream with
   `Last-Event-ID` and a server-issued `retry` interval. Neither `Sake.Plug`
   nor `Sake.Client` implements this; a dropped stream is simply gone.
+- **The client's standalone GET stream** — on a legacy session,
+  `Sake.Client` does not open the `GET` stream a server may use for
+  notifications and for requests unrelated to any call. A server request
+  sent inside a call's own response stream (how a Sake server elicits) is
+  answered; one sent only on the standalone stream never reaches the
+  client.
 - **Tasks** — the long-running, poll-or-push task primitive some 2026-era
   drafts describe is not implemented.
 - **Apps** — UI-surface extensions layered on top of MCP are out of scope
@@ -79,12 +90,10 @@ fail on purpose; CI only turns red on a *new* failure. Currently:
 
 - **`tools-call-sampling`** (server) — no sampling support (above).
 - **`sse-retry`** (client) — no resumability (above).
-- **`elicitation-sep1034-client-defaults`** (client) — the driver answers
-  every elicitation with the request schema's declared defaults (what this
-  scenario checks for), but the round-trip itself closes with an RPC error
-  before any tool call completes; not chased down within this package's
-  first release.
+- **`elicitation-sep1034-client-defaults`** (client) — the fixture server
+  sends its elicitation request outside the tool call's response stream,
+  so it can only arrive on the standalone GET stream, which the client
+  does not open (above).
 - **Every `auth/*` client scenario** (14 of them) — `Sake.Client` has no
-  OAuth support at all yet (see the README's status line and
-  `guides/client.md`'s "401 challenge" section); this is 0.1's largest
-  known gap.
+  OAuth flow of its own (see `guides/client.md`'s "401 challenge"
+  section).

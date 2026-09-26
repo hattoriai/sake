@@ -2,20 +2,18 @@
 # on a *new* failure or a stale entry (a listed scenario that now passes).
 # See guides/protocol_versions.md for the reasoning behind each entry.
 server:
-  # Sake 0.1 does not implement server-initiated sampling
-  # (`sampling/createMessage`); it is documented as an unsupported 0.1
-  # feature in guides/protocol_versions.md. `test_sampling` is not
-  # implemented on the conformance fixture server, so the scenario fails
-  # with "Unknown tool" rather than a wrong answer.
+  # Sake does not implement server-initiated sampling
+  # (`sampling/createMessage`; see guides/protocol_versions.md), so the
+  # development server has no `test_sampling` tool and the scenario fails
+  # with "Unknown tool".
   - tools-call-sampling
 
 client:
-  # Sake 0.1's client has no OAuth support at all (see README "status" and
-  # guides/protocol_versions.md): it returns `{:error, {:unauthorized,
-  # challenge}}` on a 401 and leaves the flow to the caller. Every
-  # auth/* scenario needs the client to run the authorization flow itself,
-  # so all of them fail the same way ("did not make an authorization/token
-  # request"). Client OAuth is the next 0.1.x milestone.
+  # The client has no OAuth flow of its own (see guides/client.md): it
+  # returns `{:error, {:unauthorized, challenge}}` on a 401 and leaves the
+  # flow to the caller. Every auth/* scenario needs the client to run the
+  # authorization flow itself, so all of them fail the same way ("did not
+  # make an authorization/token request").
   - auth/metadata-default
   - auth/metadata-var1
   - auth/metadata-var2
@@ -30,17 +28,12 @@ client:
   - auth/token-endpoint-auth-post
   - auth/token-endpoint-auth-none
   - auth/pre-registration
-  # Sake 0.1's client does not resume a dropped SSE stream (documented as
-  # unsupported in guides/protocol_versions.md); it has no reconnection
-  # logic to send the GET request this scenario looks for.
+  # The client does not resume a dropped SSE stream (see
+  # guides/protocol_versions.md); it has no reconnection logic to send the
+  # GET request this scenario looks for.
   - sse-retry
-  # Open question, not chased down within this task's budget: the driver
-  # (conformance/client.exs) answers every elicitation by accepting the
-  # request schema's declared defaults, which is the behaviour this
-  # scenario checks for, but the round-trip itself fails first with "MCP
-  # error -32000: Connection closed" before the tool call completes, so
-  # none of the five default-value checks ever see a call to inspect. Needs
-  # a closer look at why this one fixture's connection drops mid-call
-  # (other elicitation scenarios in the server suite pass over the same
-  # `Sake.Client` code paths).
+  # The fixture server sends its `elicitation/create` request unrelated to
+  # the tool call, so it can only travel on a standalone GET stream; the
+  # client never opens one (see guides/protocol_versions.md), so the
+  # request never arrives and the tool call never completes.
   - elicitation-sep1034-client-defaults
