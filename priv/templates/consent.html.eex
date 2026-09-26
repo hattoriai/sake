@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Allow <%= Plug.HTML.html_escape(@client_name) %></title>
+<style>
+:root { --bg: #f7f7f5; --fg: #1b1b1a; --muted: #5f5e5a; --card: #ffffff; --line: #e4e3df; --accent: #2b6cb0; --accent-fg: #ffffff; --warn-bg: #fff6e5; --warn-fg: #6b4700; }
+@media (prefers-color-scheme: dark) { :root { --bg: #151514; --fg: #ecebe7; --muted: #a3a29c; --card: #1f1f1d; --line: #33332f; --accent: #6aa4e6; --accent-fg: #0f172a; --warn-bg: #3a2c0a; --warn-fg: #ffd77a; } }
+html { background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+body { margin: 0; padding: 16px; }
+main { max-width: 480px; margin: 48px auto; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 24px; }
+h1 { font-size: 1.25rem; margin: 0 0 8px; }
+p { margin: 0 0 12px; }
+.muted { color: var(--muted); font-size: 0.9rem; }
+ul { padding-left: 20px; margin: 0 0 16px; }
+li { margin: 4px 0; }
+.warn { background: var(--warn-bg); color: var(--warn-fg); border-radius: 8px; padding: 10px 12px; margin: 12px 0; font-size: 0.9rem; }
+form { display: flex; gap: 12px; margin-top: 16px; }
+button { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--fg); font: inherit; cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<h1><%= Plug.HTML.html_escape(@client_name) %> wants access to <%= Plug.HTML.html_escape(@issuer_name) %></h1>
+<%= if @client_host do %><p class="muted">From <%= Plug.HTML.html_escape(@client_host) %></p><% end %>
+<p>Signed in as <strong><%= Plug.HTML.html_escape(@subject_display) %></strong>.</p>
+<p>It will be able to:</p>
+<ul>
+<%= for {name, description} <- @scopes do %>
+<li><%= Plug.HTML.html_escape(description || name) %> <span class="muted">(<%= Plug.HTML.html_escape(name) %>)</span></li>
+<% end %>
+</ul>
+<%= if @loopback? do %>
+<div class="warn">The access code will be sent to an app on your computer at <%= Plug.HTML.html_escape(@redirect_host) %>. Only continue if you started this from an app you trust.</div>
+<% else %>
+<p class="muted">You will be sent back to <%= Plug.HTML.html_escape(@redirect_host) %>.</p>
+<% end %>
+<form method="post" action="<%= Plug.HTML.html_escape(@action) %>">
+<input type="hidden" name="_csrf_token" value="<%= Plug.HTML.html_escape(@csrf_token) %>">
+<input type="hidden" name="request" value="<%= Plug.HTML.html_escape(@request) %>">
+<button type="submit" name="decision" value="deny">Deny</button>
+<button type="submit" name="decision" value="approve" class="primary">Allow</button>
+</form>
+</main>
+</body>
+</html>

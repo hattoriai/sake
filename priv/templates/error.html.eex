@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><%= Plug.HTML.html_escape(@title) %></title>
+<style>
+:root { --bg: #f7f7f5; --fg: #1b1b1a; --muted: #5f5e5a; --card: #ffffff; --line: #e4e3df; }
+@media (prefers-color-scheme: dark) { :root { --bg: #151514; --fg: #ecebe7; --muted: #a3a29c; --card: #1f1f1d; --line: #33332f; } }
+html { background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+body { margin: 0; padding: 16px; }
+main { max-width: 480px; margin: 48px auto; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 24px; }
+h1 { font-size: 1.25rem; margin: 0 0 8px; }
+p { margin: 0; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<h1><%= Plug.HTML.html_escape(@title) %></h1>
+<p><%= Plug.HTML.html_escape(@message) %></p>
+</main>
+</body>
+</html>

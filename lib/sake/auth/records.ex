@@ -31,9 +31,3 @@ defmodule Sake.Auth.Token do
     scopes: []
   ]
 end
-
-defmodule Sake.Auth.Consent do
-  @moduledoc "A remembered approval of a client by a subject."
-  @type t :: %__MODULE__{}
-  defstruct [:subject_id, :client_id, :inserted_at, scopes: []]
-end
