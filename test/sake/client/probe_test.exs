@@ -117,6 +117,23 @@ defmodule Sake.Client.ProbeTest do
     assert {:error, {:unauthorized, %Sake.Client.Challenge{scope: ["a"]}}} = Client.connect(url)
   end
 
+  test "a recognized modern error over HTTP 200 is reported as an RPC error", %{
+    bypass: bypass,
+    url: url
+  } do
+    Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+      {msg, conn} = read(conn)
+
+      json(conn, 200, %{
+        "jsonrpc" => "2.0",
+        "id" => msg["id"],
+        "error" => %{"code" => -32_602, "message" => "Invalid params"}
+      })
+    end)
+
+    assert {:error, {:rpc, %{"code" => -32_602}}} = Client.connect(url)
+  end
+
   test "static headers are sent", %{bypass: bypass, url: url} do
     Bypass.expect(bypass, "POST", "/mcp", fn conn ->
       assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer t"]

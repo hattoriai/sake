@@ -139,4 +139,33 @@ defmodule Sake.ClientTest do
 
     assert log =~ "bad" and log =~ "x-mcp-header"
   end
+
+  test "pagination stops when a server keeps returning the same cursor" do
+    bypass = Bypass.open()
+    url = "http://localhost:#{bypass.port}/mcp"
+
+    Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      msg = JSON.decode!(body)
+
+      result =
+        case msg["method"] do
+          "server/discover" ->
+            %{"supportedVersions" => ["2026-07-28"], "capabilities" => %{"tools" => %{}}}
+
+          "tools/list" ->
+            %{"tools" => [], "nextCursor" => "same-cursor"}
+        end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        JSON.encode!(%{"jsonrpc" => "2.0", "id" => msg["id"], "result" => result})
+      )
+    end)
+
+    {:ok, session} = Client.connect(url)
+    assert {:error, :pagination_loop, _session} = Client.list_tools(session)
+  end
 end

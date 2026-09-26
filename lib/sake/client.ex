@@ -61,8 +61,8 @@ defmodule Sake.Client do
       {:error, {:insufficient_scope, _} = e} ->
         {:error, e}
 
-      {:error, {:rpc, %{"code" => code}}} when code in @modern_errors ->
-        {:error, :modern_server_rejected_discover}
+      {:error, {:rpc, %{"code" => code} = error}} when code in @modern_errors ->
+        {:error, {:rpc, error}}
 
       {:error, {:http, _status, body}} ->
         handle_probe_http_error(body, session, legacy_version)
@@ -257,17 +257,28 @@ defmodule Sake.Client do
 
   # ---- the request loop (pagination, MRTR retries)
 
-  defp paged(session, method, key, cursor \\ nil, acc \\ []) do
+  @max_pages 1000
+
+  defp paged(session, method, key, cursor \\ nil, acc \\ [], page \\ 0) do
     params = if cursor, do: %{"cursor" => cursor}, else: %{}
 
     with {:ok, result, session} <- request(session, method, params) do
       items = acc ++ List.wrap(result[key])
-
-      if next = result["nextCursor"],
-        do: paged(session, method, key, next, items),
-        else: {:ok, items, session}
+      next_page(result["nextCursor"], cursor, page, session, method, key, items)
     end
   end
+
+  defp next_page(nil, _cursor, _page, session, _method, _key, items), do: {:ok, items, session}
+
+  defp next_page(next, cursor, _page, session, _method, _key, _items) when next == cursor,
+    do: {:error, :pagination_loop, session}
+
+  defp next_page(_next, _cursor, page, session, _method, _key, _items)
+       when page + 1 >= @max_pages,
+       do: {:error, :pagination_loop, session}
+
+  defp next_page(next, _cursor, page, session, method, key, items),
+    do: paged(session, method, key, next, items, page + 1)
 
   defp request(session, method, params, opts \\ [], attempt \\ 0) do
     id = session.next_id
