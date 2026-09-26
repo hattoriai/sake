@@ -75,15 +75,33 @@ defmodule SakeDev.Router do
 
   defp redirect_to(conn, to), do: conn |> put_resp_header("location", to) |> send_resp(302, "")
 
-  # Only a same-app path is a safe `return_to`: `//evil.example/x` is a
-  # protocol-relative URL a browser follows as `https://evil.example/x`,
-  # and anything with a scheme is an absolute URL to somewhere else
-  # entirely. Anything that isn't a single leading `/` falls back to `/`.
-  defp safe_return_to("/" <> rest) do
-    if String.starts_with?(rest, "/"), do: "/", else: "/" <> rest
+  # Only a same-app path is a safe `return_to`. Rejected outright, each
+  # falling back to `/`:
+  #   - anything not starting with `/`, or whose second character is `/`
+  #     or `\` (`//evil.example` and `/\evil.example` are both
+  #     protocol-relative URLs a browser follows to `evil.example` —
+  #     browsers treat `\` exactly like `/` in an http(s) URL);
+  #   - a `\` anywhere else in the value (same reason, mid-path);
+  #   - a control character (`\r`, `\n`, `\t`, or any byte below `0x20`) —
+  #     a header/response-splitting vector;
+  #   - a `:` before the first `?` — a scheme cannot appear in a path, so
+  #     this also catches `javascript:...` and an absolute URL with no
+  #     leading slash removed by the checks above.
+  defp safe_return_to(to) when is_binary(to) do
+    if safe_path?(to), do: to, else: "/"
   end
 
   defp safe_return_to(_), do: "/"
+
+  defp safe_path?(to) do
+    String.starts_with?(to, "/") and String.at(to, 1) not in ["/", "\\"] and
+      not String.contains?(to, "\\") and
+      not Enum.any?(String.to_charlist(to), &(&1 < 0x20)) and
+      not scheme_before_query?(to)
+  end
+
+  defp scheme_before_query?(to),
+    do: to |> String.split("?", parts: 2) |> hd() |> String.contains?(":")
 
   # The cookie store signs with the same secret Sake uses.
   defp put_secret_key_base(conn, _), do: %{conn | secret_key_base: Sake.Secret.fetch!()}

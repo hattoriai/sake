@@ -16,16 +16,27 @@ defmodule Sake.DevRouterTest do
       |> router.()
     end
 
-    conn = login.("https://evil.example")
-    assert conn.status == 302
-    assert get_resp_header(conn, "location") == ["/"]
+    rejected = [
+      "https://evil.example",
+      "//evil.example/x",
+      "/\\evil.example",
+      "/\\/evil.example",
+      "/x\\y",
+      "/path\r\nSet-Cookie: a=b",
+      "/javascript:alert(1)"
+    ]
 
-    conn = login.("//evil.example/x")
-    assert conn.status == 302
-    assert get_resp_header(conn, "location") == ["/"]
+    for return_to <- rejected do
+      conn = login.(return_to)
+      assert conn.status == 302
 
-    conn = login.("/oauth/authorize?client_id=x")
+      assert get_resp_header(conn, "location") == ["/"],
+             "expected #{inspect(return_to)} to fall back to /"
+    end
+
+    accepted = "/oauth/authorize?client_id=x&resource=http://localhost:4000/mcp"
+    conn = login.(accepted)
     assert conn.status == 302
-    assert get_resp_header(conn, "location") == ["/oauth/authorize?client_id=x"]
+    assert get_resp_header(conn, "location") == [accepted]
   end
 end
