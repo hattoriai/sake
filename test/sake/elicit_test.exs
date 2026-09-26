@@ -347,9 +347,11 @@ defmodule Sake.ElicitTest do
       assert {:ok, events} = Task.await(task, 5_000)
 
       assert [
-               %{"id" => ^request_id, "method" => "elicitation/create"},
+               %{"id" => ^request_id, "method" => "elicitation/create"} = elicit_event,
                %{"id" => 5, "result" => %{"content" => [%{"text" => "Hello, Ana!"}]}}
              ] = events
+
+      assert get_in(elicit_event, ["params", "_meta", "ai.hattori.sake/key"]) == "who"
     end
   end
 

@@ -13,12 +13,15 @@ defmodule Sake.Elicit do
   with an input-required result, and when the client retries, the handler
   runs again and the same call returns the answer. So a handler must have
   no side effects before its elicitation calls. On a legacy connection the
-  call blocks until the client answers on the stream.
+  call blocks until the client answers on the stream; the request carries
+  the handler's key in `_meta` under `"ai.hattori.sake/key"`, so a client
+  can tell which question is being asked.
   """
 
   alias Sake.Context
 
   @timeout 300_000
+  @vendor_key "ai.hattori.sake/key"
 
   @spec form(Context.t(), atom() | String.t(), String.t(), map()) ::
           {:ok, map()} | :decline | :cancel | {:error, :unsupported}
@@ -70,9 +73,10 @@ defmodule Sake.Elicit do
     end
   end
 
-  defp legacy(%Context{transport: pid}, _key, params) when is_pid(pid) do
+  defp legacy(%Context{transport: pid}, key, params) when is_pid(pid) do
     id = "sake-elicit-" <> Base.url_encode64(:crypto.strong_rand_bytes(9))
     :ok = Sake.Plug.Streams.register_elicit(id)
+    params = Map.update(params, "_meta", %{@vendor_key => key}, &Map.put(&1, @vendor_key, key))
     send(pid, {:sake_elicit, self(), id, params})
 
     receive do
