@@ -1,6 +1,6 @@
 defmodule Sake.Auth.Tokens do
   @moduledoc false
-  alias Sake.Auth.{Config, Token}
+  alias Sake.Auth.{Config, TokenRecord}
 
   @spec generate() :: String.t()
   def generate, do: :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
@@ -10,14 +10,14 @@ defmodule Sake.Auth.Tokens do
 
   @doc "Issues and stores an access/refresh pair. `attrs`: client_id, subject_id, scopes, resource, family_id."
   @spec issue_pair(Config.t(), map()) ::
-          {String.t(), String.t(), %{access: Token.t(), refresh: Token.t()}}
+          {String.t(), String.t(), %{access: TokenRecord.t(), refresh: TokenRecord.t()}}
   def issue_pair(config, attrs) do
     {module, state} = Sake.Auth.store(config)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     access = generate()
     refresh = generate()
 
-    base = %Token{
+    base = %TokenRecord{
       family_id: attrs.family_id,
       client_id: attrs.client_id,
       subject_id: attrs.subject_id,
@@ -47,7 +47,9 @@ defmodule Sake.Auth.Tokens do
     {access, refresh, %{access: a, refresh: r}}
   end
 
-  @spec valid?(Token.t(), DateTime.t()) :: boolean()
-  def valid?(%Token{revoked_at: nil, expires_at: exp}, now), do: DateTime.compare(exp, now) == :gt
+  @spec valid?(TokenRecord.t(), DateTime.t()) :: boolean()
+  def valid?(%TokenRecord{revoked_at: nil, expires_at: exp}, now),
+    do: DateTime.compare(exp, now) == :gt
+
   def valid?(_, _), do: false
 end

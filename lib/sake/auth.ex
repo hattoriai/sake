@@ -17,4 +17,55 @@ defmodule Sake.Auth do
 
   @doc false
   def store(%Config{store: {module, _}, store_state: state}), do: {module, state}
+
+  @doc "The active grants of a person: one entry per client, for a settings page."
+  @spec list_grants(Config.t(), String.t()) :: [map()]
+  def list_grants(config, subject_id) do
+    {module, state} = store(config)
+    now = DateTime.utc_now()
+
+    module.tokens_for_subject(state, subject_id)
+    |> Enum.filter(
+      &(&1.kind == :refresh and Sake.Auth.Tokens.valid?(&1, now) and &1.used_at == nil)
+    )
+    |> Enum.group_by(& &1.client_id)
+    |> Enum.map(fn {client_id, tokens} ->
+      client =
+        case module.get_client(state, client_id) do
+          {:ok, c} -> c
+          :error -> nil
+        end
+
+      %{
+        client_id: client_id,
+        client_name: client && client.name,
+        scopes: tokens |> Enum.flat_map(& &1.scopes) |> Enum.uniq(),
+        resource: hd(tokens).resource,
+        granted_at: tokens |> Enum.map(& &1.inserted_at) |> Enum.min(DateTime),
+        last_used_at: nil,
+        family_ids: Enum.map(tokens, & &1.family_id)
+      }
+    end)
+  end
+
+  @doc "Revokes every token of a client for a person, and forgets the consent."
+  @spec revoke_grant(Config.t(), String.t(), String.t()) :: :ok
+  def revoke_grant(config, subject_id, client_id) do
+    {module, state} = store(config)
+
+    module.tokens_for_subject(state, subject_id)
+    |> Enum.filter(&(&1.client_id == client_id))
+    |> Enum.map(& &1.family_id)
+    |> Enum.uniq()
+    |> Enum.each(&module.revoke_family(state, &1))
+
+    module.delete_consent(state, subject_id, client_id)
+  end
+
+  @doc "Deletes expired codes and tokens. Schedule it (a cron job, Oban, or a periodic task)."
+  @spec prune(Config.t()) :: :ok
+  def prune(config) do
+    {module, state} = store(config)
+    module.prune(state, DateTime.utc_now())
+  end
 end

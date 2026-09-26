@@ -1,7 +1,7 @@
 defmodule Sake.Auth.StoreTest do
   use SakeTest.AuthCase, async: false
 
-  alias Sake.Auth.{Client, Code, Consent, Token, Tokens}
+  alias Sake.Auth.{Client, Code, Consent, TokenRecord, Tokens}
 
   defp store(config), do: {elem(config.store, 0), config.store_state}
 
@@ -48,12 +48,12 @@ defmodule Sake.Auth.StoreTest do
     {_a, _r, %{access: a, refresh: r}} = issue(config, %{family_id: "f1", subject_id: "u1"})
     {_a2, _r2, %{access: a2}} = issue(config, %{family_id: "f2", subject_id: "u1"})
     assert :ok = mod.mark_used(state, r.id)
-    assert {:ok, %Token{used_at: %DateTime{}}} = mod.get_token(state, :refresh, r.hash)
+    assert {:ok, %TokenRecord{used_at: %DateTime{}}} = mod.get_token(state, :refresh, r.hash)
     assert :ok = mod.revoke_family(state, "f1")
-    assert {:ok, %Token{revoked_at: %DateTime{}}} = mod.get_token(state, :access, a.hash)
-    assert {:ok, %Token{revoked_at: nil}} = mod.get_token(state, :access, a2.hash)
+    assert {:ok, %TokenRecord{revoked_at: %DateTime{}}} = mod.get_token(state, :access, a.hash)
+    assert {:ok, %TokenRecord{revoked_at: nil}} = mod.get_token(state, :access, a2.hash)
     assert :ok = mod.revoke_token(state, a2.id)
-    assert {:ok, %Token{revoked_at: %DateTime{}}} = mod.get_token(state, :access, a2.hash)
+    assert {:ok, %TokenRecord{revoked_at: %DateTime{}}} = mod.get_token(state, :access, a2.hash)
     assert length(mod.tokens_for_subject(state, "u1")) == 4
   end
 
@@ -80,7 +80,7 @@ defmodule Sake.Auth.StoreTest do
     past = DateTime.add(DateTime.utc_now(), -10)
     mod.put_code(state, %Code{hash: "old", expires_at: past})
 
-    mod.put_token(state, %Token{
+    mod.put_token(state, %TokenRecord{
       id: "t-old",
       kind: :access,
       hash: "h-old",

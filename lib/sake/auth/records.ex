@@ -13,7 +13,7 @@ defmodule Sake.Auth.Code do
   ]
 end
 
-defmodule Sake.Auth.Token do
+defmodule Sake.Auth.TokenRecord do
   @moduledoc "An access or refresh token (stored hashed). `family_id` groups the tokens born from one authorization code."
   @type t :: %__MODULE__{}
   defstruct [
