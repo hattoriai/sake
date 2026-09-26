@@ -47,6 +47,10 @@ defmodule Sake.Auth.ClientsTest do
     refute Redirect.matches?(["http://127.0.0.1:3000/cb"], "http://127.0.0.1:3000/other")
     refute Redirect.matches?(["https://app.example/cb"], "https://app.example/cb/")
     refute Redirect.matches?(["https://app.example/cb"], "https://app.example:444/cb")
+    refute Redirect.matches?(["http://127.0.0.1:3000/cb"], "http://attacker@127.0.0.1:51234/cb")
+    refute Redirect.matches?(["http://localhost:3000/cb"], "http://localhost:3000/cb?x=1")
+    refute Redirect.valid?("http://user@127.0.0.1:3000/cb")
+    refute Redirect.valid?("https://user:pw@app.example/cb")
 
     assert Redirect.matches?(
              ["https://app.example/cb", "https://b.example/cb"],

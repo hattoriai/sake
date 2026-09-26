@@ -8,9 +8,15 @@ defmodule Sake.Auth.Redirect do
   @spec valid?(term()) :: boolean()
   def valid?(uri) when is_binary(uri) do
     case URI.parse(uri) do
-      %URI{scheme: "https", host: host, fragment: nil} when is_binary(host) and host != "" -> true
-      %URI{scheme: "http", host: host, fragment: nil} when host in @loopback -> true
-      _ -> false
+      %URI{scheme: "https", host: host, userinfo: nil, fragment: nil}
+      when is_binary(host) and host != "" ->
+        true
+
+      %URI{scheme: "http", host: host, userinfo: nil, fragment: nil} when host in @loopback ->
+        true
+
+      _ ->
+        false
     end
   end
 
@@ -31,9 +37,13 @@ defmodule Sake.Auth.Redirect do
   defp same_but_port?(a, b) do
     # Not `%{URI.parse(a) | port: nil} == ...`: `URI.parse/1` also fills in
     # `authority`, which still carries the port and would defeat the
-    # comparison.
+    # comparison. Compared field by field instead, everything except `port`
+    # and `authority` — including `userinfo`, so a URI carrying credentials
+    # never matches one that does not.
     a = URI.parse(a)
     b = URI.parse(b)
-    a.scheme == b.scheme and a.host == b.host and a.path == b.path and a.query == b.query
+
+    a.scheme == b.scheme and a.userinfo == b.userinfo and a.host == b.host and a.path == b.path and
+      a.query == b.query and a.fragment == b.fragment
   end
 end
