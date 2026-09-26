@@ -50,9 +50,16 @@ defmodule Sake.Plug.Stream do
   defp stream?(method, params, ctx) do
     token = get_in(params, ["_meta", "progressToken"])
 
+    # A tool that streams on its own (no progress token asked for) only
+    # opens the SSE response when the call is actually allowed; otherwise
+    # the scope error is a plain JSON-RPC response with the usual status,
+    # instead of a 200 stream carrying the error as its only message.
     tool_streams =
       method == "tools/call" and
-        match?({:ok, %{stream: true}}, Sake.Server.tool(ctx.server, params["name"] || ""))
+        case Sake.Server.tool(ctx.server, params["name"] || "") do
+          {:ok, %{stream: true} = spec} -> Sake.Server.allowed?(spec, ctx)
+          _ -> false
+        end
 
     legacy_elicit =
       ctx.era == :legacy and method in ["tools/call", "resources/read", "prompts/get"] and

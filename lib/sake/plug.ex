@@ -42,11 +42,18 @@ defmodule Sake.Plug do
   @impl true
   def call(conn, opts) do
     if Origin.allowed?(conn, opts.origins) do
-      conn
-      |> assign(:sake_auth, opts.auth)
-      |> route(opts)
+      conn |> assign(:sake_auth, opts.auth) |> authenticate(opts)
     else
       send_error(conn, 403, nil, JSONRPC.code(:invalid_request), "Origin not allowed")
+    end
+  end
+
+  defp authenticate(conn, %{auth: false} = opts), do: route(conn, opts)
+
+  defp authenticate(conn, opts) do
+    case Sake.Auth.Bearer.check(conn, opts) do
+      {:ok, conn} -> route(conn, opts)
+      {:error, conn} -> conn
     end
   end
 
@@ -399,9 +406,12 @@ defmodule Sake.Plug do
     do: send_json(conn, 200, %{"jsonrpc" => "2.0", "id" => id, "error" => error})
 
   def outcome_to_response(conn, id, {:forbidden, scopes}) do
-    conn
-    |> put_private(:sake_insufficient_scope, scopes)
-    |> send_error(403, id, JSONRPC.code(:invalid_request), "Insufficient scope")
+    conn =
+      if conn.assigns[:sake_auth],
+        do: Sake.Auth.Bearer.insufficient_scope(conn, scopes),
+        else: conn
+
+    send_error(conn, 403, id, JSONRPC.code(:invalid_request), "Insufficient scope")
   end
 
   def outcome_to_response(conn, _id, :noreply), do: send_resp(conn, 202, "")
