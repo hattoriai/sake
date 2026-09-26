@@ -4,6 +4,7 @@ defmodule Sake.Plug.Stream do
   # long-lived streams: subscriptions/listen (modern) and GET (legacy).
 
   import Plug.Conn
+  require Logger
 
   alias Sake.{Context, JSONRPC, Protocol}
   alias Sake.Plug.{SSE, Streams}
@@ -73,8 +74,34 @@ defmodule Sake.Plug.Stream do
         else: fn _, _ -> :ok end
 
     ctx = %{ctx | progress: progress, transport: me}
-    task = Task.async(fn -> run(parsed, ctx, handler) end)
+    task = Task.async(fn -> run_safely(parsed, ctx, handler) end)
     loop(conn, opts, id, ctx, task)
+  end
+
+  # The task is linked (a dead connection must kill the handler), so its
+  # body must never exit abnormally: a raise or throw here would tear
+  # down the SSE connection via the link before the outcome could become
+  # a proper JSON-RPC error.
+  defp run_safely(parsed, ctx, handler) do
+    run(parsed, ctx, handler)
+  rescue
+    e ->
+      Logger.error("stream handler failed: " <> Exception.format(:error, e, __STACKTRACE__))
+
+      {:error,
+       %{
+         "code" => JSONRPC.code(:internal),
+         "message" => "The request failed: " <> Exception.message(e)
+       }}
+  catch
+    kind, reason ->
+      Logger.error("stream handler failed: " <> Exception.format(kind, reason, __STACKTRACE__))
+
+      {:error,
+       %{
+         "code" => JSONRPC.code(:internal),
+         "message" => "The request failed: #{inspect({kind, reason})}"
+       }}
   end
 
   defp loop(conn, opts, id, ctx, task) do

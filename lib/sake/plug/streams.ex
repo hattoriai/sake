@@ -90,6 +90,8 @@ defmodule Sake.Plug.Streams do
   @doc "Routes a legacy client's JSON-RPC response to the handler waiting for it."
   @spec deliver_response(term(), {:ok, map()} | {:error, map()}) :: :ok | :error
   def deliver_response(id, response) do
+    ensure_started!()
+
     case Registry.lookup(@registry, {:elicit, id}) do
       [{pid, _} | _] ->
         send(pid, {:sake_elicit_response, id, response})
@@ -109,6 +111,8 @@ defmodule Sake.Plug.Streams do
     do: send_session(server, session_id, {:sake_unsubscribe, uri})
 
   defp send_session(server, session_id, message) do
+    ensure_started!()
+
     Registry.dispatch(@registry, {server, :legacy, :erlang.phash2(session_id)}, fn entries ->
       for {pid, _} <- entries, do: send(pid, message)
     end)

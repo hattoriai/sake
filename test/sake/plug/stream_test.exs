@@ -251,4 +251,45 @@ defmodule Sake.Plug.StreamTest do
     assert_receive {:stopped, %{cancelled: true}}, 2_000
     :telemetry.detach("kill")
   end
+
+  test "a raising handler on a stream yields an error response and keeps the connection" do
+    defmodule Boom do
+      use Sake.Tool, name: "boom", description: "raises", stream: true
+      def execute(_, _), do: raise("kaboom")
+    end
+
+    defmodule BoomServer do
+      use Sake.Server, name: "b", version: "1"
+      tools [Boom]
+    end
+
+    conn =
+      ModernClient.post(
+        ModernClient.opts(server: BoomServer, reraise: true),
+        "tools/call",
+        %{"name" => "boom", "arguments" => %{}}
+      )
+
+    assert conn.status == 200
+
+    assert [
+             %{
+               "id" => 1,
+               "error" => %{"code" => -32_603, "message" => "The request failed: kaboom"}
+             }
+           ] =
+             ModernClient.events(conn.resp_body)
+  end
+
+  test "deliver_response raises a clear error when the registry is not running" do
+    Supervisor.terminate_child(SakeTest.Supervisor, Sake.Plug.Streams)
+
+    on_exit(fn ->
+      Supervisor.restart_child(SakeTest.Supervisor, Sake.Plug.Streams)
+    end)
+
+    assert_raise RuntimeError, ~r/Sake.Plug.Streams is not running/, fn ->
+      Sake.Plug.Streams.deliver_response("x", {:ok, %{}})
+    end
+  end
 end
