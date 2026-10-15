@@ -49,6 +49,7 @@ defmodule Sake.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
       {:ecto, "~> 3.13", optional: true},
       {:ecto_sql, "~> 3.13", optional: true},
+      {:jose, "~> 1.11", optional: true},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:phoenix, "~> 1.8", optional: true},
       {:phoenix_pubsub, "~> 2.1", optional: true},
