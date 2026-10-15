@@ -6,11 +6,8 @@
 server: []
 
 client:
-  # The client runs the core authorization flow, but not these extension
-  # grants and proof-of-possession schemes (hattoriai/sake#4).
-  - auth/client-credentials-jwt
-  - auth/client-credentials-basic
-  - auth/enterprise-managed-authorization
+  # The client runs the client credentials, JWT bearer and
+  # enterprise-managed grants, but not DPoP (SEP-1932): it neither binds
+  # its tokens to a key nor sends proofs.
   - auth/dpop
   - auth/dpop-nonce
-  - auth/wif-jwt-bearer

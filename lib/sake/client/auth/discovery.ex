@@ -26,17 +26,19 @@ defmodule Sake.Client.Auth.Discovery do
   @doc """
   Discovers the authorization server for `url`. `preferred` is an issuer
   to pick when the resource lists several (the one pre-registered
-  credentials belong to).
+  credentials belong to). `interactive` is false for a grant that never
+  sends anyone to the authorization endpoint (client credentials, a JWT
+  grant): only the token endpoint is required then.
   """
-  @spec discover(String.t(), Challenge.t() | nil, String.t() | nil, keyword()) ::
+  @spec discover(String.t(), Challenge.t() | nil, String.t() | nil, keyword(), boolean()) ::
           {:ok, server()} | {:error, term()}
-  def discover(url, challenge, preferred, req) do
+  def discover(url, challenge, preferred, req, interactive \\ true) do
     case protected_resource(url, challenge, req) do
       {:ok, resource} ->
         issuer = choose(resource["authorization_servers"], preferred)
 
         with {:ok, metadata} <- authorization_server(issuer, req),
-             :ok <- check(metadata) do
+             :ok <- check(metadata, interactive) do
           {:ok,
            %{
              resource: resource["resource"],
@@ -47,7 +49,7 @@ defmodule Sake.Client.Auth.Discovery do
         end
 
       :none ->
-        legacy(url, req)
+        legacy(url, req, interactive)
 
       {:error, reason} ->
         {:error, reason}
@@ -165,6 +167,10 @@ defmodule Sake.Client.Auth.Discovery do
     end
   end
 
+  @doc "The metadata of an authorization server (an enterprise identity provider, say) by its issuer."
+  @spec issuer_metadata(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def issuer_metadata(issuer, req), do: authorization_server(issuer, req)
+
   # RFC 8414 §3.3: a document whose `issuer` is not, character for
   # character, the issuer the client built the URL from is not used — it
   # could be an attacker's document naming an honest server, or the other
@@ -186,7 +192,13 @@ defmodule Sake.Client.Auth.Discovery do
   # to the authorization endpoint; an absent list means no PKCE at all. The
   # endpoint itself must be HTTPS like every other one: the person's
   # browser, not this client, makes that request.
-  defp check(metadata) do
+  defp check(metadata, false) do
+    if HTTP.secure?(metadata["token_endpoint"]),
+      do: :ok,
+      else: {:error, :invalid_authorization_server_metadata}
+  end
+
+  defp check(metadata, true) do
     endpoint = metadata["authorization_endpoint"]
 
     cond do
@@ -213,11 +225,11 @@ defmodule Sake.Client.Auth.Discovery do
   # distinct from the server, so a document from the server's origin is
   # accepted when its issuer is on that same origin; PKCE was already
   # mandatory then, so the default endpoints are taken to support S256.
-  defp legacy(url, req) do
+  defp legacy(url, req, interactive) do
     origin = url |> URI.parse() |> origin()
 
     with {:ok, metadata} <- legacy_metadata(origin, req),
-         :ok <- check(metadata) do
+         :ok <- check(metadata, interactive) do
       {:ok,
        %{
          resource: canonical(url),
