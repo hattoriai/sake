@@ -50,6 +50,11 @@ jobs:
       # dialyxir in :dev.
       - run: mix deps.get
 
+      # TEMPORARY: prints the mix.lock entries hex.pm wrote for the new
+      # optional dependencies, to copy into the committed mix.lock. Removed
+      # in the next commit.
+      - run: grep -E '"(phoenix_html|jose)":' mix.lock || true
+
       - run: mix format --check-formatted
 
       - run: mix compile --warnings-as-errors
