@@ -148,7 +148,8 @@ defmodule Sake.Plug do
   # sends anything else gets -32602, never a crash.
   @object_params ["_meta", "arguments", "inputResponses"]
 
-  defp shape({:batch, items}) do
+  @doc false
+  def shape({:batch, items}) do
     Enum.reduce_while(items, :ok, fn item, :ok ->
       case shape(item) do
         :ok -> {:cont, :ok}
@@ -157,9 +158,9 @@ defmodule Sake.Plug do
     end)
   end
 
-  defp shape({:request, id, _method, params}), do: object_params(id, params)
-  defp shape({:notification, _method, params}), do: object_params(nil, params)
-  defp shape(_parsed), do: :ok
+  def shape({:request, id, _method, params}), do: object_params(id, params)
+  def shape({:notification, _method, params}), do: object_params(nil, params)
+  def shape(_parsed), do: :ok
 
   defp object_params(id, params) do
     case Enum.find(@object_params, &(Map.has_key?(params, &1) and not is_map(params[&1]))) do
@@ -382,26 +383,7 @@ defmodule Sake.Plug do
   end
 
   defp legacy_message(conn, _opts, {:batch, items}, %{protocol_version: "2025-03-26"} = ctx) do
-    replies =
-      items
-      |> Enum.map(fn item -> {item, Legacy.handle(ctx.server, item, ctx)} end)
-      |> Enum.flat_map(fn
-        {{:request, id, _, _}, {:reply, result}} ->
-          [JSONRPC.result(id, result)]
-
-        {{:request, id, _, _}, {:error, error}} ->
-          [%{"jsonrpc" => "2.0", "id" => id, "error" => error}]
-
-        {{:request, id, _, _}, {:forbidden, _}} ->
-          [JSONRPC.error(id, JSONRPC.code(:invalid_request), "Insufficient scope")]
-
-        {{:request, id, _, _}, _} ->
-          [JSONRPC.error(id, JSONRPC.code(:invalid_request), "Not supported in a batch")]
-
-        _ ->
-          []
-      end)
-
+    replies = batch_replies(items, ctx)
     if replies == [], do: send_resp(conn, 202, ""), else: send_json(conn, 200, replies)
   end
 
@@ -418,6 +400,31 @@ defmodule Sake.Plug do
 
   defp legacy_message(conn, opts, {:request, _, _, _} = parsed, ctx),
     do: respond(conn, opts, parsed, ctx, &Legacy.handle/3)
+
+  # A 2025-03-26 batch runs its items one after the other, with no stream
+  # to write on: a subscription is refused item by item, and a component
+  # that elicits finds no client to ask. Shared with `Sake.Stdio`.
+  @doc false
+  def batch_replies(items, ctx) do
+    items
+    |> Enum.map(fn item -> {item, Legacy.handle(ctx.server, item, ctx)} end)
+    |> Enum.flat_map(fn
+      {{:request, id, _, _}, {:reply, result}} ->
+        [JSONRPC.result(id, result)]
+
+      {{:request, id, _, _}, {:error, error}} ->
+        [%{"jsonrpc" => "2.0", "id" => id, "error" => error}]
+
+      {{:request, id, _, _}, {:forbidden, _}} ->
+        [JSONRPC.error(id, JSONRPC.code(:invalid_request), "Insufficient scope")]
+
+      {{:request, id, _, _}, _} ->
+        [JSONRPC.error(id, JSONRPC.code(:invalid_request), "Not supported in a batch")]
+
+      _ ->
+        []
+    end)
+  end
 
   # ---- one request → one response
 

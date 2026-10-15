@@ -46,6 +46,13 @@ First release.
   The interactive step is pluggable (`Sake.Client.Auth.Browser` with a
   loopback listener, `Sake.Client.Auth.Headless`), and so is token
   persistence (`Sake.Client.Auth.Store`).
+- `Sake.Stdio` and `mix sake.stdio`: the same server over standard input
+  and output, on both eras, with concurrent requests, cancellation,
+  progress and log notifications, elicitation, subscriptions, and
+  shutdown when standard input closes. `Sake.Client.connect/2` launches
+  a stdio server with `{:stdio, command, args}`, probing the era as the
+  stdio transport asks; `on_notification:` sees a call's notifications
+  on either transport.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the
