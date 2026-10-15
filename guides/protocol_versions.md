@@ -76,25 +76,26 @@ working until it expires.
 - **2024-11-05** — the revision before the current three-legacy-revision
   window; Sake does not negotiate it at all.
 - **Resumability** — reconnecting a dropped SSE stream with
-  `Last-Event-ID` and a server-issued `retry` interval. Neither `Sake.Plug`
-  nor `Sake.Client` implements this; a dropped stream is simply gone.
+  `Last-Event-ID` and a server-issued `retry` interval (removed from the
+  2026-07-28 revision). Neither `Sake.Plug` nor `Sake.Client` implements
+  this; a dropped stream is simply gone.
 - **The client's standalone GET stream** — on a legacy session,
   `Sake.Client` does not open the `GET` stream a server may use for
   notifications and for requests unrelated to any call. A server request
   sent inside a call's own response stream (how a Sake server elicits) is
   answered; one sent only on the standalone stream never reaches the
   client.
-- **Tasks** — the long-running, poll-or-push task primitive some 2026-era
-  drafts describe is not implemented.
+- **The 2025-11-25 experimental tasks** — that revision's in-core task
+  primitive (`tasks/result`, `tasks/list`, the `task` request parameter,
+  `execution.taskSupport` on tools). Sake implements tasks as the
+  2026-07-28 extension `io.modelcontextprotocol/tasks` instead (see
+  `guides/tasks.md`), on the modern era only; a legacy session runs
+  optional task tools synchronously and is refused required ones.
 - **Apps** — UI-surface extensions layered on top of MCP are out of scope
   for this package entirely.
-- **Sampling** — a server asking the *client's* model to complete a
-  prompt (`sampling/createMessage`), whether as a legacy server-to-client
-  request or as an input request of a modern input-required result.
-  `Sake.Elicit` covers the server-asks-the-person direction; there is no
-  equivalent for server-asks-the-client's-LLM yet.
-- **Roots** — the client-declares-its-workspace-folders capability
-  (`roots/list`) has no server- or client-side support, in either era.
+
+Sampling and roots are supported on every revision, deprecated as they are
+in 2026-07-28 (SEP-2577); see `guides/tools.md`.
 
 ## Conformance status
 
@@ -124,16 +125,6 @@ on purpose; CI turns red on a *new* failure and on a listed scenario that
 now passes, and the suite counts a warning (an unmet SHOULD) as a failure.
 Currently:
 
-- **`tools-call-sampling`** (server, legacy revisions),
-  **`input-required-result-basic-sampling`**,
-  **`input-required-result-basic-list-roots`**,
-  **`input-required-result-multiple-input-requests`** and
-  **`input-required-result-capability-check`** (server, 2026-07-28) — no
-  sampling or roots support (above); the last needs a tool that falls back
-  to sampling.
-- **Two checks of `server-stateless`** (server, 2026-07-28) — the scenario's
-  `test_missing_capability` fixture needs a tool that requires sampling, to
-  show the `-32021` error for a client that did not declare it.
 - **`server-sse-polling`** (server, 2025-11-25) — no resumability (above),
   so a stream carries no priming event and no `retry` field.
 - **`input-required-result-ignore-extra-params`** (server, 2026-07-28) — the
@@ -161,9 +152,8 @@ The extension scenarios (the tasks extension's `tasks-*`, the skills
 extension's `sep-2640-*`, and the client auth extensions such as DPoP and
 client credentials) belong to no revision. `mix test.conformance
 extensions` runs them in a separate CI step against their own baseline,
-`conformance/expected-failures-extensions.yaml`: the `tasks-*` scenarios
-fail (the tasks extension is not implemented, above), except
-`tasks-status-notifications`, which the suite currently skips; the skills
-scenarios pass as not applicable (Sake declares no skills
+`conformance/expected-failures-extensions.yaml`: every `tasks-*` scenario
+passes (`tasks-status-notifications` is one the suite currently skips),
+the skills scenarios pass as not applicable (Sake declares no skills
 extension), and the client auth extensions fail because the client does
 not implement their grants.

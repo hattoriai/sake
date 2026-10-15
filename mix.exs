@@ -85,6 +85,7 @@ defmodule Sake.MixProject do
         "README.md",
         "guides/quickstart.md",
         "guides/tools.md",
+        "guides/tasks.md",
         "guides/resources_and_prompts.md",
         "guides/authorization.md",
         "guides/tenants.md",
@@ -96,7 +97,7 @@ defmodule Sake.MixProject do
       ],
       groups_for_extras: [
         Guides:
-          ~w(guides/quickstart.md guides/tools.md guides/resources_and_prompts.md guides/authorization.md guides/tenants.md guides/client.md guides/stdio.md),
+          ~w(guides/quickstart.md guides/tools.md guides/tasks.md guides/resources_and_prompts.md guides/authorization.md guides/tenants.md guides/client.md guides/stdio.md),
         Reference: ~w(guides/protocol_versions.md guides/security.md)
       ],
       groups_for_modules: [
@@ -108,12 +109,24 @@ defmodule Sake.MixProject do
           Sake.Context,
           Sake.Content,
           Sake.Elicit,
+          Sake.Sampling,
+          Sake.Sampling.Result,
+          Sake.Roots,
+          Sake.Input,
           Sake.Progress,
           Sake.Plug,
           Sake.Plug.Streams,
           Sake.Plug.Headers,
           Sake.Router,
           Sake.Stdio
+        ],
+        Tasks: [
+          Sake.Tasks,
+          Sake.Tasks.Record,
+          Sake.Tasks.Store,
+          Sake.Tasks.Store.ETS,
+          Sake.Tasks.Store.Ecto,
+          Sake.Tasks.Migration
         ],
         Authorization: [
           Sake.Auth,

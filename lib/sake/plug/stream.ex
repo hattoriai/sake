@@ -1,7 +1,8 @@
 defmodule Sake.Plug.Stream do
   @moduledoc false
   # One request → one response, as JSON or as an SSE stream, plus the two
-  # long-lived streams: subscriptions/listen (modern) and GET (legacy).
+  # long-lived streams: subscriptions/listen (modern, including the tasks
+  # extension's `notifications/tasks`) and GET (legacy).
 
   import Plug.Conn
   require Logger
@@ -22,7 +23,7 @@ defmodule Sake.Plug.Stream do
   def respond(conn, opts, {:request, id, method, params} = parsed, ctx, handler) do
     cond do
       method == "subscriptions/listen" and ctx.era == :modern ->
-        listen(conn, opts, id, params)
+        listen(conn, opts, id, params, ctx)
 
       stream?(method, params, ctx) ->
         stream(conn, opts, parsed, ctx, handler)
@@ -56,6 +57,8 @@ defmodule Sake.Plug.Stream do
 
   defp after_outcome(o, _ctx), do: o
 
+  @asks ["elicitation", "sampling", "roots"]
+
   defp stream?(method, params, ctx) do
     token = get_in(params, ["_meta", "progressToken"])
 
@@ -70,11 +73,13 @@ defmodule Sake.Plug.Stream do
           _ -> false
         end
 
-    legacy_elicit =
+    # A legacy client that can be asked something (elicitation, sampling,
+    # roots) gets the stream the question would travel on.
+    legacy_asks =
       ctx.era == :legacy and method in ["tools/call", "resources/read", "prompts/get"] and
-        Map.has_key?(ctx.client_capabilities, "elicitation")
+        Enum.any?(@asks, &Map.has_key?(ctx.client_capabilities, &1))
 
-    token != nil or tool_streams or legacy_elicit
+    token != nil or tool_streams or legacy_asks
   end
 
   defp stream(conn, opts, {:request, id, _method, params} = parsed, ctx, handler) do
@@ -139,16 +144,10 @@ defmodule Sake.Plug.Stream do
       {:sake_log, level, data} ->
         continue(conn, opts, id, ctx, task, log(level, data))
 
-      {:sake_elicit, _from, request_id, params} ->
-        # Legacy elicitation: the server asks on the stream and the handler waits.
-        continue(
-          conn,
-          opts,
-          id,
-          ctx,
-          task,
-          JSONRPC.request(request_id, "elicitation/create", params)
-        )
+      {:sake_request, _from, request_id, method, params} ->
+        # A legacy server request (elicitation, sampling, roots): the server
+        # asks on the stream and the handler waits.
+        continue(conn, opts, id, ctx, task, JSONRPC.request(request_id, method, params))
 
       {^task_ref, outcome} ->
         Process.demonitor(task_ref, [:flush])
@@ -247,8 +246,17 @@ defmodule Sake.Plug.Stream do
     "resourcesListChanged" => :resources
   }
 
-  defp listen(conn, opts, id, params) do
-    honoured = honoured(params)
+  # Task notifications need the tasks extension; a client asking for them
+  # without it gets -32021 instead of a stream.
+  defp listen(conn, opts, id, params, ctx) do
+    case refused(params, ctx) do
+      nil -> open_listen(conn, opts, id, params, ctx)
+      error -> Sake.Plug.outcome_to_response(conn, id, {:error, error})
+    end
+  end
+
+  defp open_listen(conn, opts, id, params, ctx) do
+    honoured = honoured(params, ctx)
     Streams.register_listen(opts.server, id, honoured)
     conn = SSE.start(conn)
     meta = %{Protocol.meta(:subscription_id) => id}
@@ -293,15 +301,35 @@ defmodule Sake.Plug.Stream do
   # stream; shared with `Sake.Stdio`.
 
   @doc false
-  def honoured(params) do
-    (params["notifications"] || %{})
+  # The JSON-RPC error a listen request gets instead of a stream, if any:
+  # task notifications need the tasks extension.
+  def refused(params, ctx) do
+    requested = params["notifications"]
+
+    if is_map(requested) and Map.has_key?(requested, "taskIds") and
+         not Sake.Server.Tasks.declared?(ctx) do
+      {:error, code, message, data} = Sake.Server.Tasks.missing_capability()
+      %{"code" => code, "message" => message, "data" => data}
+    end
+  end
+
+  @doc false
+  def honoured(params, ctx) do
+    requested = params["notifications"] || %{}
+
+    requested
     |> Enum.filter(fn
       {k, true} -> Map.has_key?(@filters, k)
       {"resourceSubscriptions", uris} -> is_list(uris) and uris != []
       _ -> false
     end)
     |> Map.new()
+    |> put_task_ids(Sake.Server.Tasks.visible(is_map(requested) && requested["taskIds"], ctx))
   end
+
+  # The caller's own tasks only: anything else was left out of `taskIds`.
+  defp put_task_ids(honoured, []), do: honoured
+  defp put_task_ids(honoured, ids), do: Map.put(honoured, "taskIds", ids)
 
   @doc false
   def acknowledged(honoured, meta),
@@ -317,6 +345,11 @@ defmodule Sake.Plug.Stream do
 
     if honoured[key] == true,
       do: JSONRPC.notification("notifications/#{kind}/list_changed", %{"_meta" => meta})
+  end
+
+  def notification_for({:task, task}, honoured, meta) do
+    if task["taskId"] in (honoured["taskIds"] || []),
+      do: JSONRPC.notification("notifications/tasks", Map.put(task, "_meta", meta))
   end
 
   def notification_for({:resource_updated, uri}, honoured, meta) do
@@ -366,6 +399,10 @@ defmodule Sake.Plug.Stream do
               JSONRPC.notification("notifications/resources/updated", %{"uri" => uri})
             ),
           else: legacy_loop(conn, opts, subscribed)
+
+      # Task notifications are for modern listen streams only.
+      {:sake_notify, _event} ->
+        legacy_loop(conn, opts, subscribed)
     after
       opts.keepalive ->
         case SSE.comment(conn) do

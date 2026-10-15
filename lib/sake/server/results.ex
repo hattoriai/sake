@@ -40,7 +40,7 @@ defmodule Sake.Server.Results do
   end
 
   @spec resource(term(), Sake.Resource.Spec.t(), String.t(), Sake.Context.t()) ::
-          {:ok, map()} | {:error, :not_found | String.t()}
+          {:ok, map()} | {:error, :not_found | String.t() | {:missing_capability, map()}}
   def resource({:ok, value}, spec, uri, _ctx) do
     contents =
       case value do
@@ -68,7 +68,7 @@ defmodule Sake.Server.Results do
   def resource({:error, reason}, _spec, _uri, _ctx), do: {:error, reason}
 
   @spec prompt(term(), Sake.Prompt.Spec.t(), Sake.Context.t()) ::
-          {:ok, map()} | {:error, String.t()}
+          {:ok, map()} | {:error, String.t() | {:missing_capability, map()}}
   def prompt({:ok, messages}, spec, ctx), do: prompt({:ok, messages, []}, spec, ctx)
 
   def prompt({:ok, messages, opts}, spec, _ctx) do

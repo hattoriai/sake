@@ -109,6 +109,7 @@ defmodule Sake.Stdio do
     end
 
     ensure_streams()
+    ensure_tasks()
     me = self()
 
     {:ok,
@@ -146,6 +147,12 @@ defmodule Sake.Stdio do
     unless Process.whereis(Streams) do
       {:ok, _} = Supervisor.start_link([Streams.child_spec([])], strategy: :one_for_one)
     end
+  end
+
+  # Tasks too, with the defaults, so a task tool served on its own runs as
+  # a task for a client that takes one.
+  defp ensure_tasks do
+    unless Sake.Tasks.running?(), do: {:ok, _} = Sake.Tasks.start_link([])
   end
 
   defp read(input, conn) do
@@ -390,8 +397,8 @@ defmodule Sake.Stdio do
       method == "subscriptions/listen" ->
         server = state.server
 
-        request(parsed, modern_context(meta, version, state), state, fn conn, _ctx ->
-          listen(conn, server, id, params)
+        request(parsed, modern_context(meta, version, state), state, fn conn, ctx ->
+          listen(conn, server, id, params, ctx)
         end)
 
       true ->
@@ -532,7 +539,7 @@ defmodule Sake.Stdio do
   defp scope(value), do: value
 
   # The handler runs in a task while this process relays its progress, log
-  # messages and legacy elicitation requests to the client, as the SSE loop
+  # messages and legacy server requests to the client, as the SSE loop
   # of `Sake.Plug.Stream` does.
   defp run(conn, {:request, id, _method, params} = parsed, ctx, handler) do
     me = self()
@@ -563,10 +570,11 @@ defmodule Sake.Stdio do
         send(conn, {:sake_stdio_send, id, Stream.log(level, data)})
         loop(conn, id, task)
 
-      {:sake_elicit, _from, request_id, params} ->
-        # Legacy elicitation: the server asks the client and the handler
-        # waits; the client's response comes back through `Streams`.
-        message = JSONRPC.request(request_id, "elicitation/create", params)
+      {:sake_request, _from, request_id, method, params} ->
+        # A legacy server request (elicitation, sampling, roots): the server
+        # asks the client and the handler waits; the client's response
+        # comes back through `Streams`.
+        message = JSONRPC.request(request_id, method, params)
         send(conn, {:sake_stdio_send, id, message})
         loop(conn, id, task)
 
@@ -587,8 +595,15 @@ defmodule Sake.Stdio do
   # A `subscriptions/listen` stream: acknowledged, then the events its
   # filter asks for, tagged with its subscription ID, until the client
   # cancels it or the server stops.
-  defp listen(conn, server, id, params) do
-    honoured = Stream.honoured(params)
+  defp listen(conn, server, id, params, ctx) do
+    case Stream.refused(params, ctx) do
+      nil -> open_listen(conn, server, id, params, ctx)
+      error -> {%{"jsonrpc" => "2.0", "id" => id, "error" => error}, false}
+    end
+  end
+
+  defp open_listen(conn, server, id, params, ctx) do
+    honoured = Stream.honoured(params, ctx)
     Streams.register_listen(server, id, honoured)
     meta = %{Protocol.meta(:subscription_id) => id}
     send(conn, {:sake_stdio_send, id, Stream.acknowledged(honoured, meta)})

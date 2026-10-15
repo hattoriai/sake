@@ -64,7 +64,18 @@ defmodule Sake.Server.DispatchTest do
 
   test "tools/list with cache fields, deterministic order and pagination" do
     assert {:reply, r} = call("tools/list")
-    assert Enum.map(r["tools"], & &1["name"]) == ["echo", "add", "slow", "confirm", "connect"]
+
+    assert Enum.map(r["tools"], & &1["name"]) == [
+             "echo",
+             "add",
+             "slow",
+             "confirm",
+             "connect",
+             "summarize",
+             "roots",
+             "export"
+           ]
+
     assert r["ttlMs"] == 300_000 and r["cacheScope"] == "public"
     refute Map.has_key?(r, "nextCursor")
 
@@ -93,7 +104,17 @@ defmodule Sake.Server.DispatchTest do
   test "private cache scope and scope gating with a token" do
     ctx = ctx(token: %{}, scopes: ["issues:read"])
     assert {:reply, r} = call("tools/list", %{}, ctx)
-    assert Enum.map(r["tools"], & &1["name"]) == ["echo", "add", "confirm", "connect"]
+
+    assert Enum.map(r["tools"], & &1["name"]) == [
+             "echo",
+             "add",
+             "confirm",
+             "connect",
+             "summarize",
+             "roots",
+             "export"
+           ]
+
     assert r["cacheScope"] == "private"
 
     assert {:forbidden, ["issues:write"]} =

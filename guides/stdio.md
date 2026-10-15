@@ -125,10 +125,18 @@ never written; an unknown or finished request ID is ignored.
 
 Progress (when the request carries a `progressToken`) and log messages
 (at or above the request's `logLevel`, or the session's level) go out as
-notifications while the request runs. Elicitation is an `input_required`
-result on the modern era, since a modern stdio server never writes
-requests, and an `elicitation/create` request the client answers on
+notifications while the request runs. Elicitation, sampling and roots
+are an `input_required` result on the modern era, since a modern stdio
+server never writes requests, and an `elicitation/create`,
+`sampling/createMessage` or `roots/list` request the client answers on
 standard input on the legacy era.
+
+Tasks (`guides/tasks.md`) work as on HTTP for a modern client that
+declares the extension: the call answers with a task, and `tasks/get`,
+`tasks/update` and `tasks/cancel` follow it; a task's notifications go to
+a `subscriptions/listen` stream that asks for its `taskIds`. A server run
+on its own (`mix sake.stdio`, a script) starts tasks with their
+defaults; under a host's `Sake` supervisor, its `tasks:` options apply.
 
 `subscriptions/listen` is acknowledged, then every notification it asked
 for carries its subscription ID in `_meta`; it ends when the client
@@ -160,7 +168,9 @@ The command is looked up on the `PATH` unless it contains a `/`. Options:
 `env:` (a `nil` value unsets a variable), `cd:`, `stderr:` (`:inherit`,
 the default, shares this VM's standard error; `:ignore` discards the
 server's), `probe_timeout:` and `close_timeout:`, plus every option
-`connect/2` takes over HTTP except `headers:` and `req:`. The session
+`connect/2` takes over HTTP except `headers:` and `req:` — `on_input:`,
+`sampling:` and `roots:` answer a legacy server's requests on standard
+input, and a modern server's tasks are followed as on HTTP. The session
 holds the process that owns the subprocess, linked to the caller.
 
 Without `era:`, the client probes as the stdio transport asks: it sends

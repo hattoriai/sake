@@ -2,13 +2,13 @@ defmodule Sake.Client.Transport do
   @moduledoc false
   # One HTTP round trip: JSON or SSE. `post/3` returns the final JSON-RPC
   # message for the request (or `:accepted` for notifications), after
-  # answering any legacy elicitation requests seen on the stream. A legacy
-  # `elicitation/create` request is keyed for `on_input` by
-  # `params["_meta"]["ai.hattori.sake/key"]` when a Sake server sent it, or
-  # by the fixed key `"legacy"` for a foreign server that omits it. A stdio
-  # session's messages go to `Sake.Client.Stdio` instead.
+  # answering any legacy server requests seen on the stream (elicitation,
+  # sampling, roots; see `Sake.Client.Inputs`). A legacy request is keyed
+  # by `params["_meta"]["ai.hattori.sake/key"]` when a Sake server sent it,
+  # or by the fixed key `"legacy"` for a foreign server that omits it. A
+  # stdio session's messages go to `Sake.Client.Stdio` instead.
 
-  alias Sake.Client.{Auth, Challenge, Session}
+  alias Sake.Client.{Auth, Challenge, Inputs, Session}
   alias Sake.JSONRPC
   alias Sake.Plug.Headers
   alias Sake.Protocol
@@ -114,26 +114,20 @@ defmodule Sake.Client.Transport do
   @doc false
   # The client's response to a legacy server's request, on either transport.
   @spec answer(Session.t(), JSONRPC.id(), String.t(), map()) :: map()
-  def answer(session, rid, "elicitation/create", params) do
+  def answer(session, rid, method, params) do
     # The handler's key travels in `_meta` under our vendor prefix (see
     # `Sake.Elicit`); a foreign server that omits it falls back to the
     # fixed key `"legacy"`, since a legacy stream only ever asks one
     # question at a time.
     key = get_in(params, ["_meta", @vendor_key]) || "legacy"
-
-    answer =
-      if session.on_input,
-        do:
-          session.on_input.(
-            %{key => %{"method" => "elicitation/create", "params" => params}},
-            session
-          )[key],
-        else: %{"action" => "cancel"}
-
-    JSONRPC.result(rid, answer || %{"action" => "cancel"})
+    requests = %{key => %{"method" => method, "params" => params}}
+    reply(rid, Inputs.answer(session, requests)[key])
   end
 
-  def answer(_session, rid, _method, _params),
+  defp reply(rid, {:ok, result}), do: JSONRPC.result(rid, result)
+  defp reply(rid, {:error, error}), do: %{"jsonrpc" => "2.0", "id" => rid, "error" => error}
+
+  defp reply(rid, nil),
     do: JSONRPC.error(rid, JSONRPC.code(:method_not_found), "Method not found")
 
   @doc false
@@ -219,6 +213,10 @@ defmodule Sake.Client.Transport do
   defp name_header("tools/call", %{"name" => n}), do: [{"mcp-name", Headers.encode_value(n)}]
   defp name_header("prompts/get", %{"name" => n}), do: [{"mcp-name", Headers.encode_value(n)}]
   defp name_header("resources/read", %{"uri" => u}), do: [{"mcp-name", Headers.encode_value(u)}]
+
+  defp name_header("tasks/" <> _, %{"taskId" => id}) when is_binary(id),
+    do: [{"mcp-name", Headers.encode_value(id)}]
+
   defp name_header(_, _), do: []
 
   # The value is bound through a one-element generator: a bare `value =`

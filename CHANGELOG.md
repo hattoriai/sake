@@ -14,6 +14,20 @@ First release.
 - `Sake.Elicit` and `Sake.Progress`: ask the person for input mid-call
   (form and URL modes) and report progress or log messages, on both
   protocol eras.
+- `Sake.Sampling` and `Sake.Roots`: ask the client's model to complete a
+  conversation (with sampling tools from 2025-11-25) and ask for the
+  client's roots, on both eras, through the same path as elicitation;
+  `Sake.Input.all/2` asks several things in one round-trip.
+- Tasks (`io.modelcontextprotocol/tasks`): a tool declared with `task:`
+  runs in the background for a modern client that takes tasks, with
+  `tasks/get`, `tasks/update` and `tasks/cancel`, input and progress
+  through the task, cooperative cancellation (`Sake.Tasks.cancelled?/1`),
+  `notifications/tasks` on `subscriptions/listen`, principal binding, and
+  telemetry. `Sake.Tasks.Store.ETS` (default) and `Sake.Tasks.Store.Ecto`
+  with `Sake.Tasks.Migration` for several nodes. A tool's optional
+  `prepare/2` runs in the request before `execute/2`.
+- A component can return `{:error, {:missing_capability, capabilities}}`
+  for a `-32021` error naming the client capabilities it needs.
 - `Sake.Router`: Phoenix router macros for the well-known, OAuth API,
   authorize, and endpoint routes, including under a scope with a dynamic
   tenant segment.
@@ -30,8 +44,10 @@ First release.
   (production) token/client/code/consent stores, plus a grants API for a
   settings page and `Sake.Auth.prune/1` for expired rows.
 - `Sake.Client`: a functional client for both protocol eras, with era
-  probing, elicitation via `on_input`, and a parsed `WWW-Authenticate`
-  challenge on a 401.
+  probing, elicitation via `on_input`, sampling and roots via `sampling:`
+  and `roots:`, tool calls followed through tasks (and
+  `call_tool_async/3`, `get_task/2`, `update_task/3`, `cancel_task/2`),
+  and a parsed `WWW-Authenticate` challenge on a 401.
 - `Sake.Client.Auth`: with `auth:`, the client runs the MCP authorization
   flow itself on a 401: protected resource metadata (RFC 9728, from the
   challenge or the well-known URIs) checked against the endpoint,
@@ -48,17 +64,17 @@ First release.
   persistence (`Sake.Client.Auth.Store`).
 - `Sake.Stdio` and `mix sake.stdio`: the same server over standard input
   and output, on both eras, with concurrent requests, cancellation,
-  progress and log notifications, elicitation, subscriptions, and
-  shutdown when standard input closes. `Sake.Client.connect/2` launches
-  a stdio server with `{:stdio, command, args}`, probing the era as the
-  stdio transport asks; `on_notification:` sees a call's notifications
-  on either transport.
+  progress and log notifications, elicitation, sampling and roots,
+  subscriptions, tasks, and shutdown when standard input closes.
+  `Sake.Client.connect/2` launches a stdio server with
+  `{:stdio, command, args}`, probing the era as the stdio transport asks;
+  `on_notification:` sees a call's notifications on either transport.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the
   server and client scenarios of 2025-06-18, 2025-11-25 and 2026-07-28,
   the authorization-server scenarios against the development server's own
   authorization server, and, as a separate step, the extension scenarios.
-  Its baselines list the known, documented gaps (sampling and roots, SSE
-  resumability, the client's standalone GET stream, the tasks extension);
-  every `auth/*` client scenario passes.
+  Its baselines list the known, documented gaps (SSE resumability, the
+  client's standalone GET stream); every `auth/*` client scenario and
+  every tasks extension scenario passes.

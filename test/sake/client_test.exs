@@ -19,7 +19,17 @@ defmodule Sake.ClientTest do
         assert session.era == @era
         assert session.server_info["name"] == "sake-dev"
         assert {:ok, tools, session} = Client.list_tools(session)
-        assert Enum.map(tools, & &1.name) == ["echo", "add", "slow", "confirm", "connect"]
+
+        assert Enum.map(tools, & &1.name) == [
+                 "echo",
+                 "add",
+                 "slow",
+                 "confirm",
+                 "connect",
+                 "summarize",
+                 "roots",
+                 "export"
+               ]
 
         assert %Sake.Tool.Spec{headers: %{"Precision" => ["precision"]}} =
                  Enum.find(tools, &(&1.name == "add"))
@@ -92,6 +102,60 @@ defmodule Sake.ClientTest do
                  Client.call_tool(session, "confirm", %{})
       end
 
+      test "sampling through sampling:", %{url: url} do
+        parent = self()
+
+        sampling = fn params, _session ->
+          send(parent, {:sampled, params})
+
+          {:ok,
+           %{
+             "role" => "assistant",
+             "content" => %{"type" => "text", "text" => "Short."},
+             "model" => "test-model"
+           }}
+        end
+
+        assert {:ok, session} = Client.connect(url, era: @era, sampling: sampling)
+        assert session.capabilities == %{"sampling" => %{}}
+
+        assert {:ok, %{text: "Short.", is_error: false}, _} =
+                 Client.call_tool(session, "summarize", %{"text" => "Long."})
+
+        assert_receive {:sampled, %{"maxTokens" => 100, "messages" => [%{"role" => "user"}]}}
+      end
+
+      test "a task tool: followed to its result on modern, run synchronously on legacy", %{
+        url: url
+      } do
+        on_input = fn requests, _session ->
+          Map.new(requests, fn {key, _} ->
+            {key, %{"action" => "accept", "content" => %{"format" => "csv"}}}
+          end)
+        end
+
+        assert {:ok, session} = Client.connect(url, era: @era, on_input: on_input)
+
+        assert {:ok, %{text: "Exported 2 issues as csv."}, _} =
+                 Client.call_tool(session, "export", %{"n" => 2, "delay_ms" => 0})
+      end
+
+      test "roots through roots:, as a list or a function", %{url: url} do
+        roots = [%{"uri" => "file:///work", "name" => "Work"}]
+        assert {:ok, session} = Client.connect(url, era: @era, roots: roots)
+        assert session.capabilities == %{"roots" => %{"listChanged" => false}}
+
+        assert {:ok, %{text: "file:///work (Work)"}, _} = Client.call_tool(session, "roots", %{})
+
+        assert {:ok, session} =
+                 Client.connect(url,
+                   era: @era,
+                   roots: fn _session -> [%{"uri" => "file:///f"}] end
+                 )
+
+        assert {:ok, %{text: "file:///f (unnamed)"}, _} = Client.call_tool(session, "roots", %{})
+      end
+
       test "on_notification sees a call's progress", %{url: url} do
         parent = self()
         on_notification = fn method, params -> send(parent, {:notified, method, params}) end
@@ -105,6 +169,201 @@ defmodule Sake.ClientTest do
         assert_received {:notified, "notifications/progress", %{"progress" => 2}}
       end
     end
+  end
+
+  describe "tasks (modern)" do
+    defmodule ConformanceRouter do
+      use Plug.Router
+      plug :match
+      plug :dispatch
+
+      forward "/mcp",
+        to: Sake.Plug,
+        init_opts: [server: SakeDev.ConformanceServer, secret: String.duplicate("s", 64)]
+    end
+
+    setup do
+      %{url: HTTP.start(ConformanceRouter) <> "/mcp"}
+    end
+
+    test "the extension is declared per request, and only on modern", %{url: url} do
+      assert {:ok, session} = Client.connect(url, era: :modern)
+      assert session.capabilities == %{}
+
+      assert {:ok, {:task, %{"taskId" => id, "status" => "working"}}, session} =
+               Client.call_tool_async(session, "slow_compute", %{"seconds" => 0})
+
+      assert {:ok, %{"taskId" => ^id}, _} = Client.get_task(session, id)
+
+      assert {:ok, session} = Client.connect(url, era: :modern, tasks: false)
+
+      assert {:ok, %Sake.Client.ToolResult{text: "Computed result in 0s."}, session} =
+               Client.call_tool_async(session, "slow_compute", %{"seconds" => 0})
+
+      assert {:error, {:http, 400, %{"error" => %{"code" => -32_021}}}, _} =
+               Client.call_tool(session, "failing_job", %{})
+    end
+
+    test "call_tool follows a task: completed, a tool error, failed, cancelled", %{url: url} do
+      assert {:ok, session} = Client.connect(url, era: :modern)
+
+      assert {:ok, %{text: "Computed x in 0s.", is_error: false}, session} =
+               Client.call_tool(session, "slow_compute", %{"seconds" => 0, "label" => "x"})
+
+      assert {:ok, %{is_error: true, text: "The job failed."}, session} =
+               Client.call_tool(session, "failing_job", %{})
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {:rpc, %{"code" => -32_603}}, _} =
+                 Client.call_tool(session, "protocol_error_job", %{})
+      end)
+
+      assert {:ok, {:task, %{"taskId" => id}}, session} =
+               Client.call_tool_async(session, "slow_compute", %{"seconds" => 60})
+
+      assert {:ok, session} = Client.cancel_task(session, id)
+      assert {:ok, %{"status" => "cancelled"}, _} = Client.get_task(session, id)
+    end
+
+    test "input requests are answered through tasks/update, once each", %{url: url} do
+      parent = self()
+
+      on_input = fn requests, _session ->
+        send(parent, {:asked, Map.keys(requests)})
+
+        Map.new(requests, fn {key, _} ->
+          {key, %{"action" => "accept", "content" => %{"name" => key, "confirm" => true}}}
+        end)
+      end
+
+      assert {:ok, session} = Client.connect(url, era: :modern, on_input: on_input)
+
+      assert {:ok, %{text: "Deleted a.txt."}, session} =
+               Client.call_tool(session, "confirm_delete", %{"filename" => "a.txt"})
+
+      assert_received {:asked, ["confirm"]}
+      refute_received {:asked, _}
+
+      assert {:ok, %{text: "Answered: first, second"}, _} =
+               Client.call_tool(session, "multi_input", %{})
+
+      # Both questions arrive pending at once or one after the other,
+      # depending on timing; either way each is asked exactly once.
+      asked = collect_asked([])
+      assert Enum.sort(asked) == ["first", "second"]
+    end
+
+    test "the lower-level calls", %{url: url} do
+      assert {:ok, session} =
+               Client.connect(url, era: :modern, capabilities: %{"elicitation" => %{}})
+
+      assert {:ok, {:task, %{"taskId" => id}}, session} =
+               Client.call_tool_async(session, "confirm_delete", %{"filename" => "b.txt"})
+
+      task = wait_status(session, id, "input_required")
+      assert %{"confirm" => %{"method" => "elicitation/create"}} = task["inputRequests"]
+
+      assert {:ok, session} =
+               Client.update_task(session, id, %{
+                 "confirm" => %{"action" => "accept", "content" => %{"confirm" => false}}
+               })
+
+      task = wait_status(session, id, "completed")
+      assert %{"result" => %{"content" => [%{"text" => "Kept b.txt."}]}} = task
+
+      assert {:error, {:rpc, %{"code" => -32_602}}, _} = Client.get_task(session, "nope")
+    end
+
+    test "a task still running after task_timeout is cancelled", %{url: url} do
+      parent = self()
+      handler = fn _event, _measurements, meta, _ -> send(parent, {:started, meta.task_id}) end
+      :telemetry.attach("client-timeout", [:sake, :task, :start], handler, nil)
+      on_exit(fn -> :telemetry.detach("client-timeout") end)
+
+      assert {:ok, session} = Client.connect(url, era: :modern, task_timeout: 100)
+
+      assert {:error, :task_timeout, _} =
+               Client.call_tool(session, "slow_compute", %{"seconds" => 60})
+
+      assert_received {:started, id}
+      assert {:ok, %{status: :cancelled}} = Sake.Tasks.fetch(id)
+    end
+  end
+
+  defp collect_asked(acc) do
+    receive do
+      {:asked, keys} -> collect_asked(acc ++ keys)
+    after
+      0 -> acc
+    end
+  end
+
+  defp wait_status(session, id, status, tries \\ 100) do
+    {:ok, task, session} = Client.get_task(session, id)
+
+    cond do
+      task["status"] == status -> task
+      tries == 0 -> flunk("task #{id} never became #{status}: #{inspect(task)}")
+      true -> Process.sleep(20) && wait_status(session, id, status, tries - 1)
+    end
+  end
+
+  test "on a legacy stream, a sampling error goes back as a JSON-RPC error", %{url: url} do
+    sampling = fn _params, _session -> {:error, %{"code" => -1, "message" => "Declined"}} end
+    assert {:ok, session} = Client.connect(url, era: :legacy, sampling: sampling)
+
+    assert {:ok, %{is_error: true, text: "The client did not summarize."}, _} =
+             Client.call_tool(session, "summarize", %{"text" => "x"})
+  end
+
+  test "a legacy server request nothing can answer gets an error; elicitation a cancel" do
+    bypass = Bypass.open()
+    url = "http://localhost:#{bypass.port}/mcp"
+    parent = self()
+
+    Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      msg = JSON.decode!(body)
+
+      case msg do
+        %{"method" => "initialize"} ->
+          json(conn, msg["id"], %{"protocolVersion" => "2025-11-25", "capabilities" => %{}})
+
+        %{"method" => "notifications/initialized"} ->
+          Plug.Conn.resp(conn, 202, "")
+
+        %{"method" => "tools/call"} ->
+          requests = [
+            Sake.JSONRPC.request("s1", "sampling/createMessage", %{"messages" => []}),
+            Sake.JSONRPC.request("r1", "roots/list", %{}),
+            Sake.JSONRPC.request("e1", "elicitation/create", %{"message" => "?"}),
+            Sake.JSONRPC.request("p1", "ping", %{}),
+            Sake.JSONRPC.result(msg["id"], %{"content" => []})
+          ]
+
+          conn
+          |> Plug.Conn.put_resp_content_type("text/event-stream")
+          |> Plug.Conn.resp(200, Enum.map_join(requests, &"data: #{JSON.encode!(&1)}\n\n"))
+
+        answer ->
+          send(parent, {:answer, answer})
+          Plug.Conn.resp(conn, 202, "")
+      end
+    end)
+
+    assert {:ok, session} = Client.connect(url, era: :legacy)
+    assert {:ok, %{content: []}, _} = Client.call_tool(session, "x", %{})
+
+    assert_receive {:answer, %{"id" => "s1", "error" => %{"code" => -32_601}}}
+    assert_receive {:answer, %{"id" => "r1", "error" => %{"code" => -32_601}}}
+    assert_receive {:answer, %{"id" => "e1", "result" => %{"action" => "cancel"}}}
+    assert_receive {:answer, %{"id" => "p1", "error" => %{"code" => -32_601}}}
+  end
+
+  defp json(conn, id, result) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.resp(200, JSON.encode!(%{"jsonrpc" => "2.0", "id" => id, "result" => result}))
   end
 
   test "a bad tool definition from a server is dropped with a warning" do

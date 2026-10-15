@@ -8,12 +8,21 @@ defmodule Sake.Client do
       {:ok, result, session} = Sake.Client.call_tool(session, "search", %{"query" => "x"})
 
   The client is functional: every call returns the updated session. Pass
-  `on_input:` to answer elicitation requests, `on_notification:` (a
-  function of a method and its params) to see the progress and log
-  notifications of a call, and `auth:` to have the client run the MCP
-  authorization flow itself on a 401 (see `Sake.Client.Auth`); without
-  it, a 401 comes back as
+  `on_input:` to answer elicitation requests, `sampling:` to answer
+  sampling requests (`fn params, session -> {:ok, result} | {:error,
+  error} end`), `roots:` to share roots (a list of `%{"uri" => ...,
+  "name" => ...}` maps, or a function of the session that returns one),
+  `on_notification:` (a function of a method and its params) to see the
+  progress and log notifications of a call, and `auth:` to have the client
+  run the MCP authorization flow itself on a 401 (see `Sake.Client.Auth`);
+  without it, a 401 comes back as
   `{:error, {:unauthorized, %Sake.Client.Challenge{}}}`.
+
+  On the modern protocol the client declares the tasks extension, so a
+  server may answer a tool call with a task; `call_tool/3` follows it to
+  the end (`task_timeout:`, in ms, default five minutes), and
+  `call_tool_async/3` hands it back instead. `tasks: false` leaves the
+  extension out.
 
   `{:stdio, command, args}` in place of a URL launches the server as a
   subprocess and talks to it over its standard input and output:
@@ -30,7 +39,7 @@ defmodule Sake.Client do
 
   require Logger
 
-  alias Sake.Client.{Auth, Session, ToolResult, Transport}
+  alias Sake.Client.{Auth, Inputs, Session, ToolResult, Transport}
   alias Sake.{Content, JSONRPC, Protocol, Schema}
 
   # The errors only a modern server sends; a legacy server answers the
@@ -39,6 +48,7 @@ defmodule Sake.Client do
   @modern_errors [-32_020, -32_021, -32_022]
   @legacy_errors [-32_601, -32_602]
   @max_retries 3
+  @tasks_extension "io.modelcontextprotocol/tasks"
   @probe_timeout 10_000
 
   # A probe that ends in one of these was answered by a modern server, or
@@ -87,7 +97,6 @@ defmodule Sake.Client do
   end
 
   defp build_session(url, opts) do
-    on_input = opts[:on_input]
     client_info = opts[:client_info] || %{"name" => "Sake", "version" => Sake.version()}
     req = opts[:req] || []
 
@@ -95,9 +104,13 @@ defmodule Sake.Client do
       url: url,
       headers: opts[:headers] || [],
       client_info: client_info,
-      capabilities: opts[:capabilities] || default_capabilities(on_input),
-      on_input: on_input,
+      capabilities: opts[:capabilities] || default_capabilities(opts),
+      on_input: opts[:on_input],
+      sampling: opts[:sampling],
+      roots: opts[:roots],
       on_notification: opts[:on_notification],
+      tasks: Keyword.get(opts, :tasks, true),
+      task_timeout: opts[:task_timeout] || 300_000,
       # There is no HTTP authorization on stdio: the server takes its
       # credentials from its environment.
       auth:
@@ -107,8 +120,17 @@ defmodule Sake.Client do
     }
   end
 
-  defp default_capabilities(nil), do: %{}
-  defp default_capabilities(_on_input), do: %{"elicitation" => %{}}
+  # A client claims only what it can answer: each answering option turns
+  # on its own capability.
+  defp default_capabilities(opts) do
+    %{}
+    |> put_capability(opts[:on_input], "elicitation", %{})
+    |> put_capability(opts[:sampling], "sampling", %{})
+    |> put_capability(opts[:roots], "roots", %{"listChanged" => false})
+  end
+
+  defp put_capability(caps, nil, _name, _value), do: caps
+  defp put_capability(caps, _option, name, value), do: Map.put(caps, name, value)
 
   defp modern(session), do: %{session | era: :modern, revision: Protocol.modern()}
 
@@ -282,30 +304,81 @@ defmodule Sake.Client do
     end
   end
 
+  @doc """
+  Calls a tool and returns its result. When the server answers with a task
+  (see `Sake.Tasks`), the call polls it to the end, answering its input
+  requests as a retry would, and returns the final result: a failed task
+  is `{:error, {:rpc, error}, session}`, a cancelled one `{:error,
+  :cancelled, session}`, and one still running after `task_timeout:` is
+  cancelled and returned as `{:error, :task_timeout, session}`.
+  """
   @spec call_tool(Session.t(), String.t(), map()) ::
           {:ok, ToolResult.t(), Session.t()} | {:error, term(), Session.t()}
   def call_tool(session, name, arguments) do
-    with {:ok, result, session} <-
-           request(session, "tools/call", %{"name" => name, "arguments" => arguments},
-             tool: session.tools[name]
-           ) do
-      content =
-        result["content"]
-        |> List.wrap()
-        |> Enum.map(&Content.from_wire/1)
-        |> Enum.reject(&match?({:error, _}, &1))
-
-      text = content |> Enum.filter(&(&1.type == :text)) |> Enum.map_join("\n", & &1.text)
-
-      {:ok,
-       %ToolResult{
-         content: content,
-         structured: result["structuredContent"],
-         is_error: result["isError"] == true,
-         text: text,
-         meta: result["_meta"] || %{}
-       }, session}
+    with {:ok, result, session} <- tools_call(session, name, arguments),
+         {:ok, result, session} <- await_task(session, result) do
+      {:ok, tool_result(result), session}
     end
+  end
+
+  @doc """
+  Calls a tool and returns at once: the result, or `{:task, task}` when the
+  server made a task of the call. Follow the task with `get_task/2`,
+  answer its `inputRequests` with `update_task/3`, and stop it with
+  `cancel_task/2`.
+  """
+  @spec call_tool_async(Session.t(), String.t(), map()) ::
+          {:ok, ToolResult.t() | {:task, map()}, Session.t()} | {:error, term(), Session.t()}
+  def call_tool_async(session, name, arguments) do
+    case tools_call(session, name, arguments) do
+      {:ok, %{"resultType" => "task"} = task, session} -> {:ok, {:task, task}, session}
+      {:ok, result, session} -> {:ok, tool_result(result), session}
+      error -> error
+    end
+  end
+
+  @doc "The task as the server has it now: its status, and `inputRequests`, `result` or `error`."
+  @spec get_task(Session.t(), String.t()) ::
+          {:ok, map(), Session.t()} | {:error, term(), Session.t()}
+  def get_task(session, task_id), do: request(session, "tasks/get", %{"taskId" => task_id})
+
+  @doc "Answers some or all of a task's `inputRequests`, by key."
+  @spec update_task(Session.t(), String.t(), map()) ::
+          {:ok, Session.t()} | {:error, term(), Session.t()}
+  def update_task(session, task_id, responses) do
+    params = %{"taskId" => task_id, "inputResponses" => responses}
+    with {:ok, _, session} <- request(session, "tasks/update", params), do: {:ok, session}
+  end
+
+  @doc "Asks the server to cancel a task. Cancellation is cooperative: the task may still end otherwise."
+  @spec cancel_task(Session.t(), String.t()) :: {:ok, Session.t()} | {:error, term(), Session.t()}
+  def cancel_task(session, task_id) do
+    with {:ok, _, session} <- request(session, "tasks/cancel", %{"taskId" => task_id}),
+         do: {:ok, session}
+  end
+
+  defp tools_call(session, name, arguments) do
+    request(session, "tools/call", %{"name" => name, "arguments" => arguments},
+      tool: session.tools[name]
+    )
+  end
+
+  defp tool_result(result) do
+    content =
+      result["content"]
+      |> List.wrap()
+      |> Enum.map(&Content.from_wire/1)
+      |> Enum.reject(&match?({:error, _}, &1))
+
+    text = content |> Enum.filter(&(&1.type == :text)) |> Enum.map_join("\n", & &1.text)
+
+    %ToolResult{
+      content: content,
+      structured: result["structuredContent"],
+      is_error: result["isError"] == true,
+      text: text,
+      meta: result["_meta"] || %{}
+    }
   end
 
   @spec list_resources(Session.t()) :: {:ok, [map()], Session.t()} | {:error, term(), Session.t()}
@@ -467,8 +540,14 @@ defmodule Sake.Client do
 
   defp retry(error, _message, _opts, _authorizations), do: error
 
+  # Only answers go back: a request nothing could answer (a sampling or
+  # roots request without `sampling:` or `roots:`) is left out, and the
+  # server asks again or carries on without it.
   defp retry_with_inputs(session, method, params, result, opts, attempt) do
-    responses = answer(session, result["inputRequests"] || %{})
+    responses =
+      for {key, {:ok, answer}} <- Inputs.answer(session, result["inputRequests"] || %{}),
+          into: %{},
+          do: {key, answer}
 
     retry =
       params
@@ -482,11 +561,6 @@ defmodule Sake.Client do
   defp put_request_state(params, nil), do: params
   defp put_request_state(params, state), do: Map.put(params, "requestState", state)
 
-  defp answer(%Session{on_input: nil}, requests),
-    do: Map.new(requests, fn {k, _} -> {k, %{"action" => "cancel"}} end)
-
-  defp answer(%Session{on_input: fun} = session, requests), do: fun.(requests, session)
-
   # A client that takes notifications asks for progress on every request,
   # under the request's own id.
   defp progress_token(params, %Session{on_notification: nil}, _id), do: params
@@ -498,8 +572,79 @@ defmodule Sake.Client do
     %{
       Protocol.meta(:protocol_version) => session.revision || Protocol.modern(),
       Protocol.meta(:client_info) => session.client_info,
-      Protocol.meta(:client_capabilities) => session.capabilities
+      Protocol.meta(:client_capabilities) => modern_capabilities(session)
     }
+  end
+
+  # The tasks extension is modern only, so it is declared per request
+  # rather than in the capabilities a legacy `initialize` sends.
+  defp modern_capabilities(%Session{tasks: false} = session), do: session.capabilities
+
+  defp modern_capabilities(session) do
+    Map.update(
+      session.capabilities,
+      "extensions",
+      %{@tasks_extension => %{}},
+      &Map.put_new(&1, @tasks_extension, %{})
+    )
+  end
+
+  # ---- tasks: a call the server made a task of is polled to the end
+
+  defp await_task(%Session{tasks: true} = session, %{"resultType" => "task"} = task) do
+    deadline = System.monotonic_time(:millisecond) + session.task_timeout
+    follow(session, task, deadline, %{})
+  end
+
+  # A server must not answer with a task a client that did not declare
+  # the extension.
+  defp await_task(session, %{"resultType" => "task"} = task),
+    do: {:error, {:unexpected_task, task}, session}
+
+  defp await_task(session, result), do: {:ok, result, session}
+
+  # `asked` holds the input request keys already handled, so a request
+  # still listed on the next poll (the server applies an update
+  # eventually) is not answered twice.
+  defp follow(session, %{"status" => "completed"} = task, _deadline, _asked),
+    do: {:ok, task["result"] || %{}, session}
+
+  defp follow(session, %{"status" => "failed"} = task, _deadline, _asked),
+    do: {:error, {:rpc, task["error"]}, session}
+
+  defp follow(session, %{"status" => "cancelled"}, _deadline, _asked),
+    do: {:error, :cancelled, session}
+
+  defp follow(session, %{"status" => "input_required"} = task, deadline, asked) do
+    requests = Map.drop(task["inputRequests"] || %{}, Map.keys(asked))
+
+    responses =
+      for {key, {:ok, answer}} <- Inputs.answer(session, requests), into: %{}, do: {key, answer}
+
+    asked = Map.merge(asked, Map.new(requests, fn {key, _} -> {key, true} end))
+
+    if responses == %{} do
+      poll(session, task, deadline, asked)
+    else
+      with {:ok, session} <- update_task(session, task["taskId"], responses),
+           do: poll(session, task, deadline, asked)
+    end
+  end
+
+  defp follow(session, task, deadline, asked), do: poll(session, task, deadline, asked)
+
+  defp poll(session, task, deadline, asked) do
+    left = deadline - System.monotonic_time(:millisecond)
+
+    if left <= 0 do
+      _ = cancel_task(session, task["taskId"])
+      {:error, :task_timeout, session}
+    else
+      Process.sleep(min(task["pollIntervalMs"] || 1_000, left))
+
+      with {:ok, task, session} <- get_task(session, task["taskId"]),
+           do: follow(session, task, deadline, asked)
+    end
   end
 
   # ---- tool definitions from the wire

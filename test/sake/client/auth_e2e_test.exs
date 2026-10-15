@@ -32,7 +32,8 @@ defmodule Sake.Client.AuthE2ETest do
          store: {Sake.Auth.Store.ETS, []}
        ],
        secret_key_base: SakeTest.ModernClient.secret(),
-       streams: false}
+       streams: false,
+       tasks: false}
     )
 
     {:ok, jar} = Agent.start_link(fn -> nil end)

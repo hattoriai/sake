@@ -10,6 +10,8 @@ defmodule Sake.Client.Session do
     :server_capabilities,
     :instructions,
     :on_input,
+    :sampling,
+    :roots,
     :on_notification,
     :stdio,
     :auth,
@@ -18,6 +20,8 @@ defmodule Sake.Client.Session do
     capabilities: %{},
     next_id: 1,
     tools: %{},
+    tasks: true,
+    task_timeout: 300_000,
     req: []
   ]
 end

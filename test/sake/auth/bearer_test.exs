@@ -22,7 +22,17 @@ defmodule Sake.Auth.BearerTest do
     conn = call(access)
     assert conn.status == 200
     result = ModernClient.json(conn)["result"]
-    assert Enum.map(result["tools"], & &1["name"]) == ["echo", "add", "confirm", "connect"]
+
+    assert Enum.map(result["tools"], & &1["name"]) == [
+             "echo",
+             "add",
+             "confirm",
+             "connect",
+             "summarize",
+             "roots",
+             "export"
+           ]
+
     assert result["cacheScope"] == "private"
 
     conn =

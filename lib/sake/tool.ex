@@ -13,17 +13,30 @@ defmodule Sake.Tool do
   Options: `name` (default: the module's last segment in snake case),
   `title`, `description`, `icons`, `scope` (one or many), `annotations`
   (`read_only`, `destructive`, `idempotent`, `open_world`), `stream`,
-  `ttl`, `meta`, `input_schema` (a schema map instead of `arg` lines).
+  `ttl`, `meta`, `input_schema` (a schema map instead of `arg` lines),
+  `task` (`:optional` or `true`, or `:required`: the tool runs as a task
+  for a client that takes one, see `Sake.Tasks`).
   """
 
   alias Sake.Schema
 
   @callback spec() :: Sake.Tool.Spec.t()
   @callback execute(args :: map(), ctx :: Sake.Context.t()) ::
-              {:ok, term()} | {:ok, term(), keyword()} | {:error, String.t()}
+              {:ok, term()}
+              | {:ok, term(), keyword()}
+              | {:error, String.t()}
+              | {:error, {:missing_capability, map()}}
   @callback complete(arg :: String.t(), partial :: String.t(), ctx :: Sake.Context.t()) ::
               {:ok, [String.t()]} | {:ok, [String.t()], keyword()}
-  @optional_callbacks complete: 3
+  @doc """
+  Runs before `execute/2`, in the request itself, and returns the
+  arguments `execute/2` receives (or a tool error). A task tool asks the
+  client for input here when the answer decides whether the task should
+  start at all: inside the request, the question travels as a multi
+  round-trip request; inside the task, it would wait on the task.
+  """
+  @callback prepare(args :: map(), ctx :: Sake.Context.t()) :: {:ok, map()} | {:error, String.t()}
+  @optional_callbacks complete: 3, prepare: 2
 
   @name_re ~r/^[A-Za-z0-9_.\-]{1,128}$/
 
@@ -43,6 +56,7 @@ defmodule Sake.Tool do
       scopes: [],
       stream: false,
       ttl: nil,
+      task: nil,
       headers: %{}
     ]
 
@@ -144,10 +158,23 @@ defmodule Sake.Tool do
       scopes: List.wrap(opts[:scope]),
       stream: opts[:stream] || false,
       ttl: opts[:ttl],
+      task: task_support!(module, opts[:task]),
       meta: opts[:meta],
       headers: Schema.header_paths(input_schema)
     }
   end
+
+  defp task_support!(_module, nil), do: nil
+  defp task_support!(_module, false), do: nil
+  defp task_support!(_module, true), do: :optional
+  defp task_support!(_module, support) when support in [:optional, :required], do: support
+
+  defp task_support!(module, other),
+    do:
+      raise(
+        ArgumentError,
+        "#{inspect(module)}: task: must be :optional or :required, got #{inspect(other)}"
+      )
 
   defp output_schema([]), do: nil
   defp output_schema(output_args), do: Schema.build(output_args)

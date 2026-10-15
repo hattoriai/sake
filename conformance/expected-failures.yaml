@@ -6,24 +6,6 @@
 # lists one check of a scenario whose other checks must pass. See
 # guides/protocol_versions.md for the reasoning behind each entry.
 server:
-  # Sake has no sampling (`sampling/createMessage`) and no roots
-  # (`roots/list`), in either era (see guides/protocol_versions.md), so
-  # the development server has none of the fixtures these scenarios call
-  # and they fail with "Unknown tool". tools-call-sampling is the legacy
-  # server-to-client request; the input-required-result-* ones ask for the
-  # same inputs through an input-required result, and capability-check
-  # needs a tool that falls back to sampling when the client has no
-  # elicitation.
-  - tools-call-sampling
-  - input-required-result-basic-sampling
-  - input-required-result-basic-list-roots
-  - input-required-result-multiple-input-requests
-  - input-required-result-capability-check
-  # The same gap: the scenario's `test_missing_capability` fixture needs
-  # sampling, to show a -32021 error for a client that did not declare
-  # it. The rest of server-stateless passes.
-  - server-stateless:sep-2575-server-rejects-undeclared-capability
-  - server-stateless:sep-2575-missing-capability-http-400
   # No resumability (see guides/protocol_versions.md): a legacy POST
   # stream carries no priming event and no `retry` field, which the
   # scenario reports as warnings.
