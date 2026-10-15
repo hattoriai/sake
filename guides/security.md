@@ -92,6 +92,18 @@ minutes. `inputResponses` sent without a `requestState` are rejected
 outright, even if they would otherwise look like a plausible answer: there
 is no unsigned path back into a handler that is already mid-flow.
 
+## Tasks
+
+A task ID carries 144 random bits, and every task is bound to the
+principal that created it — the token's subject, otherwise a SHA-256
+digest of the host's scope. `tasks/get`, `tasks/update`, `tasks/cancel`
+and a `subscriptions/listen` asking for `taskIds` treat another
+principal's task exactly like one that does not exist. On an endpoint
+with neither authorization nor a scope, the task ID is the only
+credential, so keep it as secret as the result it unlocks. A
+`tasks/update` answer only counts for a question the task is waiting
+on; anything else is ignored. See `guides/tasks.md`.
+
 ## Loopback redirects
 
 Sake accepts `https://` redirect URIs

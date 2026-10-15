@@ -32,7 +32,8 @@ snake-cased — `MyApp.MCP.Add` becomes `"add"`), `title`, `description`,
 `title`), `stream` (see Streaming below), `ttl` (milliseconds; see Caching
 below), `meta` (a map merged into the tool's `_meta`), and `input_schema`
 (a raw JSON Schema map instead of `arg` lines, for a shape `arg` cannot
-express).
+express), and `task` (`:optional` or `:required`; see
+`guides/tasks.md`).
 
 List the tool on a server:
 
@@ -92,6 +93,11 @@ syntax. `execute/2` returns:
   on the result.
 - `{:error, text}` — `isError: true` with one text content block (not a
   JSON-RPC error: the call succeeded, the *tool* failed).
+- `{:error, {:missing_capability, capabilities}}` — the tool cannot run
+  for this client at all: a `-32021` JSON-RPC error (HTTP 400) whose
+  `data.requiredCapabilities` is `capabilities`, e.g.
+  `%{"sampling" => %{}}`. Resources' `read/2` and prompts' `get/2` may
+  return it too.
 
 ## Caching
 
@@ -197,6 +203,76 @@ client's `on_input` map (see `guides/client.md`) is keyed the same way.
 `inputResponses` sent back without the matching `requestState` are
 rejected — the modern retry mechanism ties an answer to the exact call it
 answers, so a client cannot resume a handler from an unrelated response.
+
+Inside a task (see `guides/tasks.md`), an elicitation waits on the task
+for the client's `tasks/update` instead; nothing runs twice there.
+
+## Sampling and roots
+
+A tool can also ask the client's model to complete a conversation, and
+ask the client which roots (folders, repositories) it shares:
+
+```elixir
+case Sake.Sampling.create_message(ctx, :summary, [user: "Summarize: " <> text],
+       max_tokens: 200,
+       system_prompt: "You write one-line summaries."
+     ) do
+  {:ok, %Sake.Sampling.Result{text: summary}} -> {:ok, summary}
+  {:error, :unsupported} -> {:error, "This client does not support sampling."}
+  {:error, _reason} -> {:error, "The client did not answer."}
+end
+
+case Sake.Roots.list(ctx) do
+  {:ok, roots} -> {:ok, Enum.map_join(roots, "\n", & &1.uri)}
+  {:error, _reason} -> {:error, "No roots."}
+end
+```
+
+Both travel exactly like `Sake.Elicit`: a multi round-trip request on a
+modern connection (so the same rule — no side effects before the call),
+a request on the call's stream on a legacy one, and a wait on the task
+inside a task. Each is keyed (`:summary` above; `Sake.Roots.list/2`
+defaults to `:roots`), and returns `{:error, :unsupported}` when the
+client did not declare the capability. `Sake.Sampling.create_message/4`
+takes `max_tokens` (required), `system_prompt`, `temperature`,
+`stop_sequences`, `model_preferences`, `include_context`, `metadata`, and
+on 2025-11-25 and later, `tools` and `tool_choice` (which also need the
+client's `sampling.tools` capability). A legacy client that answers with
+a JSON-RPC error comes back as `{:error, error}`.
+
+Sampling and roots are deprecated in the 2026-07-28 revision (SEP-2577):
+they stay in the specification for at least twelve months, and new
+servers are asked to integrate with a model provider directly instead of
+sampling, and to take directories and files as tool arguments, resource
+URIs or configuration instead of roots. Sake supports both on every
+revision because many clients still rely on them; prefer the recommended
+route in new tools where you can.
+
+## Several questions at once
+
+Called one after the other, input calls ask one question per round-trip
+on a modern connection. `Sake.Input.all/2` asks them together:
+
+```elixir
+[name, roots] =
+  Sake.Input.all(ctx, [
+    &Sake.Elicit.form(&1, :name, "Who are you?", schema),
+    &Sake.Roots.list(&1, :roots)
+  ])
+```
+
+Every unanswered question goes out in one input-required result (and,
+inside a task, is pending on the task at once); a question whose
+capability the client did not declare comes back
+`{:error, :unsupported}` without being asked.
+
+## Before `execute/2`: `prepare/2`
+
+A tool may define `prepare(args, ctx)`, which runs in the request before
+`execute/2` and returns the arguments `execute/2` receives (or
+`{:error, text}`). It matters for task tools: questions asked in
+`prepare/2` travel on the original call, before a task exists — see
+`guides/tasks.md`.
 
 ## Scopes
 

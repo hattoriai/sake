@@ -85,6 +85,7 @@ defmodule Sake.MixProject do
         "README.md",
         "guides/quickstart.md",
         "guides/tools.md",
+        "guides/tasks.md",
         "guides/resources_and_prompts.md",
         "guides/authorization.md",
         "guides/tenants.md",
@@ -95,7 +96,7 @@ defmodule Sake.MixProject do
       ],
       groups_for_extras: [
         Guides:
-          ~w(guides/quickstart.md guides/tools.md guides/resources_and_prompts.md guides/authorization.md guides/tenants.md guides/client.md),
+          ~w(guides/quickstart.md guides/tools.md guides/tasks.md guides/resources_and_prompts.md guides/authorization.md guides/tenants.md guides/client.md),
         Reference: ~w(guides/protocol_versions.md guides/security.md)
       ],
       groups_for_modules: [

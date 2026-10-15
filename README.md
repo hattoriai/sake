@@ -58,6 +58,8 @@ See `guides/quickstart.md` for turning on authorization in five steps, or
 | Tools, resources, prompts | yes | yes | yes |
 | Progress, logging | yes | yes | yes |
 | Elicitation (form, url) | yes | yes (url from 2025-11-25) | form only |
+| Sampling, roots | yes (deprecated) | yes (sampling tools from 2025-11-25) | yes |
+| Tasks (`io.modelcontextprotocol/tasks`) | yes | — (task tools run synchronously) | — |
 | Subscriptions | `subscriptions/listen` stream | `resources/subscribe` | `resources/subscribe` |
 | Batched requests | — (stateless, one at a time) | — | yes |
 | `Sake.Client` | yes | yes | connects, no batching |
@@ -76,6 +78,7 @@ endpoint's resource URL. See `guides/authorization.md`.
 
 - [Quickstart](guides/quickstart.md)
 - [Tools](guides/tools.md)
+- [Tasks](guides/tasks.md)
 - [Resources and prompts](guides/resources_and_prompts.md)
 - [Authorization](guides/authorization.md)
 - [Multi-tenant endpoints](guides/tenants.md)
@@ -85,10 +88,10 @@ endpoint's resource URL. See `guides/authorization.md`.
 
 ## Status
 
-0.1: the server (both eras, one endpoint), the authorization server
-(bearer, CIMD, dynamic registration, consent, token rotation), and the
-client. Next: client-side OAuth, a stdio transport, the device
-authorization grant, and tasks.
+0.1: the server (both eras, one endpoint, with elicitation, sampling,
+roots and the tasks extension), the authorization server (bearer, CIMD,
+dynamic registration, consent, token rotation), and the client. Next:
+client-side OAuth, a stdio transport, and the device authorization grant.
 
 ## License
 

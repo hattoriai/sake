@@ -18,7 +18,8 @@ returning `{:ok, session}` (no prior session to update).
 
 ## Calls
 
-`list_tools/1`, `call_tool/3`, `list_resources/1`,
+`list_tools/1`, `call_tool/3`, `call_tool_async/3`, `get_task/2`,
+`update_task/3`, `cancel_task/2`, `list_resources/1`,
 `list_resource_templates/1`, `read_resource/2`, `list_prompts/1`,
 `get_prompt/3`, `complete/4` (`{:prompt, name}` or `{:resource, uri}`, an
 argument name, and the partial value), `ping/1`, `discover/1` (the modern
@@ -73,6 +74,57 @@ fixed key `"legacy"` from a server that does not.
 Without `on_input`, every elicitation is answered `"cancel"` automatically
 — a script that never expects to be asked anything still behaves
 correctly rather than hanging.
+
+## `sampling:` and `roots:`
+
+```elixir
+sampling = fn %{"messages" => messages, "maxTokens" => max}, _session ->
+  case MyLLM.complete(messages, max_tokens: max) do
+    {:ok, text} ->
+      {:ok, %{"role" => "assistant", "content" => %{"type" => "text", "text" => text}, "model" => "my-model"}}
+
+    {:error, _} ->
+      {:error, %{"code" => -1, "message" => "Sampling declined"}}
+  end
+end
+
+{:ok, session} =
+  Sake.Client.connect(url,
+    sampling: sampling,
+    roots: [%{"uri" => "file:///home/ana/project", "name" => "Project"}]
+  )
+```
+
+`sampling:` answers `sampling/createMessage` requests: a function of the
+request's params and the session, returning `{:ok, result}` (a
+`CreateMessageResult` map) or `{:error, error}` (a JSON-RPC error map).
+`roots:` answers `roots/list`: a list of root maps, or a function of the
+session that returns one. Each turns on its capability (`sampling`, and
+`roots` with `listChanged: false`) the way `on_input:` turns on
+`elicitation`. Requests reach them however the server asks — in a modern
+retry, on a legacy call's stream, or from a task.
+
+A request nothing can answer (a server should not send one, but a foreign
+server might) is left out of a modern retry, and gets a "method not
+found" error on a legacy stream; an elicitation is still answered
+`"cancel"`.
+
+## Tasks
+
+On the modern protocol the client declares the tasks extension on every
+request (`tasks: false` leaves it out), so a server may make a task of a
+tool call (see `guides/tasks.md`). `call_tool/3` hides this: it polls the
+task at the interval the server suggests, answers its input requests
+through `tasks/update` with the same routing as above (each question
+once), and returns the final result — `{:error, {:rpc, error}, session}`
+for a failed task, `{:error, :cancelled, session}` for a cancelled one.
+A task still running after `task_timeout:` (ms, default five minutes) is
+cancelled and returned as `{:error, :task_timeout, session}`.
+
+To manage tasks yourself, `call_tool_async/3` returns
+`{:ok, {:task, task}, session}` (or the plain result when the server
+answered without a task), and `get_task/2`, `update_task/3` and
+`cancel_task/2` drive it.
 
 ## The 401 challenge, and what to do with it today
 
