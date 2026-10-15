@@ -69,4 +69,12 @@ else
   ./authorization.sh || STATUS=1
 fi
 
+# A scenario that fails because a request got no JSON-RPC answer at all
+# (a crash, a dropped connection) says nothing more in the suite's own
+# output: the development server's log is where the reason is.
+if [ "$STATUS" -ne 0 ]; then
+  echo "=== the development server's log (conformance/results.log), last 300 lines ==="
+  tail -n 300 results.log
+fi
+
 exit $STATUS
