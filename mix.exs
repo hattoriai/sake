@@ -111,7 +111,8 @@ defmodule Sake.MixProject do
           Sake.Plug,
           Sake.Plug.Streams,
           Sake.Plug.Headers,
-          Sake.Router
+          Sake.Router,
+          Sake.Stdio
         ],
         Authorization: [
           Sake.Auth,

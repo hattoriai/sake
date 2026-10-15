@@ -99,7 +99,8 @@ defmodule Sake.Plug.Stream do
   # dead connection must kill the handler), so its body must never exit
   # abnormally: a raise or throw there would tear down the SSE connection
   # via the link before the outcome could become a proper JSON-RPC error.
-  defp run_safely(parsed, ctx, handler) do
+  @doc false
+  def run_safely(parsed, ctx, handler) do
     run(parsed, ctx, handler)
   rescue
     e ->
@@ -133,32 +134,10 @@ defmodule Sake.Plug.Stream do
 
     receive do
       {:sake_progress, token, current, total, message} ->
-        params =
-          %{"progressToken" => token, "progress" => current}
-          |> put_some("total", total)
-          |> put_some("message", message)
-
-        continue(
-          conn,
-          opts,
-          id,
-          ctx,
-          task,
-          JSONRPC.notification("notifications/progress", params)
-        )
+        continue(conn, opts, id, ctx, task, progress(token, current, total, message))
 
       {:sake_log, level, data} ->
-        continue(
-          conn,
-          opts,
-          id,
-          ctx,
-          task,
-          JSONRPC.notification("notifications/message", %{
-            "level" => to_string(level),
-            "data" => data
-          })
-        )
+        continue(conn, opts, id, ctx, task, log(level, data))
 
       {:sake_elicit, _from, request_id, params} ->
         # Legacy elicitation: the server asks on the stream and the handler waits.
@@ -209,34 +188,56 @@ defmodule Sake.Plug.Stream do
   end
 
   defp finish(conn, id, ctx, outcome) do
-    message =
-      case outcome do
-        {:reply, result} ->
-          JSONRPC.result(id, result)
-
-        {:error, error} ->
-          %{"jsonrpc" => "2.0", "id" => id, "error" => error}
-
-        {:forbidden, _scopes} ->
-          JSONRPC.error(id, JSONRPC.code(:invalid_request), "Insufficient scope")
-
-        :noreply ->
-          JSONRPC.result(id, %{})
-
-        {:subscribe, _} ->
-          JSONRPC.result(id, %{})
-
-        {:unsubscribe, _} ->
-          JSONRPC.result(id, %{})
-
-        _ ->
-          JSONRPC.error(id, JSONRPC.code(:internal), "Unexpected outcome")
-      end
-
     _ = ctx
-    {_, conn} = SSE.event(conn, message)
+    {_, conn} = SSE.event(conn, response(id, outcome))
     conn
   end
+
+  # The messages a request's stream carries, shared with `Sake.Stdio`.
+
+  @doc false
+  def response(id, outcome) do
+    case outcome do
+      {:reply, result} ->
+        JSONRPC.result(id, result)
+
+      {:error, error} ->
+        %{"jsonrpc" => "2.0", "id" => id, "error" => error}
+
+      {:forbidden, _scopes} ->
+        JSONRPC.error(id, JSONRPC.code(:invalid_request), "Insufficient scope")
+
+      :noreply ->
+        JSONRPC.result(id, %{})
+
+      {:subscribe, _} ->
+        JSONRPC.result(id, %{})
+
+      {:unsubscribe, _} ->
+        JSONRPC.result(id, %{})
+
+      _ ->
+        JSONRPC.error(id, JSONRPC.code(:internal), "Unexpected outcome")
+    end
+  end
+
+  @doc false
+  def progress(token, current, total, message) do
+    params =
+      %{"progressToken" => token, "progress" => current}
+      |> put_some("total", total)
+      |> put_some("message", message)
+
+    JSONRPC.notification("notifications/progress", params)
+  end
+
+  @doc false
+  def log(level, data),
+    do:
+      JSONRPC.notification("notifications/message", %{
+        "level" => to_string(level),
+        "data" => data
+      })
 
   # ---- subscriptions/listen
 
@@ -247,28 +248,12 @@ defmodule Sake.Plug.Stream do
   }
 
   defp listen(conn, opts, id, params) do
-    requested = params["notifications"] || %{}
-
-    honoured =
-      requested
-      |> Enum.filter(fn
-        {k, true} -> Map.has_key?(@filters, k)
-        {"resourceSubscriptions", uris} -> is_list(uris) and uris != []
-        _ -> false
-      end)
-      |> Map.new()
-
+    honoured = honoured(params)
     Streams.register_listen(opts.server, id, honoured)
     conn = SSE.start(conn)
     meta = %{Protocol.meta(:subscription_id) => id}
 
-    ack =
-      JSONRPC.notification("notifications/subscriptions/acknowledged", %{
-        "notifications" => honoured,
-        "_meta" => meta
-      })
-
-    case SSE.event(conn, ack) do
+    case SSE.event(conn, acknowledged(honoured, meta)) do
       {:ok, conn} -> listen_loop(conn, opts, id, honoured, meta)
       {:error, _} -> conn
     end
@@ -303,14 +288,38 @@ defmodule Sake.Plug.Stream do
     end
   end
 
-  defp notification_for({:list_changed, kind}, honoured, meta) do
+  # The part of a `subscriptions/listen` filter Sake honours, its
+  # acknowledgement, and the notification (if any) an event becomes on the
+  # stream; shared with `Sake.Stdio`.
+
+  @doc false
+  def honoured(params) do
+    (params["notifications"] || %{})
+    |> Enum.filter(fn
+      {k, true} -> Map.has_key?(@filters, k)
+      {"resourceSubscriptions", uris} -> is_list(uris) and uris != []
+      _ -> false
+    end)
+    |> Map.new()
+  end
+
+  @doc false
+  def acknowledged(honoured, meta),
+    do:
+      JSONRPC.notification("notifications/subscriptions/acknowledged", %{
+        "notifications" => honoured,
+        "_meta" => meta
+      })
+
+  @doc false
+  def notification_for({:list_changed, kind}, honoured, meta) do
     key = Enum.find_value(@filters, fn {k, v} -> if v == kind, do: k end)
 
     if honoured[key] == true,
       do: JSONRPC.notification("notifications/#{kind}/list_changed", %{"_meta" => meta})
   end
 
-  defp notification_for({:resource_updated, uri}, honoured, meta) do
+  def notification_for({:resource_updated, uri}, honoured, meta) do
     if uri in (honoured["resourceSubscriptions"] || []),
       do:
         JSONRPC.notification("notifications/resources/updated", %{"uri" => uri, "_meta" => meta})
