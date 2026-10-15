@@ -48,6 +48,12 @@ end
 claude mcp add --transport http my-app https://myapp.example.com/mcp
 ```
 
+Or, for a client on the same machine, over stdio (see `guides/stdio.md`):
+
+```
+claude mcp add --transport stdio my-app -- mix sake.stdio MyApp.MCP
+```
+
 See `guides/quickstart.md` for turning on authorization in five steps, or
 `mix dev` in this repository for a complete, running example.
 
@@ -60,7 +66,8 @@ See `guides/quickstart.md` for turning on authorization in five steps, or
 | Elicitation (form, url) | yes | yes (url from 2025-11-25) | form only |
 | Subscriptions | `subscriptions/listen` stream | `resources/subscribe` | `resources/subscribe` |
 | Batched requests | — (stateless, one at a time) | — | yes |
-| `Sake.Client` | yes | yes | connects, no batching |
+| Stdio transport | yes | yes | yes |
+| `Sake.Client` (HTTP, stdio) | yes | yes | connects, no batching |
 | `Sake.Client` authorization | yes | yes | yes (no resource metadata: the server's own) |
 
 ## The authorization flow, briefly
@@ -82,16 +89,17 @@ runs the same flow from the client's side (`guides/client.md`).
 - [Authorization](guides/authorization.md)
 - [Multi-tenant endpoints](guides/tenants.md)
 - [The client](guides/client.md)
+- [Stdio](guides/stdio.md)
 - [Protocol versions](guides/protocol_versions.md)
 - [Security](guides/security.md)
 
 ## Status
 
-0.1: the server (both eras, one endpoint), the authorization server
-(bearer, CIMD, dynamic registration, consent, token rotation), and the
-client, which runs the MCP authorization flow itself (discovery, CIMD or
-dynamic registration, PKCE, refresh, step-up). Next: a stdio transport,
-the device authorization grant, and tasks.
+0.1: the server (both eras, one endpoint, and stdio), the authorization
+server (bearer, CIMD, dynamic registration, consent, token rotation),
+and the client (HTTP and stdio), which runs the MCP authorization flow
+itself (discovery, CIMD or dynamic registration, PKCE, refresh,
+step-up). Next: the device authorization grant, and tasks.
 
 ## License
 

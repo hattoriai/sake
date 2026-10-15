@@ -13,14 +13,19 @@ defmodule Sake.Secret do
 
   @spec fetch!() :: binary()
   def fetch! do
+    configured() ||
+      raise ArgumentError,
+            "Sake needs a secret: pass secret: to Sake.Plug, start {Sake, secret_key_base: ...}, or set config :sake, :secret_key_base"
+  end
+
+  # The running `Sake` configuration's secret, else the application
+  # environment's, else nil.
+  @spec configured() :: binary() | nil
+  def configured do
     case :persistent_term.get({Sake, :secret_key_base}, nil) ||
            Application.get_env(:sake, :secret_key_base) do
-      nil ->
-        raise ArgumentError,
-              "Sake needs a secret: pass secret: to Sake.Plug, start {Sake, secret_key_base: ...}, or set config :sake, :secret_key_base"
-
-      secret ->
-        resolve(secret)
+      nil -> nil
+      secret -> resolve(secret)
     end
   end
 end
