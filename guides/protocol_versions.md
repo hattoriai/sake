@@ -21,6 +21,14 @@ opens a session. `Sake.Client.connect/2` mirrors this from the other side
 "invalid params" (`-32602`) or with no JSON-RPC error at all (see
 `guides/client.md`).
 
+Over stdio (`guides/stdio.md`) the same holds with the protocol version
+in `_meta` in place of the header: `initialize` opens the process's one
+legacy session, a request tagged with the modern revision is served
+statelessly, and an untagged request belongs to the session. The
+client's probe over stdio falls back to `initialize` on any error a
+modern server would not send, or on no answer at all, as the stdio
+transport asks.
+
 ## What Sake serves and speaks
 
 | | Server | Client |

@@ -32,6 +32,13 @@ First release.
 - `Sake.Client`: a functional client for both protocol eras, with era
   probing, elicitation via `on_input`, and a parsed `WWW-Authenticate`
   challenge on a 401 (client-side OAuth itself is not yet implemented).
+- `Sake.Stdio` and `mix sake.stdio`: the same server over standard input
+  and output, on both eras, with concurrent requests, cancellation,
+  progress and log notifications, elicitation, subscriptions, and
+  shutdown when standard input closes. `Sake.Client.connect/2` launches
+  a stdio server with `{:stdio, command, args}`, probing the era as the
+  stdio transport asks; `on_notification:` sees a call's notifications
+  on either transport.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite wired into CI, with a baseline of
