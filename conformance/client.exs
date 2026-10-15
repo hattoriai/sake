@@ -33,7 +33,25 @@ on_input = fn requests, _session ->
   end)
 end
 
-case Sake.Client.connect(url, on_input: on_input) do
+# The auth scenarios' authorization servers approve every request at once,
+# so the headless `authorize` stands in for the person. Pre-registered
+# credentials, in the scenarios that have them, arrive in
+# `MCP_CONFORMANCE_CONTEXT`; the Client ID Metadata Document URL is the one
+# the suite expects a client to present when the server supports them.
+context =
+  case System.get_env("MCP_CONFORMANCE_CONTEXT") do
+    nil -> %{}
+    json -> JSON.decode!(json)
+  end
+
+auth = [
+  authorize: &Sake.Client.Auth.Headless.authorize/1,
+  client_metadata_url: "https://conformance-test.local/client-metadata.json",
+  client_id: context["client_id"],
+  client_secret: context["client_secret"]
+]
+
+case Sake.Client.connect(url, on_input: on_input, auth: auth) do
   {:ok, session} ->
     {tools, session} =
       case Sake.Client.list_tools(session) do

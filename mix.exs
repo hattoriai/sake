@@ -141,7 +141,11 @@ defmodule Sake.MixProject do
           Sake.Client,
           Sake.Client.Session,
           Sake.Client.Challenge,
-          Sake.Client.ToolResult
+          Sake.Client.ToolResult,
+          Sake.Client.Auth,
+          Sake.Client.Auth.Browser,
+          Sake.Client.Auth.Headless,
+          Sake.Client.Auth.Store
         ],
         Protocol: [Sake.Protocol, Sake.JSONRPC, Sake.Schema]
       ]

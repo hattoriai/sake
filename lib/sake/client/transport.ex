@@ -8,7 +8,7 @@ defmodule Sake.Client.Transport do
   # by the fixed key `"legacy"` for a foreign server that omits it. A stdio
   # session's messages go to `Sake.Client.Stdio` instead.
 
-  alias Sake.Client.{Challenge, Session}
+  alias Sake.Client.{Auth, Challenge, Session}
   alias Sake.JSONRPC
   alias Sake.Plug.Headers
   alias Sake.Protocol
@@ -24,7 +24,10 @@ defmodule Sake.Client.Transport do
     do: Sake.Client.Stdio.post(session, message, opts)
 
   def post(session, message, opts) do
-    headers = [{"accept", @accept}] ++ era_headers(session, message, opts) ++ session.headers
+    headers =
+      [{"accept", @accept}] ++
+        era_headers(session, message, opts) ++ Auth.headers(session.auth, session.headers)
+
     id = message["id"]
 
     result =
@@ -254,7 +257,9 @@ defmodule Sake.Client.Transport do
 
   @doc false
   def delete(session) do
-    headers = [{"mcp-session-id", session.session_id}] ++ session.headers
+    headers =
+      [{"mcp-session-id", session.session_id}] ++ Auth.headers(session.auth, session.headers)
+
     _ = Req.delete(session.url, [headers: headers, retry: false] ++ session.req)
     :ok
   end
