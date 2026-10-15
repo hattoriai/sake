@@ -1,5 +1,7 @@
 # Sake
 
+![Sake — MCP for Phoenix](https://raw.githubusercontent.com/hattoriai/sake/main/media/banner.png)
+
 Sake (酒) is MCP for Elixir and Phoenix: a server that speaks the modern,
 stateless 2026-07-28 protocol and the earlier handshake-and-session
 protocol on one endpoint, an OAuth 2.1 authorization server that makes
@@ -90,4 +92,4 @@ authorization grant, and tasks.
 
 ## License
 
-Apache-2.0. See `LICENSE` and `NOTICE`.
+Sake is released under the MIT License. See `LICENSE`.
