@@ -70,7 +70,8 @@ defmodule Sake.Server.DispatchTest do
              "confirm",
              "connect",
              "summarize",
-             "roots"
+             "roots",
+             "export"
            ]
 
     assert r["ttlMs"] == 300_000 and r["cacheScope"] == "public"
@@ -108,7 +109,8 @@ defmodule Sake.Server.DispatchTest do
              "confirm",
              "connect",
              "summarize",
-             "roots"
+             "roots",
+             "export"
            ]
 
     assert r["cacheScope"] == "private"

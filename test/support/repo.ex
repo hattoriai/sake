@@ -9,3 +9,10 @@ defmodule SakeTest.Migration do
   def up, do: Sake.Auth.Migration.up()
   def down, do: Sake.Auth.Migration.down()
 end
+
+defmodule SakeTest.TasksMigration do
+  @moduledoc false
+  use Ecto.Migration
+  def up, do: Sake.Tasks.Migration.up()
+  def down, do: Sake.Tasks.Migration.down()
+end

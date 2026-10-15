@@ -1,7 +1,8 @@
 defmodule Sake.Plug.Stream do
   @moduledoc false
   # One request → one response, as JSON or as an SSE stream, plus the two
-  # long-lived streams: subscriptions/listen (modern) and GET (legacy).
+  # long-lived streams: subscriptions/listen (modern, including the tasks
+  # extension's `notifications/tasks`) and GET (legacy).
 
   import Plug.Conn
   require Logger
@@ -22,7 +23,7 @@ defmodule Sake.Plug.Stream do
   def respond(conn, opts, {:request, id, method, params} = parsed, ctx, handler) do
     cond do
       method == "subscriptions/listen" and ctx.era == :modern ->
-        listen(conn, opts, id, params)
+        listen(conn, opts, id, params, ctx)
 
       stream?(method, params, ctx) ->
         stream(conn, opts, parsed, ctx, handler)
@@ -244,9 +245,26 @@ defmodule Sake.Plug.Stream do
     "resourcesListChanged" => :resources
   }
 
-  defp listen(conn, opts, id, params) do
+  # Task notifications need the tasks extension; a client asking for them
+  # without it gets -32021 instead of a stream.
+  defp listen(conn, opts, id, params, ctx) do
     requested = params["notifications"] || %{}
 
+    if is_map(requested) and Map.has_key?(requested, "taskIds") and
+         not Sake.Server.Tasks.declared?(ctx) do
+      {:error, code, message, data} = Sake.Server.Tasks.missing_capability()
+
+      Sake.Plug.outcome_to_response(
+        conn,
+        id,
+        {:error, %{"code" => code, "message" => message, "data" => data}}
+      )
+    else
+      open_listen(conn, opts, id, requested, ctx)
+    end
+  end
+
+  defp open_listen(conn, opts, id, requested, ctx) do
     honoured =
       requested
       |> Enum.filter(fn
@@ -255,6 +273,7 @@ defmodule Sake.Plug.Stream do
         _ -> false
       end)
       |> Map.new()
+      |> put_task_ids(Sake.Server.Tasks.visible(is_map(requested) && requested["taskIds"], ctx))
 
     Streams.register_listen(opts.server, id, honoured)
     conn = SSE.start(conn)
@@ -301,11 +320,20 @@ defmodule Sake.Plug.Stream do
     end
   end
 
+  # The caller's own tasks only: anything else was left out of `taskIds`.
+  defp put_task_ids(honoured, []), do: honoured
+  defp put_task_ids(honoured, ids), do: Map.put(honoured, "taskIds", ids)
+
   defp notification_for({:list_changed, kind}, honoured, meta) do
     key = Enum.find_value(@filters, fn {k, v} -> if v == kind, do: k end)
 
     if honoured[key] == true,
       do: JSONRPC.notification("notifications/#{kind}/list_changed", %{"_meta" => meta})
+  end
+
+  defp notification_for({:task, task}, honoured, meta) do
+    if task["taskId"] in (honoured["taskIds"] || []),
+      do: JSONRPC.notification("notifications/tasks", Map.put(task, "_meta", meta))
   end
 
   defp notification_for({:resource_updated, uri}, honoured, meta) do
@@ -355,6 +383,10 @@ defmodule Sake.Plug.Stream do
               JSONRPC.notification("notifications/resources/updated", %{"uri" => uri})
             ),
           else: legacy_loop(conn, opts, subscribed)
+
+      # Task notifications are for modern listen streams only.
+      {:sake_notify, _event} ->
+        legacy_loop(conn, opts, subscribed)
     after
       opts.keepalive ->
         case SSE.comment(conn) do

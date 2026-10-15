@@ -27,7 +27,8 @@ defmodule Sake.ClientTest do
                  "confirm",
                  "connect",
                  "summarize",
-                 "roots"
+                 "roots",
+                 "export"
                ]
 
         assert %Sake.Tool.Spec{headers: %{"Precision" => ["precision"]}} =

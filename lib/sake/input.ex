@@ -12,13 +12,20 @@ defmodule Sake.Input do
   call; `all/2` returns their results in the same order. Called one after
   the other, those functions would ask one question per round-trip on a
   modern connection; under `all/2` every unanswered question goes out in
-  the same input-required result. On a legacy connection they are asked
-  in turn on the stream.
+  the same input-required result, and inside a task they are all pending
+  on the task at once. On a legacy connection they are asked in turn on
+  the stream.
   """
 
   alias Sake.Context
 
   @spec all(Context.t(), [(Context.t() -> term())]) :: [term()]
+  def all(%Context{task: id} = ctx, funs) when is_binary(id) do
+    funs
+    |> Enum.map(fn fun -> Task.async(fn -> fun.(ctx) end) end)
+    |> Task.await_many(:infinity)
+  end
+
   # Each function runs until its first unanswered request; the requests of
   # all of them unwind together, as one input-required result.
   def all(%Context{era: :modern} = ctx, funs) do

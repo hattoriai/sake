@@ -1,7 +1,8 @@
 defmodule Sake.Plug.Headers do
   @moduledoc """
   The request headers that mirror the body on the modern Streamable HTTP
-  transport: `Mcp-Method`, `Mcp-Name` and `Mcp-Param-*`, with the Base64
+  transport: `Mcp-Method`, `Mcp-Name` (the tool or prompt name, the
+  resource URI, or the task ID) and `Mcp-Param-*`, with the Base64
   sentinel encoding for values that are not plain ASCII.
   """
 
@@ -61,6 +62,11 @@ defmodule Sake.Plug.Headers do
 
   defp name(conn, "resources/read", params),
     do: check(conn, "mcp-name", "Mcp-Name", params["uri"])
+
+  # The tasks extension routes on the task ID.
+  defp name(conn, method, %{"taskId" => id})
+       when method in ["tasks/get", "tasks/update", "tasks/cancel"] and is_binary(id),
+       do: check(conn, "mcp-name", "Mcp-Name", id)
 
   defp name(_conn, _method, _params), do: :ok
 

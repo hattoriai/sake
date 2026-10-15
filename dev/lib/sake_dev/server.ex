@@ -4,7 +4,7 @@ defmodule SakeDev.Server do
     name: "sake-dev",
     version: Sake.version(),
     instructions:
-      "An example server: echo, add, a slow tool with progress, sampling, roots, issues, and a triage prompt."
+      "An example server: echo, add, a slow tool with progress, sampling, roots, a task, issues, and a triage prompt."
 
   scope "issues:read", "Read issues"
   scope "issues:write", "Change issues"
@@ -16,7 +16,8 @@ defmodule SakeDev.Server do
     SakeDev.Tools.Confirm,
     SakeDev.Tools.Connect,
     SakeDev.Tools.Summarize,
-    SakeDev.Tools.Roots
+    SakeDev.Tools.Roots,
+    SakeDev.Tools.Export
   ]
 
   resources [SakeDev.Resources.Readme, SakeDev.Resources.Issue]

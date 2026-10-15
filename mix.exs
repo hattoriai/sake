@@ -117,6 +117,14 @@ defmodule Sake.MixProject do
           Sake.Plug.Headers,
           Sake.Router
         ],
+        Tasks: [
+          Sake.Tasks,
+          Sake.Tasks.Record,
+          Sake.Tasks.Store,
+          Sake.Tasks.Store.ETS,
+          Sake.Tasks.Store.Ecto,
+          Sake.Tasks.Migration
+        ],
         Authorization: [
           Sake.Auth,
           Sake.Auth.Config,

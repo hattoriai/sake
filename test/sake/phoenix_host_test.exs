@@ -24,7 +24,8 @@ defmodule Sake.PhoenixHostTest do
          resources: ["/:org/mcp"]
        ],
        secret_key_base: String.duplicate("s", 64),
-       streams: false}
+       streams: false,
+       tasks: false}
     )
 
     %{base: base, req: Req.new(base_url: base, redirect: false, retry: false, decode_body: false)}

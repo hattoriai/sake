@@ -70,7 +70,10 @@ defmodule Sake.Plug.Streams do
   end
 
   @doc "Sends `{:sake_notify, event}` to the streams of `server` on every node."
-  @spec broadcast(module(), {:list_changed, atom()} | {:resource_updated, String.t()}) :: :ok
+  @spec broadcast(
+          module(),
+          {:list_changed, atom()} | {:resource_updated, String.t()} | {:task, map()}
+        ) :: :ok
   def broadcast(server, event) do
     local(server, event)
 

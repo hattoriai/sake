@@ -2,7 +2,8 @@ defmodule SakeDev.ConformanceServer do
   @moduledoc false
   # The fixture server the official MCP conformance suite runs against
   # (`/open/mcp` in `SakeDev.Router`, see `conformance/run.sh`). Every
-  # `test_*` tool, resource, and prompt here exists only to satisfy one
+  # `test_*` tool, resource, and prompt here (and the tasks extension's
+  # fixtures, `greet` to `multi_input`) exists only to satisfy one
   # scenario's "Server Implementation Requirements" — it is not an example
   # of how to write a Sake server; see `SakeDev.Server` for that.
   use Sake.Server,
@@ -32,7 +33,14 @@ defmodule SakeDev.ConformanceServer do
     Tools.TestInputRequiredResultMultipleInputs,
     Tools.TestInputRequiredResultMultiRound,
     Tools.TestInputRequiredResultTamperedState,
-    Tools.TestInputRequiredResultCapabilities
+    Tools.TestInputRequiredResultCapabilities,
+    Tools.Greet,
+    Tools.SlowCompute,
+    Tools.FailingJob,
+    Tools.ProtocolErrorJob,
+    Tools.ConfirmDelete,
+    Tools.MultiInput,
+    Tools.TestToolWithTask
   ]
 
   resources [

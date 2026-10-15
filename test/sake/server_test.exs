@@ -15,7 +15,8 @@ defmodule Sake.ServerTest do
              "confirm",
              "connect",
              "summarize",
-             "roots"
+             "roots",
+             "export"
            ]
 
     assert Enum.map(server.__sake__(:resources), & &1.uri) == ["dev://readme", "issue://{id}"]

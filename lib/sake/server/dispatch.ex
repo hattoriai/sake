@@ -7,7 +7,7 @@ defmodule Sake.Server.Dispatch do
   require Logger
 
   alias Sake.{Context, JSONRPC, Protocol, Server}
-  alias Sake.Server.{Cursor, Results}
+  alias Sake.Server.{Cursor, Results, Tasks}
 
   @type outcome ::
           {:reply, map()}
@@ -54,6 +54,10 @@ defmodule Sake.Server.Dispatch do
   defp dispatch(server, "prompts/get", params, ctx), do: get_prompt(server, params, ctx)
   defp dispatch(server, "completion/complete", params, ctx), do: complete(server, params, ctx)
 
+  defp dispatch(server, "tasks/get", params, ctx), do: Tasks.get(server, params, ctx)
+  defp dispatch(server, "tasks/update", params, ctx), do: Tasks.update(server, params, ctx)
+  defp dispatch(server, "tasks/cancel", params, ctx), do: Tasks.cancel(server, params, ctx)
+
   defp dispatch(_server, "subscriptions/listen", %{"notifications" => filter}, _ctx)
        when is_map(filter),
        do: {:listen, filter}
@@ -66,8 +70,18 @@ defmodule Sake.Server.Dispatch do
   @doc false
   def capabilities(server) do
     caps = Server.capabilities(server)
-    ext = server.__sake__(:extensions)
+    ext = extensions(server)
     if ext == %{}, do: caps, else: Map.put(caps, "extensions", ext)
+  end
+
+  # The server's own `extensions:`, plus the tasks extension when a tool
+  # can run as a task.
+  defp extensions(server) do
+    ext = server.__sake__(:extensions)
+
+    if Tasks.supported?(server),
+      do: Map.put_new(ext, Sake.Tasks.extension(), %{}),
+      else: ext
   end
 
   # ---- lists
@@ -185,14 +199,21 @@ defmodule Sake.Server.Dispatch do
 
     case Sake.Schema.validate(spec.input_schema, raw_args) do
       {:ok, args} ->
-        with_inputs(spec.name, raw_args, params, ctx, fn ctx ->
-          {:ok, run_tool(spec, args, ctx)}
-        end)
+        with :ok <- task_capability(spec, ctx) do
+          with_inputs(spec.name, raw_args, params, ctx, &run_tool(spec, args, &1))
+        end
 
       {:error, errors} ->
         {:ok, Results.tool({:error, "Invalid arguments: " <> format_errors(errors)}, spec, ctx)}
     end
   end
+
+  # A tool that can only run as a task needs a client that takes one.
+  defp task_capability(%{task: :required}, ctx) do
+    if Tasks.declared?(ctx), do: :ok, else: Tasks.missing_capability()
+  end
+
+  defp task_capability(_spec, _ctx), do: :ok
 
   defp find_tool(server, name) do
     case Server.tool(server, name) do
@@ -204,8 +225,18 @@ defmodule Sake.Server.Dispatch do
   defp allowed(spec, ctx),
     do: if(Server.allowed?(spec, ctx), do: :ok, else: {:forbidden, spec.scopes})
 
+  # `prepare/2` runs in the request itself, so it can still ask the client
+  # for input on a modern retry before a task takes over the rest.
   defp run_tool(spec, args, ctx) do
-    Results.tool(spec.module.execute(args, ctx), spec, ctx)
+    case prepare(spec, args, ctx) do
+      {:ok, args} ->
+        if spec.task && Tasks.declared?(ctx),
+          do: Tasks.start(spec, args, ctx),
+          else: {:ok, Results.tool(spec.module.execute(args, ctx), spec, ctx)}
+
+      {:error, text} ->
+        {:ok, Results.tool({:error, text}, spec, ctx)}
+    end
   rescue
     exception ->
       if ctx.reraise, do: reraise(exception, __STACKTRACE__)
@@ -214,7 +245,13 @@ defmodule Sake.Server.Dispatch do
         "tool #{spec.name} failed: " <> Exception.format(:error, exception, __STACKTRACE__)
       )
 
-      Results.tool({:error, "The tool failed."}, spec, ctx)
+      {:ok, Results.tool({:error, "The tool failed."}, spec, ctx)}
+  end
+
+  defp prepare(spec, args, ctx) do
+    if Code.ensure_loaded?(spec.module) and function_exported?(spec.module, :prepare, 2),
+      do: spec.module.prepare(args, ctx),
+      else: {:ok, args}
   end
 
   defp format_errors(errors) do

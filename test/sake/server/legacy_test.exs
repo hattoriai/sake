@@ -53,7 +53,8 @@ defmodule Sake.Server.LegacyTest do
              "confirm",
              "connect",
              "summarize",
-             "roots"
+             "roots",
+             "export"
            ]
 
     refute Map.has_key?(r, "ttlMs")

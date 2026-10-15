@@ -19,7 +19,8 @@ defmodule Sake do
       {Sake, secret_key_base: {MyAppWeb.Endpoint, :config, [:secret_key_base]}, pubsub: MyApp.PubSub, auth: [...]}
 
   `auth:` takes the `Sake.Auth.Config` options; without it only the stream
-  registry runs.
+  registry and tasks run. `tasks:` takes the `Sake.Tasks` options
+  (`false` turns tasks off).
   """
   def child_spec(opts) do
     %{id: __MODULE__, type: :supervisor, start: {__MODULE__, :start_link, [opts]}}
@@ -43,7 +44,9 @@ defmodule Sake do
         do: [Sake.Plug.Streams.child_spec(pubsub: opts[:pubsub])],
         else: []
       ) ++
-        store_children(auth) ++ if(auth, do: [Sake.Auth.CIMD.Cache], else: [])
+        store_children(auth) ++
+        if(auth, do: [Sake.Auth.CIMD.Cache], else: []) ++
+        tasks_children(Keyword.get(opts, :tasks, []))
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Sake.Supervisor)
   end
@@ -53,4 +56,7 @@ defmodule Sake do
   end
 
   defp store_children(nil), do: []
+
+  defp tasks_children(false), do: []
+  defp tasks_children(opts), do: [{Sake.Tasks, opts}]
 end

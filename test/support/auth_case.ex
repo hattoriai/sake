@@ -38,7 +38,8 @@ defmodule SakeTest.AuthCase do
     # The test helper already runs the streams registry; start only the auth part.
     pid =
       start_supervised!(
-        {Sake, auth: auth, secret_key_base: SakeTest.ModernClient.secret(), streams: false}
+        {Sake,
+         auth: auth, secret_key_base: SakeTest.ModernClient.secret(), streams: false, tasks: false}
       )
 
     %{config: Sake.Auth.config(), sake: pid}

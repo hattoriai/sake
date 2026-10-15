@@ -26,7 +26,7 @@ defmodule Sake.Roots do
 
   @spec list(Context.t(), atom() | String.t()) ::
           {:ok, [root()]}
-          | {:error, :unsupported | :timeout | :invalid_response | map()}
+          | {:error, :unsupported | :cancelled | :timeout | :invalid_response | map()}
   def list(ctx, key \\ :roots) do
     case Ask.request(ctx, "roots", to_string(key), "roots/list", %{}) do
       {:ok, %{"roots" => roots}} when is_list(roots) -> {:ok, Enum.flat_map(roots, &root/1)}

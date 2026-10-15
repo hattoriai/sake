@@ -15,7 +15,9 @@ defmodule Sake.Elicit do
   no side effects before its elicitation calls. On a legacy connection the
   call blocks until the client answers on the stream; the request carries
   the handler's key in `_meta` under `"ai.hattori.sake/key"`, so a client
-  can tell which question is being asked.
+  can tell which question is being asked. Inside a task (see `Sake.Tasks`)
+  the call waits until the client answers through `tasks/update`; a task
+  cancelled meanwhile reads as `:cancel`.
   """
 
   alias Sake.Context

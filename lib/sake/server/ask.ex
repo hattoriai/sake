@@ -6,6 +6,7 @@ defmodule Sake.Server.Ask do
   #
   #   * the client did not declare the capability: `{:error, :unsupported}`;
   #   * the answer is already in `ctx.inputs` (a modern retry): that answer;
+  #   * inside a task: the request waits on the task (`Sake.Tasks.Worker`);
   #   * modern: a throw that `Sake.Server.Dispatch` turns into an
   #     input-required result;
   #   * legacy: a JSON-RPC request on the call's response stream, and the
@@ -17,7 +18,7 @@ defmodule Sake.Server.Ask do
   @vendor_key "ai.hattori.sake/key"
 
   @type answer ::
-          {:ok, term()} | {:error, :unsupported | :timeout | map()}
+          {:ok, term()} | {:error, :unsupported | :cancelled | :timeout | map()}
 
   @spec request(Context.t(), String.t(), String.t(), String.t(), map()) :: answer()
   def request(ctx, capability, key, method, params) do
@@ -35,6 +36,9 @@ defmodule Sake.Server.Ask do
       :error -> ask(ctx, key, request)
     end
   end
+
+  defp ask(%Context{task: id} = ctx, key, request) when is_binary(id),
+    do: Sake.Tasks.Worker.ask(ctx, key, request)
 
   defp ask(%Context{era: :modern}, key, request),
     do: throw({:sake_input_required, %{key => request}})

@@ -55,18 +55,9 @@ defmodule SakeTest.ModernClient do
     conn = put_req_header(conn, "mcp-method", method)
 
     conn =
-      case method do
-        "tools/call" ->
-          put_req_header(conn, "mcp-name", Sake.Plug.Headers.encode_value(params["name"] || ""))
-
-        "prompts/get" ->
-          put_req_header(conn, "mcp-name", Sake.Plug.Headers.encode_value(params["name"] || ""))
-
-        "resources/read" ->
-          put_req_header(conn, "mcp-name", Sake.Plug.Headers.encode_value(params["uri"] || ""))
-
-        _ ->
-          conn
+      case name_header(method, params) do
+        nil -> conn
+        name -> put_req_header(conn, "mcp-name", Sake.Plug.Headers.encode_value(name))
       end
 
     Enum.reduce(Keyword.get(opts, :params, []), conn, fn {name, value}, c ->
@@ -77,6 +68,12 @@ defmodule SakeTest.ModernClient do
       )
     end)
   end
+
+  defp name_header("tools/call", params), do: params["name"] || ""
+  defp name_header("prompts/get", params), do: params["name"] || ""
+  defp name_header("resources/read", params), do: params["uri"] || ""
+  defp name_header("tasks/" <> _, %{"taskId" => id}) when is_binary(id), do: id
+  defp name_header(_method, _params), do: nil
 
   def json(conn), do: JSON.decode!(conn.resp_body)
 

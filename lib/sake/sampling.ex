@@ -14,7 +14,8 @@ defmodule Sake.Sampling do
   revision. The call travels exactly like a `Sake.Elicit` call: on a
   modern connection it ends the handler and returns the answer when the
   client retries (so no side effects before it), on a legacy connection it
-  blocks until the client answers on the stream.
+  blocks until the client answers on the stream, and inside a task it
+  waits for the client's `tasks/update`.
 
   `messages` is a list of `{role, content}` pairs, as a prompt returns
   them: `role` is `:user` or `:assistant`, `content` a string, a
@@ -31,7 +32,8 @@ defmodule Sake.Sampling do
 
   Returns `{:ok, %Sake.Sampling.Result{}}`, `{:error, :unsupported}` when
   the client did not declare `sampling` (or, with `tools`, did not declare
-  `sampling.tools`), `{:error, :timeout}` when a legacy client never
+  `sampling.tools`), `{:error, :cancelled}` when the task the call
+  waits in was cancelled, `{:error, :timeout}` when a legacy client never
   answered, `{:error, :invalid_response}` when the answer is not a result
   object, and `{:error, error}` with the JSON-RPC error map a legacy client
   answered with.
@@ -65,7 +67,7 @@ defmodule Sake.Sampling do
 
   @spec create_message(Context.t(), atom() | String.t(), [message()], keyword()) ::
           {:ok, Result.t()}
-          | {:error, :unsupported | :timeout | :invalid_response | map()}
+          | {:error, :unsupported | :cancelled | :timeout | :invalid_response | map()}
   def create_message(ctx, key, messages, opts) do
     max_tokens =
       opts[:max_tokens] || raise ArgumentError, "Sake.Sampling.create_message needs max_tokens:"
