@@ -32,8 +32,9 @@ snake-cased — `MyApp.MCP.Add` becomes `"add"`), `title`, `description`,
 `title`), `stream` (see Streaming below), `ttl` (milliseconds; see Caching
 below), `meta` (a map merged into the tool's `_meta`), and `input_schema`
 (a raw JSON Schema map instead of `arg` lines, for a shape `arg` cannot
-express), and `task` (`:optional` or `:required`; see
-`guides/tasks.md`).
+express), `task` (`:optional` or `:required`; see `guides/tasks.md`),
+and `ui` and `visibility` (the MCP App the host shows with the tool's
+result, and who may call the tool; see `guides/apps.md`).
 
 List the tool on a server:
 

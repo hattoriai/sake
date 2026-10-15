@@ -26,6 +26,17 @@ First release.
   telemetry. `Sake.Tasks.Store.ETS` (default) and `Sake.Tasks.Store.Ecto`
   with `Sake.Tasks.Migration` for several nodes. A tool's optional
   `prepare/2` runs in the request before `execute/2`.
+- MCP Apps (`io.modelcontextprotocol/ui`): `Sake.UI` declares an app's
+  HTML document as a `ui://` resource with its `_meta.ui` (CSP,
+  permissions, domain, border), from `render/1` (a string, iodata, or
+  with `phoenix_html` a HEEx component) or an EEx template that escapes
+  its output, with bundled assets inlined at compile time (`inline/1`).
+  A tool links its app with `ui:` and limits its audience with
+  `visibility:`. A client that declared the extension gets the tools'
+  `_meta.ui`, the app-only tools and the UI resources, on both eras; any
+  other client gets plain tools. The development server's issue board is
+  an example app. `Sake.Client` declares the extension with `ui: true`
+  and reads a tool's UI.
 - A component can return `{:error, {:missing_capability, capabilities}}`
   for a `-32021` error naming the client capabilities it needs.
 - `Sake.Router`: Phoenix router macros for the well-known, OAuth API,
@@ -47,7 +58,7 @@ First release.
   probing, elicitation via `on_input`, sampling and roots via `sampling:`
   and `roots:`, tool calls followed through tasks (and
   `call_tool_async/3`, `get_task/2`, `update_task/3`, `cancel_task/2`),
-  and a parsed `WWW-Authenticate` challenge on a 401.
+  MCP Apps via `ui: true`, and a parsed `WWW-Authenticate` challenge on a 401.
 - `Sake.Client.Auth`: with `auth:`, the client runs the MCP authorization
   flow itself on a 401: protected resource metadata (RFC 9728, from the
   challenge or the well-known URIs) checked against the endpoint,
