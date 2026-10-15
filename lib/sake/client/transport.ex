@@ -2,11 +2,11 @@ defmodule Sake.Client.Transport do
   @moduledoc false
   # One HTTP round trip: JSON or SSE. `post/3` returns the final JSON-RPC
   # message for the request (or `:accepted` for notifications), after
-  # answering any legacy elicitation requests seen on the stream. A stdio
-  # session's messages go to `Sake.Client.Stdio` instead. A legacy
+  # answering any legacy elicitation requests seen on the stream. A legacy
   # `elicitation/create` request is keyed for `on_input` by
   # `params["_meta"]["ai.hattori.sake/key"]` when a Sake server sent it, or
-  # by the fixed key `"legacy"` for a foreign server that omits it.
+  # by the fixed key `"legacy"` for a foreign server that omits it. A stdio
+  # session's messages go to `Sake.Client.Stdio` instead.
 
   alias Sake.Client.{Challenge, Session}
   alias Sake.JSONRPC
@@ -98,12 +98,15 @@ defmodule Sake.Client.Transport do
 
       {:notification, method, params} ->
         notify(session, method, params)
-        put_in(resp.private[:sake_events], (resp.private[:sake_events] || []) ++ [event])
+        collect(resp, event)
 
       _ ->
-        put_in(resp.private[:sake_events], (resp.private[:sake_events] || []) ++ [event])
+        collect(resp, event)
     end
   end
+
+  defp collect(resp, event),
+    do: put_in(resp.private[:sake_events], (resp.private[:sake_events] || []) ++ [event])
 
   @doc false
   # The client's response to a legacy server's request, on either transport.
