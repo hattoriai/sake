@@ -51,6 +51,7 @@ defmodule Sake.MixProject do
       {:ecto_sql, "~> 3.13", optional: true},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:phoenix, "~> 1.8", optional: true},
+      {:phoenix_html, "~> 4.1", optional: true},
       {:phoenix_pubsub, "~> 2.1", optional: true},
       {:plug, "~> 1.16"},
       {:postgrex, ">= 0.0.0", only: [:dev, :test]},

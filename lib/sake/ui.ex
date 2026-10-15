@@ -34,8 +34,10 @@ defmodule Sake.UI do
   (a dedicated sandbox origin, in the host's own format), `prefers_border`,
   and `template`.
 
-  The document comes from `render/1`, which returns a string or iodata
-  (or `{:safe, iodata}`), or from an EEx file named by `template:`,
+  The document comes from `render/1`, which returns a string or iodata,
+  `{:safe, iodata}`, or, when the host has `phoenix_html`, anything that
+  implements `Phoenix.HTML.Safe` (the result of a HEEx function
+  component), or from an EEx file named by `template:`,
   relative to the module's own file and compiled into the module. A
   template's assigns come from `assigns/1`, and `<%= %>` escapes its
   output as HTML unless the value is `raw/1`. `inline/1` reads a file into
@@ -66,7 +68,7 @@ defmodule Sake.UI do
   ]
 
   @doc "The HTML document of the app."
-  @callback render(ctx :: Sake.Context.t()) :: iodata() | {:safe, iodata()}
+  @callback render(ctx :: Sake.Context.t()) :: iodata() | {:safe, iodata()} | struct()
 
   @doc "The assigns of a `template:`, as a map or a keyword list."
   @callback assigns(ctx :: Sake.Context.t()) :: map() | keyword()
@@ -129,6 +131,14 @@ defmodule Sake.UI do
   def escape(nil), do: ""
   def escape(value) when is_binary(value), do: Plug.HTML.html_escape(value)
   def escape(list) when is_list(list), do: Enum.map_join(list, &escape_item/1)
+
+  # A struct the host renders with Phoenix.HTML (a HEEx component's
+  # result, a date) is escaped the way Phoenix escapes it.
+  if Code.ensure_loaded?(Phoenix.HTML.Safe) do
+    def escape(%_{} = struct),
+      do: struct |> Phoenix.HTML.Safe.to_iodata() |> IO.iodata_to_binary()
+  end
+
   def escape(value), do: value |> to_string() |> Plug.HTML.html_escape()
 
   # A list is iodata, as the result of a `for` in a template is: its
@@ -138,7 +148,16 @@ defmodule Sake.UI do
 
   @doc false
   def document({:safe, iodata}), do: IO.iodata_to_binary(iodata)
-  def document(iodata), do: IO.iodata_to_binary(iodata)
+
+  def document(iodata) when is_binary(iodata) or is_list(iodata),
+    do: IO.iodata_to_binary(iodata)
+
+  # What `render/1` returns is the document, not text to escape: only
+  # what is neither iodata nor `{:safe, iodata}` (a HEEx component's
+  # `%Phoenix.LiveView.Rendered{}`) goes through Phoenix.HTML.
+  if Code.ensure_loaded?(Phoenix.HTML.Safe) do
+    def document(content), do: content |> Phoenix.HTML.Safe.to_iodata() |> IO.iodata_to_binary()
+  end
 
   @doc false
   # The `@name` of a template.

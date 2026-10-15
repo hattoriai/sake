@@ -1,6 +1,8 @@
 defmodule Sake.UITest do
   use ExUnit.Case, async: true
 
+  alias SakeTest.Rendered
+
   defmodule SalesMap do
     use Sake.UI,
       uri: "ui://test/map",
@@ -106,6 +108,25 @@ defmodule Sake.UITest do
     assert_raise ArgumentError, ~r/assign @title not available/, fn ->
       Bare.read(%{}, Sake.Context.new())
     end
+  end
+
+  defmodule Component do
+    use Sake.UI, uri: "ui://test/component"
+
+    @impl true
+    def render(%{scope: :escaped}), do: Phoenix.HTML.html_escape("<b>")
+    def render(%{scope: :raw}), do: Phoenix.HTML.raw("<b>")
+    def render(_ctx), do: %Rendered{html: "<p>hi</p>"}
+  end
+
+  test "with phoenix_html, render/1 may return Phoenix.HTML content" do
+    assert Component.read(%{}, Sake.Context.new()) == {:ok, "<section><p>hi</p></section>"}
+    assert Component.read(%{}, Sake.Context.new(scope: :escaped)) == {:ok, "&lt;b&gt;"}
+    assert Component.read(%{}, Sake.Context.new(scope: :raw)) == {:ok, "<b>"}
+
+    # In a template, such a struct is escaped by Phoenix.HTML, not as text.
+    assert Sake.UI.escape(%Rendered{html: "<p>"}) == "<section><p></section>"
+    assert Sake.UI.escape(~D[2026-01-26]) == "2026-01-26"
   end
 
   test "escape/1 and raw/1" do
