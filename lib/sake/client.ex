@@ -24,6 +24,11 @@ defmodule Sake.Client do
   `call_tool_async/3` hands it back instead. `tasks: false` leaves the
   extension out.
 
+  `ui: true` declares MCP Apps (see `Sake.UI`), on both eras, for a client
+  that renders them: the server then lists its app-only tools and UI
+  resources, and each `Sake.Tool.Spec` from `list_tools/1` carries the
+  `ui://` URI of its app in `ui` and who may call it in `visibility`.
+
   `{:stdio, command, args}` in place of a URL launches the server as a
   subprocess and talks to it over its standard input and output:
 
@@ -127,6 +132,7 @@ defmodule Sake.Client do
     |> put_capability(opts[:on_input], "elicitation", %{})
     |> put_capability(opts[:sampling], "sampling", %{})
     |> put_capability(opts[:roots], "roots", %{"listChanged" => false})
+    |> put_capability(opts[:ui] || nil, "extensions", Sake.UI.client_capability())
   end
 
   defp put_capability(caps, nil, _name, _value), do: caps
@@ -393,10 +399,14 @@ defmodule Sake.Client do
           {:ok, [Content.t()], Session.t()} | {:error, term(), Session.t()}
   def read_resource(session, uri) do
     with {:ok, result, session} <- request(session, "resources/read", %{"uri" => uri}) do
+      # The `_meta` of each contents item (an MCP App's CSP, say) becomes
+      # the embedded resource's.
       contents =
         result["contents"]
         |> List.wrap()
-        |> Enum.map(&Content.from_wire(%{"type" => "resource", "resource" => &1}))
+        |> Enum.map(
+          &Content.from_wire(%{"type" => "resource", "resource" => &1, "_meta" => &1["_meta"]})
+        )
         |> Enum.reject(&match?({:error, _}, &1))
 
       {:ok, contents, session}
@@ -664,6 +674,8 @@ defmodule Sake.Client do
           output_schema: t["outputSchema"],
           annotations: t["annotations"] || %{},
           meta: t["_meta"],
+          ui: ui_uri(t["_meta"]),
+          visibility: visibility(t["_meta"]),
           headers: Schema.header_paths(schema)
         }
 
@@ -677,6 +689,18 @@ defmodule Sake.Client do
   end
 
   defp tool_spec(_), do: nil
+
+  # `_meta.ui.resourceUri`, or the extension's deprecated flat key.
+  defp ui_uri(%{"ui" => %{"resourceUri" => uri}}) when is_binary(uri), do: uri
+  defp ui_uri(%{"ui/resourceUri" => uri}) when is_binary(uri), do: uri
+  defp ui_uri(_meta), do: nil
+
+  # Unknown audiences are dropped rather than made atoms.
+  defp visibility(%{"ui" => %{"visibility" => [_ | _] = visibility}}) do
+    for v <- visibility, v in ["model", "app"], uniq: true, do: String.to_existing_atom(v)
+  end
+
+  defp visibility(_meta), do: [:model, :app]
 
   defp check_headers(schema, headers) do
     names = Enum.map(headers, fn {n, _} -> String.downcase(n) end)

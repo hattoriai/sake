@@ -157,6 +157,55 @@ defmodule Sake.ClientTest do
         assert {:ok, %{text: "file:///f (unnamed)"}, _} = Client.call_tool(session, "roots", %{})
       end
 
+      test "MCP Apps: ui: true declares the extension; tools and UI contents carry _meta.ui", %{
+        url: url
+      } do
+        assert {:ok, session} = Client.connect(url, era: @era, ui: true)
+
+        assert session.capabilities == %{
+                 "extensions" => %{
+                   "io.modelcontextprotocol/ui" => %{"mimeTypes" => ["text/html;profile=mcp-app"]}
+                 }
+               }
+
+        assert {:ok, tools, session} = Client.list_tools(session)
+        by_name = Map.new(tools, &{&1.name, &1})
+
+        assert %Sake.Tool.Spec{ui: "ui://sake-dev/issue-board", visibility: [:model, :app]} =
+                 by_name["issue_board"]
+
+        assert %Sake.Tool.Spec{ui: "ui://sake-dev/issue-board", visibility: [:app]} =
+                 by_name["issue_details"]
+
+        assert %Sake.Tool.Spec{ui: nil, visibility: [:model, :app]} = by_name["echo"]
+
+        assert {:ok, resources, session} = Client.list_resources(session)
+        assert %{"_meta" => %{"ui" => %{"prefersBorder" => true}}} = List.last(resources)
+
+        assert {:ok, [%Sake.Content{} = doc], session} =
+                 Client.read_resource(session, "ui://sake-dev/issue-board")
+
+        assert doc.mime_type == "text/html;profile=mcp-app"
+        assert doc.meta == %{"ui" => %{"prefersBorder" => true}}
+        assert doc.text =~ "<!doctype html>" and doc.text =~ "ui/initialize"
+
+        assert {:ok, %{structured: %{"issues" => [_, _, _]}}, session} =
+                 Client.call_tool(session, "issue_board", %{})
+
+        assert {:ok, %{structured: %{"id" => "2", "state" => "open"}}, _} =
+                 Client.call_tool(session, "issue_details", %{"id" => "2"})
+      end
+
+      test "MCP Apps: without ui: the tools come without their UI", %{url: url} do
+        assert {:ok, session} = Client.connect(url, era: @era)
+        assert {:ok, tools, session} = Client.list_tools(session)
+        refute Enum.any?(tools, &(&1.name == "issue_details"))
+        assert %Sake.Tool.Spec{ui: nil} = Enum.find(tools, &(&1.name == "issue_board"))
+
+        assert {:error, {:rpc, %{"code" => -32_602}}, _} =
+                 Client.call_tool(session, "issue_details", %{"id" => "2"})
+      end
+
       test "on_notification sees a call's progress", %{url: url} do
         parent = self()
         on_notification = fn method, params -> send(parent, {:notified, method, params}) end
@@ -422,6 +471,48 @@ defmodule Sake.ClientTest do
 
     assert log =~ "bad" and log =~ "x-mcp-header"
     assert log =~ ~s("twice": invalid x-mcp-header \(duplicate names\))
+  end
+
+  test "a tool's UI from the deprecated flat key, and unknown audiences dropped" do
+    bypass = Bypass.open()
+    url = "http://localhost:#{bypass.port}/mcp"
+
+    Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      msg = JSON.decode!(body)
+
+      result =
+        case msg["method"] do
+          "server/discover" ->
+            %{"supportedVersions" => ["2026-07-28"], "capabilities" => %{"tools" => %{}}}
+
+          "tools/list" ->
+            %{
+              "tools" => [
+                %{"name" => "flat", "_meta" => %{"ui/resourceUri" => "ui://x/flat"}},
+                %{
+                  "name" => "odd",
+                  "_meta" => %{
+                    "ui" => %{"resourceUri" => "ui://x/odd", "visibility" => ["app", "robot"]}
+                  }
+                }
+              ]
+            }
+        end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        JSON.encode!(%{"jsonrpc" => "2.0", "id" => msg["id"], "result" => result})
+      )
+    end)
+
+    {:ok, session} = Client.connect(url, ui: true)
+
+    assert {:ok, [flat, odd], _} = Client.list_tools(session)
+    assert %{ui: "ui://x/flat", visibility: [:model, :app]} = flat
+    assert %{ui: "ui://x/odd", visibility: [:app]} = odd
   end
 
   test "a false argument is mirrored into its header like any other value" do
