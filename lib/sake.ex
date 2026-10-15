@@ -45,7 +45,7 @@ defmodule Sake do
         else: []
       ) ++
         store_children(auth) ++
-        if(auth, do: [Sake.Auth.CIMD.Cache], else: []) ++
+        if(auth, do: [Sake.Auth.CIMD.Cache, Sake.Auth.Replay], else: []) ++
         tasks_children(Keyword.get(opts, :tasks, []))
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Sake.Supervisor)

@@ -14,6 +14,8 @@ if Code.ensure_loaded?(Ecto.Schema) do
       field(:logo_uri, :string)
       field(:client_uri, :string)
       field(:scopes, {:array, :string})
+      field(:jwks, :map)
+      field(:jwks_uri, :string)
       field(:application_type, :string)
       timestamps(type: :utc_datetime)
     end

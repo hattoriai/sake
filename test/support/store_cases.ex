@@ -72,6 +72,45 @@ defmodule SakeTest.StoreCases do
         assert length(mod.tokens_for_subject(state, "u1")) == 4
       end
 
+      test "a machine client's keys, and its token without a subject", %{config: config} do
+        {mod, state} = store(config)
+
+        client = %Client{
+          id: "rc_m",
+          name: "Machine",
+          kind: :registered,
+          grant_types: ["client_credentials"],
+          token_endpoint_auth_method: "private_key_jwt",
+          jwks: %{"keys" => [%{"kty" => "EC", "crv" => "P-256", "x" => "x", "y" => "y"}]},
+          jwks_uri: nil
+        }
+
+        assert :ok = mod.put_client(state, client)
+        assert {:ok, ^client} = mod.get_client(state, "rc_m")
+
+        assert :ok =
+                 mod.put_client(state, %{client | jwks: nil, jwks_uri: "https://m.example/jwks"})
+
+        assert {:ok, %Client{jwks: nil, jwks_uri: "https://m.example/jwks"}} =
+                 mod.get_client(state, "rc_m")
+
+        {access, record} =
+          Tokens.issue_access(config, %{
+            client_id: "rc_m",
+            subject_id: nil,
+            scopes: ["a"],
+            resource: "https://x/mcp"
+          })
+
+        assert {:ok, %TokenRecord{subject_id: nil, client_id: "rc_m", kind: :access}} =
+                 mod.get_token(state, :access, Tokens.hash(access))
+
+        assert :ok = mod.revoke_token(state, record.id)
+
+        assert {:ok, %TokenRecord{revoked_at: %DateTime{}}} =
+                 mod.get_token(state, :access, record.hash)
+      end
+
       test "consume_refresh marks a refresh token used at most once", %{config: config} do
         {mod, state} = store(config)
         {_a, _r, %{refresh: r}} = issue(config, %{family_id: "f1", subject_id: "u1"})

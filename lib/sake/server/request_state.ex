@@ -32,6 +32,10 @@ defmodule Sake.Server.RequestState do
   def verify(_ctx, _name, _args, _state), do: :error
 
   defp principal(%{token: %{subject_id: id}}) when is_binary(id), do: id
+
+  defp principal(%{token: %{subject_id: nil, client_id: id}}) when is_binary(id),
+    do: {:client, id}
+
   defp principal(%{scope: nil}), do: nil
   defp principal(%{scope: scope}), do: :erlang.phash2(scope)
 

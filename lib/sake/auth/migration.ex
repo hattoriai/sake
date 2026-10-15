@@ -28,6 +28,8 @@ if Code.ensure_loaded?(Ecto.Migration) do
         add(:logo_uri, :text)
         add(:client_uri, :text)
         add(:scopes, {:array, :string})
+        add(:jwks, :map)
+        add(:jwks_uri, :text)
         add(:application_type, :string)
         timestamps(type: :utc_datetime)
       end
@@ -52,7 +54,9 @@ if Code.ensure_loaded?(Ecto.Migration) do
         add(:hash, :string, null: false)
         add(:family_id, :string, null: false)
         add(:client_id, :string, null: false)
-        add(:subject_id, :string, null: false)
+        # A machine client's token (the client credentials grant) has no
+        # subject: the client itself is the principal.
+        add(:subject_id, :string)
         add(:scopes, {:array, :string}, null: false, default: [])
         add(:resource, :text, null: false)
         add(:expires_at, :utc_datetime, null: false)

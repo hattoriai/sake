@@ -9,6 +9,13 @@ defmodule SakeDev.Accounts do
 
   def get(id), do: Map.fetch(@people, id)
 
+  def by_email(email) do
+    case Enum.find(@people, fn {_, p} -> p.email == email end) do
+      {_, person} -> {:ok, person}
+      nil -> :error
+    end
+  end
+
   def authenticate(email, password) do
     case Enum.find(@people, fn {_, p} -> p.email == email and p.password == password end) do
       {_, person} -> {:ok, person}

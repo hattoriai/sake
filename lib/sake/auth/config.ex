@@ -14,6 +14,7 @@ defmodule Sake.Auth.Config do
             remember_consent: true,
             consent: Sake.Auth.Consent.Default,
             servers: [],
+            trusted_issuers: [],
             allow_insecure: false,
             oauth_path: "/oauth",
             name: nil
@@ -37,9 +38,30 @@ defmodule Sake.Auth.Config do
     %{
       config
       | issuer: String.trim_trailing(config.issuer, "/"),
+        trusted_issuers: trusted_issuers(config),
         store_state: module.init(store_opts),
         name: config.name || uri.host
     }
+  end
+
+  # JWT grants need jose to verify them, and the subject module's
+  # `assertion_principal/2` to say whom they stand for: a host that trusts
+  # an issuer without either finds out when it starts, not at the first
+  # grant.
+  defp trusted_issuers(%__MODULE__{trusted_issuers: []}), do: []
+
+  defp trusted_issuers(%__MODULE__{trusted_issuers: issuers, subject: subject}) do
+    Sake.Auth.JWT.require!("trusted_issuers:")
+    Code.ensure_loaded(subject)
+
+    unless function_exported?(subject, :assertion_principal, 2),
+      do:
+        raise(
+          ArgumentError,
+          "trusted_issuers: needs the subject module to define assertion_principal/2"
+        )
+
+    Enum.map(issuers, &Sake.Auth.TrustedIssuer.new/1)
   end
 
   @doc "All scopes the configured servers declare, with descriptions."
