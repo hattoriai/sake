@@ -16,10 +16,17 @@ defmodule Sake.ServerTest do
              "connect",
              "summarize",
              "roots",
-             "export"
+             "export",
+             "issue_board",
+             "issue_details"
            ]
 
-    assert Enum.map(server.__sake__(:resources), & &1.uri) == ["dev://readme", "issue://{id}"]
+    assert Enum.map(server.__sake__(:resources), & &1.uri) == [
+             "dev://readme",
+             "issue://{id}",
+             "ui://sake-dev/issue-board"
+           ]
+
     assert Enum.map(server.__sake__(:prompts), & &1.name) == ["triage"]
 
     assert server.__sake__(:scopes) == [

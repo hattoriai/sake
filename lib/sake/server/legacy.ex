@@ -3,7 +3,7 @@ defmodule Sake.Server.Legacy do
   # The handshake-era methods (revisions 2025-03-26 to 2025-11-25).
 
   alias Sake.{Context, JSONRPC, Protocol, Server}
-  alias Sake.Server.Dispatch
+  alias Sake.Server.{Dispatch, UI}
 
   @type outcome ::
           Dispatch.outcome()
@@ -24,7 +24,7 @@ defmodule Sake.Server.Legacy do
         result =
           %{
             "protocolVersion" => revision,
-            "capabilities" => Server.capabilities(server),
+            "capabilities" => server |> Server.capabilities() |> UI.advertise(server),
             "serverInfo" => %{"name" => info.name, "version" => info.version}
           }
           |> then(

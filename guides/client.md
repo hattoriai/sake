@@ -143,6 +143,16 @@ To manage tasks yourself, `call_tool_async/3` returns
 answered without a task), and `get_task/2`, `update_task/3` and
 `cancel_task/2` drive it.
 
+## MCP Apps
+
+`ui: true` declares the MCP Apps extension (`io.modelcontextprotocol/ui`)
+on both eras, as a host that renders apps does. The server then lists the
+tools only an app calls and its UI resources, `list_tools/1` puts each
+tool's app in `spec.ui` (the `ui://` URI) and `spec.visibility` (`[:model,
+:app]`, `[:app]` or `[:model]`), and `read_resource/2` returns the app's
+document with its `_meta` (the CSP and permissions it asks for). Without
+it, a Sake server lists its tools as plain tools. See `guides/apps.md`.
+
 ## `on_notification`
 
 ```elixir

@@ -7,7 +7,7 @@ defmodule Sake.Server.Dispatch do
   require Logger
 
   alias Sake.{Context, JSONRPC, Protocol, Server}
-  alias Sake.Server.{Cursor, Results, Tasks}
+  alias Sake.Server.{Cursor, Results, Tasks, UI}
 
   @type outcome ::
           {:reply, map()}
@@ -75,13 +75,16 @@ defmodule Sake.Server.Dispatch do
   end
 
   # The server's own `extensions:`, plus the tasks extension when a tool
-  # can run as a task.
+  # can run as a task and MCP Apps when the server has a UI.
   defp extensions(server) do
     ext = server.__sake__(:extensions)
 
-    if Tasks.supported?(server),
-      do: Map.put_new(ext, Sake.Tasks.extension(), %{}),
-      else: ext
+    ext =
+      if Tasks.supported?(server),
+        do: Map.put_new(ext, Sake.Tasks.extension(), %{}),
+        else: ext
+
+    UI.extensions(ext, server)
   end
 
   # ---- lists
@@ -89,13 +92,17 @@ defmodule Sake.Server.Dispatch do
   @doc false
   def list_tools(server, params, ctx) do
     with {:ok, offset} <- offset(params, ctx) do
-      specs = server.__sake__(:tools) |> Enum.filter(&Server.allowed?(&1, ctx))
+      specs =
+        server.__sake__(:tools)
+        |> Enum.filter(&(Server.allowed?(&1, ctx) and UI.visible?(&1, ctx)))
+
       {page, next} = page(specs, offset, server)
 
       {:ok,
-       %{"tools" => Enum.map(page, &Sake.Tool.Spec.to_wire(&1, ctx.protocol_version))}
+       %{"tools" => Enum.map(page, &UI.tool_to_wire(&1, ctx))}
        |> next_cursor(next, ctx)
-       |> cacheable(server, ctx, Enum.map(page, & &1.ttl))}
+       |> cacheable(server, ctx, Enum.map(page, & &1.ttl))
+       |> UI.cache_scope(server)}
     end
   end
 
@@ -104,13 +111,17 @@ defmodule Sake.Server.Dispatch do
     with {:ok, offset} <- offset(params, ctx) do
       entries =
         server.__sake__(:resources)
-        |> Enum.filter(&Server.allowed?(&1, ctx))
+        |> Enum.filter(&(Server.allowed?(&1, ctx) and UI.listed?(&1, ctx)))
         |> Enum.flat_map(&resource_entries(&1, ctx))
 
       {page, next} = page(entries, offset, server)
       {ttls, page} = Enum.unzip(page)
 
-      {:ok, %{"resources" => page} |> next_cursor(next, ctx) |> cacheable(server, ctx, ttls)}
+      {:ok,
+       %{"resources" => page}
+       |> next_cursor(next, ctx)
+       |> cacheable(server, ctx, ttls)
+       |> UI.cache_scope(server)}
     end
   end
 
@@ -186,6 +197,7 @@ defmodule Sake.Server.Dispatch do
   @doc false
   def call_tool(server, %{"name" => name} = params, ctx) when is_binary(name) do
     with {:ok, spec} <- find_tool(server, name),
+         :ok <- visible(spec, name, ctx),
          :ok <- allowed(spec, ctx) do
       call_validated(spec, params, ctx)
     end
@@ -222,6 +234,14 @@ defmodule Sake.Server.Dispatch do
       {:ok, spec} -> {:ok, spec}
       :error -> {:error, JSONRPC.code(:invalid_params), "Unknown tool: #{name}"}
     end
+  end
+
+  # A tool only an app calls does not exist for a client without apps:
+  # tools/list leaves it out, and tools/call answers as for an unknown tool.
+  defp visible(spec, name, ctx) do
+    if UI.visible?(spec, ctx),
+      do: :ok,
+      else: {:error, JSONRPC.code(:invalid_params), "Unknown tool: #{name}"}
   end
 
   defp allowed(spec, ctx),

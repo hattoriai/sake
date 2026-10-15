@@ -73,10 +73,12 @@ defmodule Sake.Server.DispatchTest do
              "connect",
              "summarize",
              "roots",
-             "export"
+             "export",
+             "issue_board"
            ]
 
-    assert r["ttlMs"] == 300_000 and r["cacheScope"] == "public"
+    # Private: the list depends on whether the client renders MCP Apps.
+    assert r["ttlMs"] == 300_000 and r["cacheScope"] == "private"
     refute Map.has_key?(r, "nextCursor")
 
     defmodule Paged do
@@ -112,7 +114,8 @@ defmodule Sake.Server.DispatchTest do
              "connect",
              "summarize",
              "roots",
-             "export"
+             "export",
+             "issue_board"
            ]
 
     assert r["cacheScope"] == "private"

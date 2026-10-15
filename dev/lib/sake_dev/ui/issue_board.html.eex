@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="color-scheme" content="light dark">
+    <title><%= @title %></title>
+    <style>
+      :root {
+        --color-background-primary: light-dark(#ffffff, #171717);
+        --color-background-secondary: light-dark(#f4f4f5, #262626);
+        --color-text-primary: light-dark(#171717, #fafafa);
+        --color-text-secondary: light-dark(#52525b, #a3a3a3);
+        --color-border-primary: light-dark(#e4e4e7, #404040);
+        --font-sans: system-ui, sans-serif;
+        --border-radius-md: 8px;
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        padding: 12px;
+        font-family: var(--font-sans);
+        color: var(--color-text-primary);
+        background: var(--color-background-primary);
+      }
+      h1 { font-size: 1rem; margin: 0 0 8px; }
+      .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .column h2 { font-size: 0.8rem; text-transform: uppercase; color: var(--color-text-secondary); }
+      .card {
+        display: block;
+        width: 100%;
+        margin: 0 0 6px;
+        padding: 8px;
+        text-align: left;
+        font: inherit;
+        color: inherit;
+        background: var(--color-background-secondary);
+        border: 1px solid var(--color-border-primary);
+        border-radius: var(--border-radius-md);
+        cursor: pointer;
+      }
+      #details { margin-top: 8px; color: var(--color-text-secondary); }
+    </style>
+  </head>
+  <body>
+    <h1><%= @title %></h1>
+    <p id="status">Waiting for the issues…</p>
+    <div class="columns">
+      <section class="column"><h2>Open</h2><div id="open"></div></section>
+      <section class="column"><h2>Closed</h2><div id="closed"></div></section>
+    </div>
+    <div id="details"></div>
+    <script><%= raw inline("dev/lib/sake_dev/ui/issue_board.js") %></script>
+  </body>
+</html>
