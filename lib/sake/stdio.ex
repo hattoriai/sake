@@ -389,24 +389,30 @@ defmodule Sake.Stdio do
 
       method == "subscriptions/listen" ->
         server = state.server
-        start(state, id, :listen, &listen(&1, server, id, params))
+
+        request(parsed, modern_context(meta, version, state), state, fn conn, _ctx ->
+          listen(conn, server, id, params)
+        end)
 
       true ->
-        ctx =
-          Context.new(
-            era: :modern,
-            protocol_version: version,
-            client_info: map(meta[Protocol.meta(:client_info)]),
-            client_capabilities: meta[Protocol.meta(:client_capabilities)],
-            log_level: meta[Protocol.meta(:log_level)],
-            trace: Map.take(meta, ["traceparent", "tracestate", "baggage"]),
-            secret: state.secret,
-            server: state.server,
-            reraise: state.reraise
-          )
-
-        request(parsed, ctx, &Dispatch.handle/3, state)
+        request(parsed, modern_context(meta, version, state), state, fn conn, ctx ->
+          run(conn, parsed, ctx, &Dispatch.handle/3)
+        end)
     end
+  end
+
+  defp modern_context(meta, version, state) do
+    Context.new(
+      era: :modern,
+      protocol_version: version,
+      client_info: map(meta[Protocol.meta(:client_info)]),
+      client_capabilities: meta[Protocol.meta(:client_capabilities)],
+      log_level: meta[Protocol.meta(:log_level)],
+      trace: Map.take(meta, ["traceparent", "tracestate", "baggage"]),
+      secret: state.secret,
+      server: state.server,
+      reraise: state.reraise
+    )
   end
 
   # ---- legacy
@@ -435,7 +441,7 @@ defmodule Sake.Stdio do
   # The methods that change the session run here, in order with the rest of
   # the input; every other request runs in its own process.
   defp legacy({:request, id, "logging/setLevel", params} = parsed, state) do
-    outcome = Legacy.handle(state.server, parsed, legacy_context(state))
+    outcome = here(parsed, state)
 
     state =
       if match?({:reply, _}, outcome),
@@ -447,7 +453,7 @@ defmodule Sake.Stdio do
 
   defp legacy({:request, id, method, _params} = parsed, state)
        when method in ["resources/subscribe", "resources/unsubscribe"] do
-    outcome = Legacy.handle(state.server, parsed, legacy_context(state))
+    outcome = here(parsed, state)
 
     subscribed =
       case outcome do
@@ -459,7 +465,20 @@ defmodule Sake.Stdio do
     reply(%{state | subscribed: subscribed}, Stream.response(id, outcome))
   end
 
-  defp legacy(parsed, state), do: request(parsed, legacy_context(state), &Legacy.handle/3, state)
+  defp legacy(parsed, state) do
+    request(parsed, legacy_context(state), state, fn conn, ctx ->
+      run(conn, parsed, ctx, &Legacy.handle/3)
+    end)
+  end
+
+  defp here({:request, _id, method, params} = parsed, state) do
+    ctx = legacy_context(state)
+    meta = telemetry_meta(method, params, ctx)
+
+    :telemetry.span([:sake, :server, :request], meta, fn ->
+      {Legacy.handle(state.server, parsed, ctx), Map.put(meta, :cancelled, false)}
+    end)
+  end
 
   defp legacy_context(%{session: session} = state) do
     Context.new(
@@ -479,19 +498,19 @@ defmodule Sake.Stdio do
 
   # ---- request processes
 
-  # Each request runs in a process of its own, linked to this one, which
-  # relays the handler's progress, log messages and legacy elicitation
-  # requests to the client while the handler runs in a task, as the SSE
-  # loop of `Sake.Plug.Stream` does.
-  defp request({:request, id, method, params} = parsed, ctx, handler, state) do
+  # Each request runs in a process of its own, linked to this one: `fun`
+  # returns the request's final message (nil when it was cancelled) and
+  # whether it was cancelled, for the telemetry span `Sake.Plug` emits too.
+  defp request({:request, id, method, params}, ctx, state, fun) do
     meta = telemetry_meta(method, params, ctx)
+    kind = if method == "subscriptions/listen", do: :listen, else: :request
     scope = state.scope
 
-    start(state, id, :request, fn conn ->
+    start(state, id, kind, fn conn ->
       ctx = %{ctx | scope: scope(scope)}
 
       :telemetry.span([:sake, :server, :request], meta, fn ->
-        {message, cancelled} = run(conn, parsed, ctx, handler)
+        {message, cancelled} = fun.(conn, ctx)
         {message, Map.put(meta, :cancelled, cancelled)}
       end)
     end)
@@ -512,6 +531,9 @@ defmodule Sake.Stdio do
   defp scope(fun) when is_function(fun, 0), do: fun.()
   defp scope(value), do: value
 
+  # The handler runs in a task while this process relays its progress, log
+  # messages and legacy elicitation requests to the client, as the SSE loop
+  # of `Sake.Plug.Stream` does.
   defp run(conn, {:request, id, _method, params} = parsed, ctx, handler) do
     me = self()
     token = get_in(params, ["_meta", "progressToken"])
@@ -583,10 +605,10 @@ defmodule Sake.Stdio do
 
       :sake_shutdown ->
         Streams.unregister_listen(server)
-        JSONRPC.result(id, %{"resultType" => "complete", "_meta" => meta})
+        {JSONRPC.result(id, %{"resultType" => "complete", "_meta" => meta}), false}
 
       :sake_stdio_cancel ->
-        nil
+        {nil, true}
     end
   end
 
