@@ -94,6 +94,13 @@ fail on purpose; CI only turns red on a *new* failure. Currently:
   sends its elicitation request outside the tool call's response stream,
   so it can only arrive on the standalone GET stream, which the client
   does not open (above).
-- **Every `auth/*` client scenario** (14 of them) — `Sake.Client` has no
-  OAuth flow of its own (see `guides/client.md`'s "401 challenge"
-  section).
+
+Every `auth/*` client scenario of the core suite passes:
+`conformance/client.exs` connects with `auth:`, with
+`Sake.Client.Auth.Headless` standing in for the person (the suite's
+authorization servers approve at once) and the pre-registered credentials
+from `MCP_CONFORMANCE_CONTEXT` when a scenario provides them (see
+`guides/client.md`'s "Authorization" section). The 2025-03-26
+back-compatibility and draft auth scenarios, which CI does not run, pass
+as well; the extension ones (client credentials, cross-app access) need
+grants the client does not implement.
