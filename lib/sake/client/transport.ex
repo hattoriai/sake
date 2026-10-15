@@ -2,7 +2,8 @@ defmodule Sake.Client.Transport do
   @moduledoc false
   # One HTTP round trip: JSON or SSE. `post/3` returns the final JSON-RPC
   # message for the request (or `:accepted` for notifications), after
-  # answering any legacy elicitation requests seen on the stream. A legacy
+  # answering any legacy elicitation requests seen on the stream. A stdio
+  # session's messages go to `Sake.Client.Stdio` instead. A legacy
   # `elicitation/create` request is keyed for `on_input` by
   # `params["_meta"]["ai.hattori.sake/key"]` when a Sake server sent it, or
   # by the fixed key `"legacy"` for a foreign server that omits it.
@@ -17,7 +18,12 @@ defmodule Sake.Client.Transport do
 
   @spec post(Session.t(), map(), keyword()) ::
           {:ok, map() | :accepted, Session.t()} | {:error, term()}
-  def post(session, message, opts \\ []) do
+  def post(session, message, opts \\ [])
+
+  def post(%Session{stdio: pid} = session, message, opts) when is_pid(pid),
+    do: Sake.Client.Stdio.post(session, message, opts)
+
+  def post(session, message, opts) do
     headers = [{"accept", @accept}] ++ era_headers(session, message, opts) ++ session.headers
     id = message["id"]
 
@@ -86,32 +92,52 @@ defmodule Sake.Client.Transport do
 
   defp handle_event(event, resp, session) do
     case JSONRPC.parse(event) do
-      {:request, rid, "elicitation/create", params} ->
-        # The handler's key travels in `_meta` under our vendor prefix (see
-        # `Sake.Elicit`); a foreign server that omits it falls back to the
-        # fixed key `"legacy"`, since a legacy stream only ever asks one
-        # question at a time.
-        key = get_in(params, ["_meta", @vendor_key]) || "legacy"
-
-        answer =
-          if session.on_input,
-            do:
-              session.on_input.(
-                %{key => %{"method" => "elicitation/create", "params" => params}},
-                session
-              )[key],
-            else: %{"action" => "cancel"}
-
-        _ = post(session, JSONRPC.result(rid, answer || %{"action" => "cancel"}))
+      {:request, rid, method, params} ->
+        _ = post(session, answer(session, rid, method, params))
         resp
 
-      {:request, rid, _other, _} ->
-        _ = post(session, JSONRPC.error(rid, JSONRPC.code(:method_not_found), "Method not found"))
-        resp
+      {:notification, method, params} ->
+        notify(session, method, params)
+        put_in(resp.private[:sake_events], (resp.private[:sake_events] || []) ++ [event])
 
       _ ->
         put_in(resp.private[:sake_events], (resp.private[:sake_events] || []) ++ [event])
     end
+  end
+
+  @doc false
+  # The client's response to a legacy server's request, on either transport.
+  @spec answer(Session.t(), JSONRPC.id(), String.t(), map()) :: map()
+  def answer(session, rid, "elicitation/create", params) do
+    # The handler's key travels in `_meta` under our vendor prefix (see
+    # `Sake.Elicit`); a foreign server that omits it falls back to the
+    # fixed key `"legacy"`, since a legacy stream only ever asks one
+    # question at a time.
+    key = get_in(params, ["_meta", @vendor_key]) || "legacy"
+
+    answer =
+      if session.on_input,
+        do:
+          session.on_input.(
+            %{key => %{"method" => "elicitation/create", "params" => params}},
+            session
+          )[key],
+        else: %{"action" => "cancel"}
+
+    JSONRPC.result(rid, answer || %{"action" => "cancel"})
+  end
+
+  def answer(_session, rid, _method, _params),
+    do: JSONRPC.error(rid, JSONRPC.code(:method_not_found), "Method not found")
+
+  @doc false
+  # A notification the server sent during a call, for `on_notification`.
+  @spec notify(Session.t(), String.t(), map()) :: :ok
+  def notify(%Session{on_notification: nil}, _method, _params), do: :ok
+
+  def notify(%Session{on_notification: fun}, method, params) do
+    fun.(method, params)
+    :ok
   end
 
   defp final?(event, id),
