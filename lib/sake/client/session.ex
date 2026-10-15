@@ -17,6 +17,8 @@ defmodule Sake.Client.Session do
     capabilities: %{},
     next_id: 1,
     tools: %{},
+    tasks: true,
+    task_timeout: 300_000,
     req: []
   ]
 end

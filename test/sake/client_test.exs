@@ -125,6 +125,21 @@ defmodule Sake.ClientTest do
         assert_receive {:sampled, %{"maxTokens" => 100, "messages" => [%{"role" => "user"}]}}
       end
 
+      test "a task tool: followed to its result on modern, run synchronously on legacy", %{
+        url: url
+      } do
+        on_input = fn requests, _session ->
+          Map.new(requests, fn {key, _} ->
+            {key, %{"action" => "accept", "content" => %{"format" => "csv"}}}
+          end)
+        end
+
+        assert {:ok, session} = Client.connect(url, era: @era, on_input: on_input)
+
+        assert {:ok, %{text: "Exported 2 issues as csv."}, _} =
+                 Client.call_tool(session, "export", %{"n" => 2, "delay_ms" => 0})
+      end
+
       test "roots through roots:, as a list or a function", %{url: url} do
         roots = [%{"uri" => "file:///work", "name" => "Work"}]
         assert {:ok, session} = Client.connect(url, era: @era, roots: roots)
@@ -140,6 +155,143 @@ defmodule Sake.ClientTest do
 
         assert {:ok, %{text: "file:///f (unnamed)"}, _} = Client.call_tool(session, "roots", %{})
       end
+    end
+  end
+
+  describe "tasks (modern)" do
+    defmodule ConformanceRouter do
+      use Plug.Router
+      plug :match
+      plug :dispatch
+
+      forward "/mcp",
+        to: Sake.Plug,
+        init_opts: [server: SakeDev.ConformanceServer, secret: String.duplicate("s", 64)]
+    end
+
+    setup do
+      %{url: HTTP.start(ConformanceRouter) <> "/mcp"}
+    end
+
+    test "the extension is declared per request, and only on modern", %{url: url} do
+      assert {:ok, session} = Client.connect(url, era: :modern)
+      assert session.capabilities == %{}
+
+      assert {:ok, {:task, %{"taskId" => id, "status" => "working"}}, session} =
+               Client.call_tool_async(session, "slow_compute", %{"seconds" => 0})
+
+      assert {:ok, %{"taskId" => ^id}, _} = Client.get_task(session, id)
+
+      assert {:ok, session} = Client.connect(url, era: :modern, tasks: false)
+
+      assert {:ok, %Sake.Client.ToolResult{text: "Computed result in 0s."}, session} =
+               Client.call_tool_async(session, "slow_compute", %{"seconds" => 0})
+
+      assert {:error, {:http, 400, %{"error" => %{"code" => -32_021}}}, _} =
+               Client.call_tool(session, "failing_job", %{})
+    end
+
+    test "call_tool follows a task: completed, a tool error, failed, cancelled", %{url: url} do
+      assert {:ok, session} = Client.connect(url, era: :modern)
+
+      assert {:ok, %{text: "Computed x in 0s.", is_error: false}, session} =
+               Client.call_tool(session, "slow_compute", %{"seconds" => 0, "label" => "x"})
+
+      assert {:ok, %{is_error: true, text: "The job failed."}, session} =
+               Client.call_tool(session, "failing_job", %{})
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {:rpc, %{"code" => -32_603}}, _} =
+                 Client.call_tool(session, "protocol_error_job", %{})
+      end)
+
+      assert {:ok, {:task, %{"taskId" => id}}, session} =
+               Client.call_tool_async(session, "slow_compute", %{"seconds" => 60})
+
+      assert {:ok, session} = Client.cancel_task(session, id)
+      assert {:ok, %{"status" => "cancelled"}, _} = Client.get_task(session, id)
+    end
+
+    test "input requests are answered through tasks/update, once each", %{url: url} do
+      parent = self()
+
+      on_input = fn requests, _session ->
+        send(parent, {:asked, Map.keys(requests)})
+
+        Map.new(requests, fn {key, _} ->
+          {key, %{"action" => "accept", "content" => %{"name" => key, "confirm" => true}}}
+        end)
+      end
+
+      assert {:ok, session} = Client.connect(url, era: :modern, on_input: on_input)
+
+      assert {:ok, %{text: "Deleted a.txt."}, session} =
+               Client.call_tool(session, "confirm_delete", %{"filename" => "a.txt"})
+
+      assert_received {:asked, ["confirm"]}
+      refute_received {:asked, _}
+
+      assert {:ok, %{text: "Answered: first, second"}, _} =
+               Client.call_tool(session, "multi_input", %{})
+
+      # Both questions arrive pending at once or one after the other,
+      # depending on timing; either way each is asked exactly once.
+      asked = collect_asked([])
+      assert Enum.sort(asked) == ["first", "second"]
+    end
+
+    test "the lower-level calls", %{url: url} do
+      assert {:ok, session} =
+               Client.connect(url, era: :modern, capabilities: %{"elicitation" => %{}})
+
+      assert {:ok, {:task, %{"taskId" => id}}, session} =
+               Client.call_tool_async(session, "confirm_delete", %{"filename" => "b.txt"})
+
+      task = wait_status(session, id, "input_required")
+      assert %{"confirm" => %{"method" => "elicitation/create"}} = task["inputRequests"]
+
+      assert {:ok, session} =
+               Client.update_task(session, id, %{
+                 "confirm" => %{"action" => "accept", "content" => %{"confirm" => false}}
+               })
+
+      task = wait_status(session, id, "completed")
+      assert %{"result" => %{"content" => [%{"text" => "Kept b.txt."}]}} = task
+
+      assert {:error, {:rpc, %{"code" => -32_602}}, _} = Client.get_task(session, "nope")
+    end
+
+    test "a task still running after task_timeout is cancelled", %{url: url} do
+      parent = self()
+      handler = fn _event, _measurements, meta, _ -> send(parent, {:started, meta.task_id}) end
+      :telemetry.attach("client-timeout", [:sake, :task, :start], handler, nil)
+      on_exit(fn -> :telemetry.detach("client-timeout") end)
+
+      assert {:ok, session} = Client.connect(url, era: :modern, task_timeout: 100)
+
+      assert {:error, :task_timeout, _} =
+               Client.call_tool(session, "slow_compute", %{"seconds" => 60})
+
+      assert_received {:started, id}
+      assert {:ok, %{status: :cancelled}} = Sake.Tasks.fetch(id)
+    end
+  end
+
+  defp collect_asked(acc) do
+    receive do
+      {:asked, keys} -> collect_asked(acc ++ keys)
+    after
+      0 -> acc
+    end
+  end
+
+  defp wait_status(session, id, status, tries \\ 100) do
+    {:ok, task, session} = Client.get_task(session, id)
+
+    cond do
+      task["status"] == status -> task
+      tries == 0 -> flunk("task #{id} never became #{status}: #{inspect(task)}")
+      true -> Process.sleep(20) && wait_status(session, id, status, tries - 1)
     end
   end
 

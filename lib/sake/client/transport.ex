@@ -180,6 +180,10 @@ defmodule Sake.Client.Transport do
   defp name_header("tools/call", %{"name" => n}), do: [{"mcp-name", Headers.encode_value(n)}]
   defp name_header("prompts/get", %{"name" => n}), do: [{"mcp-name", Headers.encode_value(n)}]
   defp name_header("resources/read", %{"uri" => u}), do: [{"mcp-name", Headers.encode_value(u)}]
+
+  defp name_header("tasks/" <> _, %{"taskId" => id}) when is_binary(id),
+    do: [{"mcp-name", Headers.encode_value(id)}]
+
   defp name_header(_, _), do: []
 
   defp param_headers(%Sake.Tool.Spec{headers: headers}, args) do
