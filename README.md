@@ -61,6 +61,7 @@ See `guides/quickstart.md` for turning on authorization in five steps, or
 | Subscriptions | `subscriptions/listen` stream | `resources/subscribe` | `resources/subscribe` |
 | Batched requests | — (stateless, one at a time) | — | yes |
 | `Sake.Client` | yes | yes | connects, no batching |
+| `Sake.Client` authorization | yes | yes | yes (no resource metadata: the server's own) |
 
 ## The authorization flow, briefly
 
@@ -70,7 +71,8 @@ runs if the person is not signed in; a consent page shows what the client
 is asking for; approving issues an authorization code, which the client
 exchanges for an access and refresh token pair. Every later MCP request
 carries the access token as a bearer credential, scoped to that one
-endpoint's resource URL. See `guides/authorization.md`.
+endpoint's resource URL. See `guides/authorization.md`; `Sake.Client`
+runs the same flow from the client's side (`guides/client.md`).
 
 ## Guides
 
@@ -87,8 +89,9 @@ endpoint's resource URL. See `guides/authorization.md`.
 
 0.1: the server (both eras, one endpoint), the authorization server
 (bearer, CIMD, dynamic registration, consent, token rotation), and the
-client. Next: client-side OAuth, a stdio transport, the device
-authorization grant, and tasks.
+client, which runs the MCP authorization flow itself (discovery, CIMD or
+dynamic registration, PKCE, refresh, step-up). Next: a stdio transport,
+the device authorization grant, and tasks.
 
 ## License
 

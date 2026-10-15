@@ -1,7 +1,8 @@
 # The client
 
 `Sake.Client` talks to any MCP server (Sake-built or not) over Streamable
-HTTP, on either protocol era.
+HTTP, on either protocol era, and runs the MCP authorization flow itself
+when a server asks for it (see "Authorization" below).
 
 ```elixir
 {:ok, session} = Sake.Client.connect("https://mcp.example.com/mcp", headers: [{"authorization", "Bearer " <> token}])
@@ -74,23 +75,156 @@ Without `on_input`, every elicitation is answered `"cancel"` automatically
 — a script that never expects to be asked anything still behaves
 correctly rather than hanging.
 
-## The 401 challenge, and what to do with it today
+## Authorization
+
+Pass `auth:` and the client runs the MCP authorization flow itself
+whenever a server answers 401:
+
+```elixir
+{:ok, session} =
+  Sake.Client.connect("https://mcp.example.com/mcp",
+    auth: [authorize: &Sake.Client.Auth.Browser.authorize/1]
+  )
+```
+
+On the 401, the client:
+
+1. reads the `WWW-Authenticate` challenge and fetches the protected
+   resource metadata (RFC 9728) from its `resource_metadata` URL, or, when
+   the challenge has none, from the well-known URI with the endpoint's
+   path inserted, then the one at the root. The document must be about
+   this endpoint: its `resource` must be the endpoint's URL or a path
+   prefix of it on the same origin, or the flow stops;
+2. takes the first authorization server the document lists and fetches
+   its metadata, trying RFC 8414 and OpenID Connect Discovery URLs in the
+   specification's order (with an issuer path: path-inserted RFC 8414,
+   path-inserted OpenID Connect, then OpenID Connect appended). A document
+   whose `issuer` is not exactly that server's is refused, and so is a
+   server that does not list `S256` among its PKCE methods;
+3. picks a client identity (below);
+4. sends the person to the authorization endpoint with a PKCE S256
+   challenge, a random `state`, the `resource` parameter (RFC 8707: the
+   identifier from the resource metadata, exactly as published) and the
+   scopes (below);
+5. checks the answer before it uses the code: an `iss` parameter must be
+   the server's issuer, character for character, and must be there at all
+   when the server advertises
+   `authorization_response_iss_parameter_supported` (RFC 9207); the
+   `state` must match. A response from the wrong server is not acted on,
+   not even to report its `error`;
+6. exchanges the code (with the PKCE verifier and the same `resource`)
+   for a token, and sends the original request again with
+   `Authorization: Bearer`.
+
+Every later request carries the token. A token about to expire is
+refreshed before it is sent; on a 401 the refresh token is tried before
+the whole flow runs again. A server without resource metadata at all is
+treated as a 2025-03-26 one, its own authorization server, with the
+default `/authorize`, `/token` and `/register` endpoints on its origin
+when it publishes no metadata either.
+
+Every endpoint of the authorization server (and the metadata documents)
+must be HTTPS, or plain HTTP to a loopback host; the flow's own requests
+follow no redirects. Options in `req:` apply to these requests too.
+
+### The client's identity
+
+In the specification's order of preference:
+
+- **Pre-registered credentials** — `client_id:` (and `client_secret:` for
+  a confidential client). The token endpoint authentication method is
+  chosen from the server's `token_endpoint_auth_methods_supported`
+  (`client_secret_basic`, then `client_secret_post`, or `none` without a
+  secret); `token_endpoint_auth_method:` overrides it. Pre-registered
+  credentials belong to one authorization server: `issuer:` names it, and
+  without it they are bound to the first one they are used with. They are
+  never offered to another — the flow stops with
+  `{:client_issuer_mismatch, bound, new}` instead.
+- **A Client ID Metadata Document** — `client_metadata_url:`, the HTTPS
+  URL of a JSON document you host, used as the `client_id` when the server
+  advertises `client_id_metadata_document_supported`. The document's
+  `redirect_uris` must include the `redirect_uri:` the client uses.
+- **Dynamic Client Registration** (RFC 7591) — when the server has a
+  `registration_endpoint`. The client registers its redirect URI, the
+  authorization code and refresh token grants, `application_type`
+  `"native"` (or `"web"` for an HTTPS redirect URI on a real host), and a
+  public client (`none`) when the server takes one, else the secret
+  method it supports. A registration is kept per authorization server and
+  never presented to another; when the resource moves to a new server,
+  the client registers again there.
+
+### The interactive step
+
+`authorize:` is a function of the authorization URL that returns
+`{:ok, params}` — the query parameters the server sent to the redirect
+URI — or `{:error, reason}`. Two come with Sake:
+
+- `Sake.Client.Auth.Browser.authorize/1` (the default) opens the URL in
+  the system browser and waits for the redirect on a one-shot listener at
+  `redirect_uri:` — by default `http://127.0.0.1:33418/callback`; any
+  loopback address with a port you choose works. It gives up after five
+  minutes (`&Sake.Client.Auth.Browser.authorize(&1, timeout: ...)`), and
+  `open:` replaces the system opener, to print the URL for a person on
+  another machine, say.
+- `Sake.Client.Auth.Headless.authorize/1` GETs the URL and reads the
+  redirect's `Location` without following it, for an authorization
+  server that approves without a person: a test server, or the
+  conformance suite's.
+
+Your own function can do anything else — show the URL in your app's UI
+and wait for the callback on your web server, for instance.
+
+### Scopes
+
+The first authorization asks for the challenge's `scope` when it has one,
+else every scope in the resource metadata's `scopes_supported`, else no
+`scope` parameter at all. `offline_access` is added to a non-empty
+request when the authorization server lists it, to ask for a refresh
+token.
+
+A 403 with `error="insufficient_scope"` steps up: the client asks again
+for the scopes it asked for before plus the challenged ones, and retries
+the request with the new token. It does not when the token already has
+every challenged scope (asking again would end in the same 403), and one
+request runs the flow at most twice; past that, the 403 comes back as
+`{:error, {:insufficient_scope, challenge}, session}`.
+
+### Keeping tokens across runs
+
+Tokens and dynamic registrations live in the session by default. To keep
+them across runs, pass `store: {module, arg}`, a module implementing
+`Sake.Client.Auth.Store` (`fetch/2` and `put/3`, with JSON-friendly maps);
+its documentation has a file-based example. The values hold credentials:
+store them where only the person running the client can read them.
+
+### Errors
+
+A failure inside the flow comes back as `{:error, {:auth, reason}}` from
+`connect/2` (or `{:error, {:auth, reason}, session}` from a later call).
+The reasons name what stopped it: `{:resource_mismatch, resource}`,
+`{:issuer_mismatch, expected, got}` (from the metadata or the
+authorization response), `:pkce_not_supported`, `:missing_iss`,
+`:state_mismatch`, `{:denied, error, description}`,
+`{:insecure_url, url}`, `:no_client_registration`,
+`{:registration_failed, ...}`, `{:token_failed, ...}`,
+`{:authorize, reason}` (your `authorize:` function's error), and so on.
+
+### Without `auth:`
+
+A 401 comes back to you as
+`{:error, {:unauthorized, %Sake.Client.Challenge{}}}`, and nothing else
+happens — no browser opens that nobody asked for:
 
 ```elixir
 case Sake.Client.connect(url) do
   {:ok, session} -> session
   {:error, {:unauthorized, %Sake.Client.Challenge{resource_metadata: url, scope: scopes}}} ->
-    # url is the oauth-protected-resource metadata document to fetch next;
-    # scopes is what the server is asking for. Sake 0.1 stops here.
-    raise "authorize at #{url} for #{Enum.join(scopes, " ")}, then retry with a bearer header"
+    # url is the protected resource metadata document; scopes is what the
+    # server asks for.
+    raise "authorization required at #{url} for #{Enum.join(scopes, " ")}"
 end
 ```
 
 `Sake.Client.Challenge` parses the `WWW-Authenticate` header (scheme,
-`resource_metadata`, `scope`, `error`, `error_description`, `realm`) so
-your own code can drive the rest of RFC 9728/8414 discovery and the
-authorization code flow yourself — dynamic client registration, opening a
-browser for consent, and the token exchange. Sake 0.1's client does not do
-any of this itself yet (see the README's status line); pass a bearer
-token you obtained some other way through `headers:` on `connect/2` in the
-meantime.
+`resource_metadata`, `scope`, `error`, `error_description`, `realm`). A
+bearer token you obtained some other way goes in `headers:`.
