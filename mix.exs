@@ -28,7 +28,7 @@ defmodule Sake.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger, :crypto, :ssl]]
+    [extra_applications: [:logger, :crypto, :ssl, :eex]]
   end
 
   def cli do

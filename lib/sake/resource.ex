@@ -35,7 +35,8 @@ defmodule Sake.Resource do
       scopes: [],
       subscribe: false,
       annotations: %{},
-      ttl: nil
+      ttl: nil,
+      ui: false
     ]
 
     @spec match(t(), String.t()) :: {:ok, map()} | :error

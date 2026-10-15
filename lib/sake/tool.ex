@@ -15,7 +15,10 @@ defmodule Sake.Tool do
   (`read_only`, `destructive`, `idempotent`, `open_world`), `stream`,
   `ttl`, `meta`, `input_schema` (a schema map instead of `arg` lines),
   `task` (`:optional` or `true`, or `:required`: the tool runs as a task
-  for a client that takes one, see `Sake.Tasks`).
+  for a client that takes one, see `Sake.Tasks`), `ui` (a `Sake.UI`
+  module: the app the host shows with the tool's result), `visibility`
+  (`[:model, :app]` by default; `[:app]` for a tool only an app calls,
+  which a client without MCP Apps does not see).
   """
 
   alias Sake.Schema
@@ -50,6 +53,7 @@ defmodule Sake.Tool do
       :description,
       :output_schema,
       :meta,
+      :ui,
       icons: [],
       input_schema: %{},
       annotations: %{},
@@ -57,6 +61,7 @@ defmodule Sake.Tool do
       stream: false,
       ttl: nil,
       task: nil,
+      visibility: [:model, :app],
       headers: %{}
     ]
 
@@ -160,6 +165,8 @@ defmodule Sake.Tool do
       ttl: opts[:ttl],
       task: task_support!(module, opts[:task]),
       meta: opts[:meta],
+      ui: ui_uri!(module, opts[:ui]),
+      visibility: visibility!(module, opts[:visibility]),
       headers: Schema.header_paths(input_schema)
     }
   end
@@ -175,6 +182,31 @@ defmodule Sake.Tool do
         ArgumentError,
         "#{inspect(module)}: task: must be :optional or :required, got #{inspect(other)}"
       )
+
+  # The tool keeps its UI's URI, which is what travels in its `_meta.ui`.
+  defp ui_uri!(_module, nil), do: nil
+
+  defp ui_uri!(module, ui) do
+    with true <- is_atom(ui) and Code.ensure_compiled(ui) == {:module, ui},
+         true <- function_exported?(ui, :spec, 0),
+         %Sake.Resource.Spec{ui: true, uri: uri} <- ui.spec() do
+      uri
+    else
+      _ -> raise ArgumentError, "#{inspect(module)}: ui: #{inspect(ui)} is not a Sake.UI"
+    end
+  end
+
+  defp visibility!(_module, nil), do: [:model, :app]
+
+  defp visibility!(module, visibility) do
+    if is_list(visibility) and visibility != [] and visibility -- [:model, :app] == [],
+      do: Enum.uniq(visibility),
+      else:
+        raise(
+          ArgumentError,
+          "#{inspect(module)}: visibility: must list :model, :app or both, got #{inspect(visibility)}"
+        )
+  end
 
   defp output_schema([]), do: nil
   defp output_schema(output_args), do: Schema.build(output_args)

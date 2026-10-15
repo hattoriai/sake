@@ -62,10 +62,20 @@ defmodule Sake.Server.Results do
       end
 
     {:ok,
-     %{"contents" => Enum.map(contents, &(&1 |> Content.to_wire() |> Map.fetch!("resource")))}}
+     %{
+       "contents" =>
+         Enum.map(contents, &(&1 |> Content.to_wire() |> Map.fetch!("resource") |> ui_meta(spec)))
+     }}
   end
 
   def resource({:error, reason}, _spec, _uri, _ctx), do: {:error, reason}
+
+  # An MCP App's contents carry the resource's `_meta` (its `_meta.ui`,
+  # with the CSP the host enforces), as its `resources/list` entry does.
+  defp ui_meta(content, %{ui: true, meta: meta}) when is_map(meta),
+    do: Map.put_new(content, "_meta", meta)
+
+  defp ui_meta(content, _spec), do: content
 
   @spec prompt(term(), Sake.Prompt.Spec.t(), Sake.Context.t()) ::
           {:ok, map()} | {:error, String.t() | {:missing_capability, map()}}

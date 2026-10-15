@@ -99,7 +99,24 @@ defmodule Sake.Server do
     check_unique!(server, "tool", Enum.map(t, & &1.name))
     check_unique!(server, "resource", Enum.map(r, & &1.uri))
     check_unique!(server, "prompt", Enum.map(p, & &1.name))
+    check_uis!(server, t, r)
     {t, r, p}
+  end
+
+  # A host fetches a tool's UI with resources/read, so the UI has to be
+  # one of the server's resources.
+  defp check_uis!(server, tools, resources) do
+    uris = for %{ui: true, uri: uri} <- resources, do: uri
+
+    case Enum.find(tools, &(&1.ui && &1.ui not in uris)) do
+      nil ->
+        :ok
+
+      tool ->
+        raise ArgumentError,
+              "#{inspect(server)}: tool #{inspect(tool.name)} shows the UI #{inspect(tool.ui)}, " <>
+                "which is not among the server's resources"
+    end
   end
 
   defp check_unique!(server, kind, names) do
