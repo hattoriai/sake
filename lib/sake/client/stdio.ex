@@ -154,7 +154,7 @@ defmodule Sake.Client.Stdio do
   # shutdown signal; a server still running after `close_timeout` gets
   # SIGTERM, then SIGKILL.
   def handle_call(:close, _from, state) do
-    Port.close(state.port)
+    close_port(state.port)
     deadline = System.monotonic_time(:millisecond) + state.close_timeout
 
     unless exited?(state.os_pid, deadline) do
@@ -250,6 +250,13 @@ defmodule Sake.Client.Stdio do
   defp route(_parsed, _message, state), do: state
 
   defp write(state, message), do: Port.command(state.port, [JSON.encode!(message), ?\n])
+
+  # A server that exited on its own has taken its port with it.
+  defp close_port(port) do
+    Port.close(port)
+  rescue
+    ArgumentError -> true
+  end
 
   defp exited?(os_pid, deadline) do
     cond do
