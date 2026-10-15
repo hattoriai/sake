@@ -69,12 +69,11 @@ defmodule Sake.Plug do
     end
   end
 
-  defp route(%{method: "DELETE"} = conn, opts) do
-    case legacy_session(conn, opts) do
-      {:ok, _session, _id} -> send_resp(conn, 204, "")
-      :none -> send_resp(conn, 405, "")
-    end
-  end
+  # A legacy session ID is a signed token and the server keeps nothing per
+  # session, so there is nothing a DELETE could end: the ID would go on
+  # working. The legacy revisions let a server refuse explicit termination
+  # with 405, which is the honest answer.
+  defp route(%{method: "DELETE"} = conn, _opts), do: send_resp(conn, 405, "")
 
   defp route(conn, _opts), do: send_resp(conn, 405, "")
 
@@ -178,15 +177,31 @@ defmodule Sake.Plug do
     end
   end
 
-  # An `initialize` request always opens a legacy session, even when the
+  # An `initialize` request opens a legacy session, even when the
   # `MCP-Protocol-Version` header names the modern revision (the header
   # describes the transport the client used for this one request, not the
-  # session it is asking to start).
-  defp initialize_or_modern(conn, opts, {:request, _, "initialize", _} = parsed, header_version),
-    do: legacy(conn, opts, parsed, header_version)
+  # session it is asking to start). One that carries the modern per-request
+  # `_meta` comes from a modern client, though, and is served statelessly
+  # like any other modern request: `initialize` is not a modern method, so
+  # it gets "method not found".
+  defp initialize_or_modern(
+         conn,
+         opts,
+         {:request, _, "initialize", params} = parsed,
+         header_version
+       ) do
+    if modern_meta?(params),
+      do: modern(conn, opts, parsed, header_version),
+      else: legacy(conn, opts, parsed, header_version)
+  end
 
   defp initialize_or_modern(conn, opts, parsed, header_version),
     do: modern(conn, opts, parsed, header_version)
+
+  defp modern_meta?(%{"_meta" => meta}) when is_map(meta),
+    do: Map.has_key?(meta, Protocol.meta(:protocol_version))
+
+  defp modern_meta?(_params), do: false
 
   # ---- modern
 
@@ -208,6 +223,15 @@ defmodule Sake.Plug do
     meta = params["_meta"] || %{}
 
     cond do
+      not Map.has_key?(meta, Protocol.meta(:protocol_version)) ->
+        send_error(
+          conn,
+          400,
+          id,
+          JSONRPC.code(:invalid_params),
+          "Missing #{Protocol.meta(:protocol_version)} in _meta"
+        )
+
       meta[Protocol.meta(:protocol_version)] != version ->
         send_error(
           conn,

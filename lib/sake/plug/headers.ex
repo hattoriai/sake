@@ -45,6 +45,16 @@ defmodule Sake.Plug.Headers do
   defp header_safe?(v),
     do: String.to_charlist(v) |> Enum.all?(&(&1 in 0x21..0x7E or &1 in [0x20, 0x09]))
 
+  # RFC 9110 §5.5: the whitespace around a field value is not part of it.
+  # Plug hands the value over as the client sent it, so it is stripped
+  # here, before any comparison with the body.
+  defp field_value(conn, header) do
+    case Plug.Conn.get_req_header(conn, header) do
+      [] -> nil
+      [raw | _] -> String.replace(raw, ~r/\A[ \t]+|[ \t]+\z/, "")
+    end
+  end
+
   @doc "Checks the mirrored headers of a modern request against the body."
   @spec validate(Plug.Conn.t(), Sake.JSONRPC.parsed(), Sake.Tool.Spec.t() | nil) ::
           :ok | {:error, String.t()}
@@ -79,17 +89,17 @@ defmodule Sake.Plug.Headers do
     header = "mcp-param-" <> String.downcase(hname)
     display = "Mcp-Param-" <> hname
 
-    case {value, Plug.Conn.get_req_header(conn, header)} do
-      {nil, []} ->
+    case {value, field_value(conn, header)} do
+      {nil, nil} ->
         {:cont, :ok}
 
-      {nil, [_ | _]} ->
+      {nil, _raw} ->
         {:halt, {:error, "#{display} header is present but the body has no value"}}
 
-      {_value, []} ->
+      {_value, nil} ->
         {:halt, {:error, "#{display} header is missing"}}
 
-      {value, [raw | _]} ->
+      {value, raw} ->
         check_param_value(display, value, raw)
     end
   end
@@ -114,11 +124,11 @@ defmodule Sake.Plug.Headers do
     do: {:halt, {:error, "#{display} header contains invalid characters"}}
 
   defp check(conn, header, display, expected) do
-    case Plug.Conn.get_req_header(conn, header) do
-      [] ->
+    case field_value(conn, header) do
+      nil ->
         {:error, "#{display} header is missing"}
 
-      [raw | _] ->
+      raw ->
         case decode_value(raw) do
           {:ok, ^expected} ->
             :ok

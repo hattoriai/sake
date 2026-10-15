@@ -11,11 +11,15 @@ negotiates a revision and gets a session ID back, and every later request
 on that connection carries it.
 
 Sake serves both eras on the *same endpoint path*: a `POST` whose body's
-method is `initialize` always opens a legacy session, regardless of what
-the `MCP-Protocol-Version` header says (the header describes the one
-request's transport, not the session it is asking to start); every other
-modern-tagged request is dispatched statelessly, and a modern client never
-opens a session. `Sake.Client.connect/2` mirrors this from the other side
+method is `initialize` opens a legacy session, regardless of what the
+`MCP-Protocol-Version` header says (the header describes the one
+request's transport, not the session it is asking to start), unless it
+carries the modern per-request `_meta`: then it comes from a modern
+client, and gets the modern "method not found" (`-32601`, HTTP 404) like
+any other method the modern revision removed. Every other modern-tagged
+request is dispatched statelessly, and a modern client never opens a
+session. `server/discover` lists every revision the endpoint serves, the
+legacy ones included, the same list an unsupported version error carries. `Sake.Client.connect/2` mirrors this from the other side
 — it tries the modern `server/discover` first and falls back to the legacy
 `initialize` when the server answers "method not found" (`-32601`),
 "invalid params" (`-32602`) or with no JSON-RPC error at all (see
@@ -33,7 +37,10 @@ opens a session. `Sake.Client.connect/2` mirrors this from the other side
 
 An unrecognized `MCP-Protocol-Version` header gets a `-32022` JSON-RPC
 error listing `Sake.Protocol.supported/0`, so a client can retry with a
-revision it can actually negotiate against.
+revision it can actually negotiate against. A modern request whose `_meta`
+lacks the protocol version (or the client capabilities) is invalid
+(`-32602`); one whose `_meta` names a different version than the header is
+a header mismatch (`-32020`).
 
 ## Headers
 
@@ -41,13 +48,20 @@ The modern transport mirrors the JSON-RPC body's method, tool/resource
 name and (encoded) arguments onto `Mcp-Method`, `Mcp-Name` and
 `Mcp-Param-*` headers (`Sake.Plug.Headers`), validated against the body on
 every request — a proxy or gateway can route or log on headers alone
-without parsing JSON. `Accept` must list both `application/json` and
-`text/event-stream`; `MCP-Protocol-Version` selects the era as described
-above; `Mcp-Session-Id` carries a legacy session. The session ID is a
-signed token that also carries the log level `logging/setLevel` last set
-(the server keeps no session state; see `Sake.Server.Session`): after
+without parsing JSON. Whitespace around a header value is not part of
+it (RFC 9110), so `Mcp-Name:  add ` matches a body name of `add`; a value
+that really starts or ends with a space travels Base64-encoded. `Accept`
+must list both `application/json` and `text/event-stream`;
+`MCP-Protocol-Version` selects the era as described above;
+`Mcp-Session-Id` carries a legacy session. The session ID is a signed
+token that also carries the log level `logging/setLevel` last set (the
+server keeps no session state; see `Sake.Server.Session`): after
 `logging/setLevel`, and when an ID gets old, the response carries a
 re-minted ID for the same session, which the client uses from then on.
+Because nothing is stored, a session cannot be ended early: a `DELETE`
+gets `405 Method Not Allowed`, which the legacy revisions allow for a
+server that does not support explicit termination, and the ID keeps
+working until it expires.
 
 ## What is not supported
 
@@ -67,11 +81,12 @@ re-minted ID for the same session, which the client uses from then on.
 - **Apps** — UI-surface extensions layered on top of MCP are out of scope
   for this package entirely.
 - **Sampling** — a server asking the *client's* model to complete a
-  prompt (`sampling/createMessage`). `Sake.Elicit` covers the
-  server-asks-the-person direction; there is no equivalent for
-  server-asks-the-client's-LLM yet.
-- **Roots** — the client-declares-its-workspace-folders capability has no
-  server- or client-side support.
+  prompt (`sampling/createMessage`), whether as a legacy server-to-client
+  request or as an input request of a modern input-required result.
+  `Sake.Elicit` covers the server-asks-the-person direction; there is no
+  equivalent for server-asks-the-client's-LLM yet.
+- **Roots** — the client-declares-its-workspace-folders capability
+  (`roots/list`) has no server- or client-side support, in either era.
 
 ## Conformance status
 
