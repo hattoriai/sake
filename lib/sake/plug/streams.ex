@@ -1,8 +1,8 @@
 defmodule Sake.Plug.Streams do
   @moduledoc """
   The registry of open streams on this node: `subscriptions/listen`
-  streams, legacy GET streams, and handlers waiting for a legacy
-  elicitation answer. Started by the `Sake` supervisor. With a `pubsub:`
+  streams, legacy GET streams, and handlers waiting for a legacy client's
+  answer to a server request (elicitation, sampling, roots). Started by the `Sake` supervisor. With a `pubsub:`
   option (a `Phoenix.PubSub` name) notifications reach every node.
   """
 
@@ -54,7 +54,14 @@ defmodule Sake.Plug.Streams do
     do: register({server, :legacy, session_nonce}, nil)
 
   @doc "Registers the calling process as waiting for the client's answer to request `id`."
-  def register_elicit(id), do: register({:elicit, id}, nil)
+  def register_request(id), do: register({:request, id}, nil)
+
+  @doc false
+  # The answer arrived (or the wait timed out).
+  def unregister_request(id) do
+    if Process.whereis(@registry), do: Registry.unregister(@registry, {:request, id})
+    :ok
+  end
 
   defp register(key, value) do
     ensure_started!()
@@ -115,9 +122,9 @@ defmodule Sake.Plug.Streams do
   def deliver_response(id, response) do
     ensure_started!()
 
-    case Registry.lookup(@registry, {:elicit, id}) do
+    case Registry.lookup(@registry, {:request, id}) do
       [{pid, _} | _] ->
-        send(pid, {:sake_elicit_response, id, response})
+        send(pid, {:sake_response, id, response})
         :ok
 
       [] ->

@@ -45,7 +45,17 @@ defmodule Sake.Server.LegacyTest do
 
   test "lists and calls without modern fields" do
     assert {:reply, r} = call("tools/list")
-    assert Enum.map(r["tools"], & &1["name"]) == ["echo", "add", "slow", "confirm", "connect"]
+
+    assert Enum.map(r["tools"], & &1["name"]) == [
+             "echo",
+             "add",
+             "slow",
+             "confirm",
+             "connect",
+             "summarize",
+             "roots"
+           ]
+
     refute Map.has_key?(r, "ttlMs")
     refute Map.has_key?(r, "cacheScope")
     refute Map.has_key?(r, "_meta")

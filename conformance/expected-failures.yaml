@@ -1,12 +1,7 @@
 # Baseline of conformance scenarios that fail on purpose. CI turns red only
 # on a *new* failure or a stale entry (a listed scenario that now passes).
 # See guides/protocol_versions.md for the reasoning behind each entry.
-server:
-  # Sake does not implement server-initiated sampling
-  # (`sampling/createMessage`; see guides/protocol_versions.md), so the
-  # development server has no `test_sampling` tool and the scenario fails
-  # with "Unknown tool".
-  - tools-call-sampling
+server: []
 
 client:
   # The client has no OAuth flow of its own (see guides/client.md): it

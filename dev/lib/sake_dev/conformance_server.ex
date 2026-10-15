@@ -23,7 +23,16 @@ defmodule SakeDev.ConformanceServer do
     Tools.TestToolWithProgress,
     Tools.TestElicitation,
     Tools.TestElicitationSep1034Defaults,
-    Tools.TestElicitationSep1330Enums
+    Tools.TestElicitationSep1330Enums,
+    Tools.TestSampling,
+    Tools.TestInputRequiredResultElicitation,
+    Tools.TestInputRequiredResultSampling,
+    Tools.TestInputRequiredResultListRoots,
+    Tools.TestInputRequiredResultRequestState,
+    Tools.TestInputRequiredResultMultipleInputs,
+    Tools.TestInputRequiredResultMultiRound,
+    Tools.TestInputRequiredResultTamperedState,
+    Tools.TestInputRequiredResultCapabilities
   ]
 
   resources [
@@ -37,6 +46,7 @@ defmodule SakeDev.ConformanceServer do
     Prompts.TestSimplePrompt,
     Prompts.TestPromptWithArguments,
     Prompts.TestPromptWithEmbeddedResource,
-    Prompts.TestPromptWithImage
+    Prompts.TestPromptWithImage,
+    Prompts.TestInputRequiredResultPrompt
   ]
 end

@@ -360,7 +360,7 @@ defmodule Sake.ElicitTest do
 
     Stream.repeatedly(fn ->
       Process.sleep(20)
-      Registry.select(Sake.Plug.Streams, [{{{:elicit, :"$1"}, :_, :_}, [], [:"$1"]}])
+      Registry.select(Sake.Plug.Streams, [{{{:request, :"$1"}, :_, :_}, [], [:"$1"]}])
     end)
     |> Enum.find_value(fn
       [id | _] ->

@@ -4,8 +4,10 @@ defmodule Sake.Context do
 
   `scope` is the host's principal (the current user, organization, or
   anything the host puts there); `token` and `scopes` are set when the
-  endpoint has authorization; `inputs` holds elicitation answers on a
-  retry; `progress` reports progress to the client when it asked for it.
+  endpoint has authorization; `inputs` holds the client's answers
+  (elicitation, sampling, roots) on a retry; `progress` reports progress
+  to the client when it asked for it; `task` is the task ID when the
+  component runs as a task (see `Sake.Tasks`).
   """
 
   @type t :: %__MODULE__{}
@@ -26,6 +28,7 @@ defmodule Sake.Context do
             progress: nil,
             server: nil,
             transport: nil,
+            task: nil,
             secret: nil,
             reraise: false
 

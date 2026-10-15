@@ -19,9 +19,7 @@ defmodule Sake.Elicit do
   """
 
   alias Sake.Context
-
-  @timeout 300_000
-  @vendor_key "ai.hattori.sake/key"
+  alias Sake.Server.Ask
 
   @spec form(Context.t(), atom() | String.t(), String.t(), map()) ::
           {:ok, map()} | :decline | :cancel | {:error, :unsupported}
@@ -47,47 +45,12 @@ defmodule Sake.Elicit do
   end
 
   defp ask(ctx, key, params) do
-    if Map.has_key?(ctx.client_capabilities, "elicitation") do
-      answer(ctx, key, params)
-    else
-      {:error, :unsupported}
+    case Ask.request(ctx, "elicitation", key, "elicitation/create", params) do
+      {:ok, answer} -> normalize(answer)
+      {:error, :unsupported} -> {:error, :unsupported}
+      {:error, _} -> :cancel
     end
   end
-
-  # An answer in `ctx.inputs` is only ever honoured once the capability
-  # check above has passed, so a client that never declared `elicitation`
-  # cannot have its `inputResponses` read back as one.
-  defp answer(ctx, key, params) do
-    case Map.fetch(ctx.inputs, key) do
-      {:ok, answer} ->
-        normalize(answer)
-
-      :error ->
-        if ctx.era == :modern do
-          throw(
-            {:sake_input_required, key, %{"method" => "elicitation/create", "params" => params}}
-          )
-        else
-          legacy(ctx, key, params)
-        end
-    end
-  end
-
-  defp legacy(%Context{transport: pid}, key, params) when is_pid(pid) do
-    id = "sake-elicit-" <> Base.url_encode64(:crypto.strong_rand_bytes(9))
-    :ok = Sake.Plug.Streams.register_elicit(id)
-    params = Map.update(params, "_meta", %{@vendor_key => key}, &Map.put(&1, @vendor_key, key))
-    send(pid, {:sake_elicit, self(), id, params})
-
-    receive do
-      {:sake_elicit_response, ^id, {:ok, answer}} -> normalize(answer)
-      {:sake_elicit_response, ^id, {:error, _}} -> :cancel
-    after
-      @timeout -> :cancel
-    end
-  end
-
-  defp legacy(_ctx, _key, _params), do: {:error, :unsupported}
 
   defp normalize(%{"action" => "accept"} = a), do: {:ok, a["content"] || %{}}
   defp normalize(%{"action" => "decline"}), do: :decline

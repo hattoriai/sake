@@ -306,8 +306,9 @@ defmodule Sake.Server.Dispatch do
   end
 
   # ---- the multi round-trip machinery shared by tools/call, resources/read
-  # and prompts/get: a component's elicitation call throws to unwind here,
-  # and the resulting `requestState` is verified on the next round-trip.
+  # and prompts/get: a component's elicitation, sampling or roots call
+  # (`Sake.Server.Ask`) throws to unwind here, and the resulting
+  # `requestState` is verified on the next round-trip.
 
   defp with_inputs(name, args, params, ctx, fun) do
     case resolve_inputs(name, args, params, ctx) do
@@ -343,11 +344,11 @@ defmodule Sake.Server.Dispatch do
     try do
       fun.(ctx)
     catch
-      :throw, {:sake_input_required, key, request} ->
+      :throw, {:sake_input_required, requests} ->
         {:ok,
          %{
            "resultType" => "input_required",
-           "inputRequests" => %{key => request},
+           "inputRequests" => requests,
            "requestState" => Sake.Server.RequestState.sign(ctx, name, args, inputs)
          }}
     end

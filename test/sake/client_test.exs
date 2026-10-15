@@ -19,7 +19,16 @@ defmodule Sake.ClientTest do
         assert session.era == @era
         assert session.server_info["name"] == "sake-dev"
         assert {:ok, tools, session} = Client.list_tools(session)
-        assert Enum.map(tools, & &1.name) == ["echo", "add", "slow", "confirm", "connect"]
+
+        assert Enum.map(tools, & &1.name) == [
+                 "echo",
+                 "add",
+                 "slow",
+                 "confirm",
+                 "connect",
+                 "summarize",
+                 "roots"
+               ]
 
         assert %Sake.Tool.Spec{headers: %{"Precision" => ["precision"]}} =
                  Enum.find(tools, &(&1.name == "add"))

@@ -56,6 +56,8 @@ defmodule Sake.Plug.Stream do
 
   defp after_outcome(o, _ctx), do: o
 
+  @asks ["elicitation", "sampling", "roots"]
+
   defp stream?(method, params, ctx) do
     token = get_in(params, ["_meta", "progressToken"])
 
@@ -70,11 +72,13 @@ defmodule Sake.Plug.Stream do
           _ -> false
         end
 
-    legacy_elicit =
+    # A legacy client that can be asked something (elicitation, sampling,
+    # roots) gets the stream the question would travel on.
+    legacy_asks =
       ctx.era == :legacy and method in ["tools/call", "resources/read", "prompts/get"] and
-        Map.has_key?(ctx.client_capabilities, "elicitation")
+        Enum.any?(@asks, &Map.has_key?(ctx.client_capabilities, &1))
 
-    token != nil or tool_streams or legacy_elicit
+    token != nil or tool_streams or legacy_asks
   end
 
   defp stream(conn, opts, {:request, id, _method, params} = parsed, ctx, handler) do
@@ -160,16 +164,10 @@ defmodule Sake.Plug.Stream do
           })
         )
 
-      {:sake_elicit, _from, request_id, params} ->
-        # Legacy elicitation: the server asks on the stream and the handler waits.
-        continue(
-          conn,
-          opts,
-          id,
-          ctx,
-          task,
-          JSONRPC.request(request_id, "elicitation/create", params)
-        )
+      {:sake_request, _from, request_id, method, params} ->
+        # A legacy server request (elicitation, sampling, roots): the server
+        # asks on the stream and the handler waits.
+        continue(conn, opts, id, ctx, task, JSONRPC.request(request_id, method, params))
 
       {^task_ref, outcome} ->
         Process.demonitor(task_ref, [:flush])
