@@ -31,7 +31,21 @@ First release.
   settings page and `Sake.Auth.prune/1` for expired rows.
 - `Sake.Client`: a functional client for both protocol eras, with era
   probing, elicitation via `on_input`, and a parsed `WWW-Authenticate`
-  challenge on a 401 (client-side OAuth itself is not yet implemented).
+  challenge on a 401.
+- `Sake.Client.Auth`: with `auth:`, the client runs the MCP authorization
+  flow itself on a 401: protected resource metadata (RFC 9728, from the
+  challenge or the well-known URIs) checked against the endpoint,
+  authorization server metadata (RFC 8414 and OpenID Connect Discovery,
+  issuer validated), pre-registered credentials bound to their issuer, a
+  Client ID Metadata Document, or dynamic registration (RFC 7591, with
+  `application_type`), the authorization code with PKCE S256, `state`,
+  `resource` (RFC 8707) and `iss` validation (RFC 9207), token endpoint
+  authentication (`client_secret_basic`, `client_secret_post`, `none`),
+  refresh before expiry and on a 401, step-up on a 403
+  `insufficient_scope` with a retry limit, and the 2025-03-26 fallbacks.
+  The interactive step is pluggable (`Sake.Client.Auth.Browser` with a
+  loopback listener, `Sake.Client.Auth.Headless`), and so is token
+  persistence (`Sake.Client.Auth.Store`).
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the
@@ -39,5 +53,5 @@ First release.
   the authorization-server scenarios against the development server's own
   authorization server, and, as a separate step, the extension scenarios.
   Its baselines list the known, documented gaps (sampling and roots, SSE
-  resumability, the client's standalone GET stream, client-side OAuth,
-  the tasks extension).
+  resumability, the client's standalone GET stream, the tasks extension);
+  every `auth/*` client scenario passes.

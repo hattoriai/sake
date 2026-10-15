@@ -20,8 +20,8 @@ server:
   - tasks-mrtr-composition
 
 client:
-  # The client has no OAuth flow of its own (see expected-failures.yaml),
-  # let alone these extension grants and proof-of-possession schemes.
+  # The client runs the core authorization flow, but not these extension
+  # grants and proof-of-possession schemes (hattoriai/sake#4).
   - auth/client-credentials-jwt
   - auth/client-credentials-basic
   - auth/enterprise-managed-authorization
