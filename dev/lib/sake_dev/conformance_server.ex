@@ -34,6 +34,7 @@ defmodule SakeDev.ConformanceServer do
     Tools.TestInputRequiredResultMultiRound,
     Tools.TestInputRequiredResultTamperedState,
     Tools.TestInputRequiredResultCapabilities,
+    Tools.TestMissingCapability,
     Tools.Greet,
     Tools.SlowCompute,
     Tools.FailingJob,

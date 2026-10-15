@@ -201,6 +201,55 @@ defmodule Sake.SamplingTest do
       assert params["toolChoice"] == %{"mode" => "auto"}
     end
 
+    test "a component can refuse with -32021, naming the capability it needs" do
+      conn =
+        ModernClient.post(
+          ModernClient.opts(server: SakeDev.ConformanceServer),
+          "tools/call",
+          %{"name" => "test_missing_capability", "arguments" => %{}}
+        )
+
+      assert conn.status == 400
+
+      assert %{
+               "error" => %{
+                 "code" => -32_021,
+                 "data" => %{"requiredCapabilities" => %{"sampling" => %{}}}
+               }
+             } = ModernClient.json(conn)
+
+      defmodule Needy do
+        use Sake.Resource, uri: "needy://x", name: "needy"
+        def read(_params, _ctx), do: {:error, {:missing_capability, %{"roots" => %{}}}}
+      end
+
+      defmodule NeedyPrompt do
+        use Sake.Prompt, name: "needy"
+        def get(_args, _ctx), do: {:error, {:missing_capability, %{"roots" => %{}}}}
+      end
+
+      defmodule NeedyServer do
+        use Sake.Server, name: "needy", version: "1"
+        resources [Needy]
+        prompts [NeedyPrompt]
+      end
+
+      opts = ModernClient.opts(server: NeedyServer)
+
+      for {method, params} <- [
+            {"resources/read", %{"uri" => "needy://x"}},
+            {"prompts/get", %{"name" => "needy"}}
+          ] do
+        assert %{
+                 "error" => %{
+                   "code" => -32_021,
+                   "data" => %{"requiredCapabilities" => %{"roots" => %{}}}
+                 }
+               } =
+                 ModernClient.json(ModernClient.post(opts, method, params))
+      end
+    end
+
     test "max_tokens is required" do
       assert_raise ArgumentError, ~r/max_tokens/, fn ->
         Sake.Sampling.create_message(Sake.Context.new(), :k, [user: "x"], [])

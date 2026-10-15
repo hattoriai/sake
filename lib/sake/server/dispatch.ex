@@ -232,7 +232,7 @@ defmodule Sake.Server.Dispatch do
       {:ok, args} ->
         if spec.task && Tasks.declared?(ctx),
           do: Tasks.start(spec, args, ctx),
-          else: {:ok, Results.tool(spec.module.execute(args, ctx), spec, ctx)}
+          else: execute(spec, args, ctx)
 
       {:error, text} ->
         {:ok, Results.tool({:error, text}, spec, ctx)}
@@ -246,6 +246,22 @@ defmodule Sake.Server.Dispatch do
       )
 
       {:ok, Results.tool({:error, "The tool failed."}, spec, ctx)}
+  end
+
+  defp execute(spec, args, ctx) do
+    case spec.module.execute(args, ctx) do
+      {:error, {:missing_capability, caps}} -> missing_capability(caps)
+      result -> {:ok, Results.tool(result, spec, ctx)}
+    end
+  end
+
+  @doc false
+  # A component that cannot serve the request without a capability the
+  # client did not declare says so with `{:error, {:missing_capability,
+  # capabilities}}`: a -32021 error naming them, not a tool error.
+  def missing_capability(caps) do
+    {:error, JSONRPC.code(:missing_capability), "Missing required client capability",
+     %{"requiredCapabilities" => caps}}
   end
 
   defp prepare(spec, args, ctx) do
@@ -279,6 +295,7 @@ defmodule Sake.Server.Dispatch do
     case Results.resource(spec.module.read(uri_params, ctx), spec, uri, ctx) do
       {:ok, result} -> {:ok, cacheable(result, server, ctx, [spec.ttl])}
       {:error, :not_found} -> {:error, not_found_code(ctx), "Resource not found: #{uri}"}
+      {:error, {:missing_capability, caps}} -> missing_capability(caps)
       {:error, text} -> {:error, JSONRPC.code(:internal), text}
     end
   end
@@ -312,6 +329,7 @@ defmodule Sake.Server.Dispatch do
   defp prompt_result(spec, args, ctx) do
     case Results.prompt(spec.module.get(args, ctx), spec, ctx) do
       {:ok, result} -> {:ok, result}
+      {:error, {:missing_capability, caps}} -> missing_capability(caps)
       {:error, text} -> {:error, JSONRPC.code(:invalid_params), text}
     end
   end

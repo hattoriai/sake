@@ -58,7 +58,14 @@ defmodule Sake.Tasks.Worker do
   end
 
   defp execute(spec, args, ctx) do
-    {:completed, Results.tool(spec.module.execute(args, ctx), spec, ctx)}
+    case spec.module.execute(args, ctx) do
+      {:error, {:missing_capability, caps}} ->
+        {_, code, message, data} = Sake.Server.Dispatch.missing_capability(caps)
+        {:failed, %{"code" => code, "message" => message, "data" => data}}
+
+      result ->
+        {:completed, Results.tool(result, spec, ctx)}
+    end
   rescue
     exception ->
       Logger.error(

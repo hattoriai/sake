@@ -8,7 +8,10 @@ defmodule Sake.Resource do
 
   @callback spec() :: Sake.Resource.Spec.t()
   @callback read(params :: map(), ctx :: Sake.Context.t()) ::
-              {:ok, term()} | {:error, :not_found} | {:error, String.t()}
+              {:ok, term()}
+              | {:error, :not_found}
+              | {:error, String.t()}
+              | {:error, {:missing_capability, map()}}
   @callback list(ctx :: Sake.Context.t()) :: [String.t() | map()]
   @callback complete(arg :: String.t(), partial :: String.t(), ctx :: Sake.Context.t()) ::
               {:ok, [String.t()]} | {:ok, [String.t()], keyword()}

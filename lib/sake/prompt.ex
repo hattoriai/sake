@@ -9,6 +9,7 @@ defmodule Sake.Prompt do
               {:ok, [{atom(), term()}]}
               | {:ok, [{atom(), term()}], keyword()}
               | {:error, String.t()}
+              | {:error, {:missing_capability, map()}}
   @callback complete(arg :: String.t(), partial :: String.t(), ctx :: Sake.Context.t()) ::
               {:ok, [String.t()]} | {:ok, [String.t()], keyword()}
   @optional_callbacks complete: 3

@@ -206,6 +206,31 @@ defmodule Sake.TasksTest do
       assert log =~ "protocol_error_job always raises"
     end
 
+    test "a missing capability inside a task fails it with -32021" do
+      defmodule Needs do
+        use Sake.Tool, name: "needs", task: true
+
+        @impl true
+        def execute(%{}, _ctx), do: {:error, {:missing_capability, %{"roots" => %{}}}}
+      end
+
+      defmodule NeedsServer do
+        use Sake.Server, name: "needs", version: "1"
+        tools [Needs]
+      end
+
+      opts = ModernClient.opts(server: NeedsServer)
+      id = start(opts, "needs", %{})
+
+      assert %{
+               "status" => "failed",
+               "error" => %{
+                 "code" => -32_021,
+                 "data" => %{"requiredCapabilities" => %{"roots" => %{}}}
+               }
+             } = await(opts, id, &terminal?/1)
+    end
+
     test "argument errors and scope errors come before any task" do
       assert %{"result" => %{"resultType" => "complete", "isError" => true}} =
                call(opts(), "slow_compute", %{"seconds" => "soon"})

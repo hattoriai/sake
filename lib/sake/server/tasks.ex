@@ -21,10 +21,8 @@ defmodule Sake.Server.Tasks do
   def declared?(_ctx), do: false
 
   @doc false
-  def missing_capability do
-    {:error, JSONRPC.code(:missing_capability), "Missing required client capability",
-     %{"requiredCapabilities" => %{"extensions" => %{Tasks.extension() => %{}}}}}
-  end
+  def missing_capability,
+    do: Sake.Server.Dispatch.missing_capability(%{"extensions" => %{Tasks.extension() => %{}}})
 
   @doc false
   # Stores the task (so that a `tasks/get` anywhere finds it) before the

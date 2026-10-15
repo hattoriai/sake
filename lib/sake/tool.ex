@@ -22,7 +22,10 @@ defmodule Sake.Tool do
 
   @callback spec() :: Sake.Tool.Spec.t()
   @callback execute(args :: map(), ctx :: Sake.Context.t()) ::
-              {:ok, term()} | {:ok, term(), keyword()} | {:error, String.t()}
+              {:ok, term()}
+              | {:ok, term(), keyword()}
+              | {:error, String.t()}
+              | {:error, {:missing_capability, map()}}
   @callback complete(arg :: String.t(), partial :: String.t(), ctx :: Sake.Context.t()) ::
               {:ok, [String.t()]} | {:ok, [String.t()], keyword()}
   @doc """
