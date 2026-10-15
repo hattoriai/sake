@@ -9,8 +9,9 @@ defmodule Sake.Server.Tasks do
   alias Sake.Tasks.{Record, Worker}
 
   @doc false
-  # Whether any tool of the server can run as a task.
-  def supported?(server), do: Enum.any?(server.__sake__(:tools), & &1.task)
+  # Whether any tool of the server can run as a task, here.
+  def supported?(server),
+    do: Tasks.running?() and Enum.any?(server.__sake__(:tools), & &1.task)
 
   @doc false
   # Whether the request's client declared the extension. Tasks are a
@@ -75,7 +76,7 @@ defmodule Sake.Server.Tasks do
   # The task IDs a `subscriptions/listen` request may follow: the caller's
   # own, live tasks.
   def visible(ids, ctx) when is_list(ids) do
-    if :persistent_term.get({Tasks, :config}, nil),
+    if Tasks.running?(),
       do: Enum.filter(ids, &match?({:ok, _}, find(%{"taskId" => &1}, ctx))),
       else: []
   end

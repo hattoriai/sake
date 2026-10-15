@@ -109,6 +109,7 @@ defmodule Sake.Stdio do
     end
 
     ensure_streams()
+    ensure_tasks()
     me = self()
 
     {:ok,
@@ -146,6 +147,12 @@ defmodule Sake.Stdio do
     unless Process.whereis(Streams) do
       {:ok, _} = Supervisor.start_link([Streams.child_spec([])], strategy: :one_for_one)
     end
+  end
+
+  # Tasks too, with the defaults, so a task tool served on its own runs as
+  # a task for a client that takes one.
+  defp ensure_tasks do
+    unless Sake.Tasks.running?(), do: {:ok, _} = Sake.Tasks.start_link([])
   end
 
   defp read(input, conn) do

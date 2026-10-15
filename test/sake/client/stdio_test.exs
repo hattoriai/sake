@@ -55,6 +55,45 @@ defmodule Sake.Client.StdioTest do
         refute Process.alive?(session.stdio)
       end
 
+      test "sampling: and roots: answer the server's requests" do
+        sampling = fn _params, _session ->
+          {:ok,
+           %{
+             "role" => "assistant",
+             "content" => %{"type" => "text", "text" => "Short."},
+             "model" => "m"
+           }}
+        end
+
+        assert {:ok, session} =
+                 Client.connect(script("server"),
+                   era: @era,
+                   sampling: sampling,
+                   roots: [%{"uri" => "file:///w", "name" => "W"}]
+                 )
+
+        assert {:ok, %{text: "Short."}, session} =
+                 Client.call_tool(session, "summarize", %{"text" => "Long."})
+
+        assert {:ok, %{text: "file:///w (W)"}, session} = Client.call_tool(session, "roots", %{})
+        assert :ok = Client.close(session)
+      end
+
+      test "a task tool: followed to its result on modern, run synchronously on legacy" do
+        on_input = fn requests, _session ->
+          Map.new(requests, fn {key, _} ->
+            {key, %{"action" => "accept", "content" => %{"format" => "json"}}}
+          end)
+        end
+
+        assert {:ok, session} = Client.connect(script("server"), era: @era, on_input: on_input)
+
+        assert {:ok, %{text: "Exported 2 issues as json."}, session} =
+                 Client.call_tool(session, "export", %{"n" => 2, "delay_ms" => 0})
+
+        assert :ok = Client.close(session)
+      end
+
       test "on_input answers an elicitation" do
         on_input = fn requests, _session ->
           Map.new(requests, fn {key, _request} ->

@@ -60,7 +60,8 @@ defmodule Sake.Tasks do
   several), `ttl` (how long a task is kept after it was created, in ms;
   default one hour) and `poll_interval` (the `pollIntervalMs` suggested to
   clients, and how often a waiting task checks the store; default one
-  second). `tasks: false` turns tasks off.
+  second). `tasks: false` turns tasks off: task tools then run like any
+  other tool, and the extension is not advertised.
 
   Telemetry: `[:sake, :task, :start | :stop | :exception]` around the
   tool's run, with `task_id`, `tool` and `server` in the metadata, and the
@@ -87,6 +88,11 @@ defmodule Sake.Tasks do
 
   @doc false
   def extension, do: @extension
+
+  @doc false
+  # Whether tasks run on this node: without them (`tasks: false`), task
+  # tools run like any other tool and the extension is not advertised.
+  def running?, do: Process.whereis(__MODULE__.Registry) != nil
 
   @doc false
   def child_spec(opts) do

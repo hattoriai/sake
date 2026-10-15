@@ -121,6 +121,20 @@ defmodule Sake.TasksTest do
       end
     end
 
+    test "with tasks off, task tools run synchronously and the extension is not advertised" do
+      on_exit(fn -> Supervisor.restart_child(SakeTest.Supervisor, Sake.Tasks) end)
+      :ok = Supervisor.terminate_child(SakeTest.Supervisor, Sake.Tasks)
+
+      assert %{"result" => %{"capabilities" => caps}} = rpc(opts(), "server/discover", %{}, %{})
+      refute Map.has_key?(caps, "extensions")
+
+      assert %{"result" => %{"resultType" => "complete", "isError" => true}} =
+               call(opts(), "failing_job", %{})
+
+      assert %{"error" => %{"code" => -32_601}} =
+               rpc(opts(), "tasks/get", %{"taskId" => "x"}, @tasks)
+    end
+
     test "a legacy session never gets a task" do
       session = LegacyClient.initialize(opts(), "2025-11-25", @tasks)
 

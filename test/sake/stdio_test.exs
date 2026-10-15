@@ -35,7 +35,18 @@ defmodule Sake.StdioTest do
     resources [SakeDev.Resources.Issue]
   end
 
+  defmodule AskingServer do
+    use Sake.Server, name: "stdio-asking", version: "1.0.0"
+
+    tools [
+      SakeDev.Tools.Summarize,
+      SakeDev.Tools.Roots,
+      SakeDev.Conformance.Tools.ConfirmDelete
+    ]
+  end
+
   @modern "2026-07-28"
+  @tasks %{"extensions" => %{"io.modelcontextprotocol/tasks" => %{}}}
 
   setup do
     pipe = Pipe.start()
@@ -45,9 +56,11 @@ defmodule Sake.StdioTest do
   defp serve(pipe, opts \\ []) do
     test = self()
 
+    {server, opts} = Keyword.pop(opts, :server, Server)
+
     {:ok, pid} =
       Task.start_link(fn ->
-        Sake.Stdio.run(Server, Keyword.merge([input: pipe, output: pipe], opts))
+        Sake.Stdio.run(server, Keyword.merge([input: pipe, output: pipe], opts))
         send(test, :stopped)
       end)
 
@@ -90,6 +103,20 @@ defmodule Sake.StdioTest do
     params = %{"name" => name, "arguments" => arguments}
     params = if meta, do: Map.put(params, "_meta", meta), else: params
     Sake.JSONRPC.request(id, "tools/call", params)
+  end
+
+  defp meta,
+    do: %{"io.modelcontextprotocol/protocolVersion" => @modern}
+
+  defp poll(pipe, id, caps, done?, tries \\ 100) do
+    Pipe.push(pipe, modern(100 + tries, "tasks/get", %{"taskId" => id}, caps))
+    assert %{"result" => task} = recv(pipe)
+
+    cond do
+      done?.(task) -> task
+      tries == 0 -> flunk("task #{id} never got there: #{inspect(task)}")
+      true -> Process.sleep(20) && poll(pipe, id, caps, done?, tries - 1)
+    end
   end
 
   defp recv(pipe) do
@@ -182,6 +209,46 @@ defmodule Sake.StdioTest do
       )
 
       assert %{"id" => 2, "result" => %{"content" => [%{"text" => "Hello, Ana!"}]}} = recv(pipe)
+    end
+
+    test "a task tool answers with a task, followed with tasks/get and tasks/update", %{
+      pipe: pipe
+    } do
+      serve(pipe, server: AskingServer)
+
+      caps = %{
+        "io.modelcontextprotocol/clientCapabilities" => Map.put(@tasks, "elicitation", %{})
+      }
+
+      Pipe.push(
+        pipe,
+        call(1, "confirm_delete", %{"filename" => "a.txt"}, Map.merge(meta(), caps))
+      )
+
+      assert %{"id" => 1, "result" => %{"resultType" => "task", "taskId" => id}} = recv(pipe)
+
+      task = poll(pipe, id, caps, &(&1["status"] == "input_required"))
+      assert %{"confirm" => %{"method" => "elicitation/create"}} = task["inputRequests"]
+
+      answer = %{"confirm" => %{"action" => "accept", "content" => %{"confirm" => true}}}
+
+      Pipe.push(
+        pipe,
+        modern(9, "tasks/update", %{"taskId" => id, "inputResponses" => answer}, caps)
+      )
+
+      assert %{"id" => 9, "result" => %{"resultType" => "complete"}} = recv(pipe)
+
+      assert %{"result" => %{"content" => [%{"text" => "Deleted a.txt."}]}} =
+               poll(pipe, id, caps, &(&1["status"] == "completed"))
+
+      # Task notifications need the extension here too.
+      Pipe.push(
+        pipe,
+        modern(10, "subscriptions/listen", %{"notifications" => %{"taskIds" => [id]}})
+      )
+
+      assert %{"id" => 10, "error" => %{"code" => -32_021}} = recv(pipe)
     end
 
     test "progress and log notifications carry the request's token and honour its level", %{
@@ -322,6 +389,41 @@ defmodule Sake.StdioTest do
       )
 
       assert %{"id" => 1, "result" => %{"content" => [%{"text" => "Hi, Ana!"}]}} = recv(pipe)
+    end
+
+    test "sampling and roots: the server asks on stdout, the answers come back on stdin", %{
+      pipe: pipe
+    } do
+      serve(pipe, server: AskingServer)
+      initialize(pipe, "2025-11-25", %{"sampling" => %{}, "roots" => %{}})
+      Pipe.push(pipe, call(1, "summarize", %{"text" => "Long."}))
+
+      assert %{"id" => ask, "method" => "sampling/createMessage", "params" => params} = recv(pipe)
+      assert params["_meta"]["ai.hattori.sake/key"] == "summary"
+
+      Pipe.push(
+        pipe,
+        Sake.JSONRPC.result(ask, %{
+          "role" => "assistant",
+          "content" => %{"type" => "text", "text" => "Short."},
+          "model" => "m"
+        })
+      )
+
+      assert %{"id" => 1, "result" => %{"content" => [%{"text" => "Short."}]}} = recv(pipe)
+
+      Pipe.push(pipe, call(2, "roots", %{}))
+      assert %{"id" => ask, "method" => "roots/list"} = recv(pipe)
+
+      Pipe.push(
+        pipe,
+        %{"jsonrpc" => "2.0", "id" => ask, "error" => %{"code" => -1, "message" => "No"}}
+      )
+
+      assert %{"id" => 2, "result" => %{"isError" => true, "content" => [%{"text" => text}]}} =
+               recv(pipe)
+
+      assert text == "The client did not list its roots."
     end
 
     test "logging/setLevel sets the level of later requests", %{pipe: pipe} do

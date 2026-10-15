@@ -174,6 +174,10 @@ coordinate through the store: a worker waiting for input checks it every
 `poll_interval` (and is woken at once when the update lands on its own
 node). `poll_interval` is also the `pollIntervalMs` clients are told.
 
+`tasks: false` on the `Sake` child turns tasks off: task tools then run
+synchronously for every client, and `server/discover` does not advertise
+the extension.
+
 A task is kept for `ttl` after it was created (default one hour) — its
 process is stopped then if it is still running — and is "not found"
 afterwards; expired tasks are deleted from the store every minute.

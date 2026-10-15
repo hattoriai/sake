@@ -210,7 +210,9 @@ defmodule Sake.Server.Dispatch do
 
   # A tool that can only run as a task needs a client that takes one.
   defp task_capability(%{task: :required}, ctx) do
-    if Tasks.declared?(ctx), do: :ok, else: Tasks.missing_capability()
+    if Tasks.declared?(ctx) or not Sake.Tasks.running?(),
+      do: :ok,
+      else: Tasks.missing_capability()
   end
 
   defp task_capability(_spec, _ctx), do: :ok
@@ -230,7 +232,7 @@ defmodule Sake.Server.Dispatch do
   defp run_tool(spec, args, ctx) do
     case prepare(spec, args, ctx) do
       {:ok, args} ->
-        if spec.task && Tasks.declared?(ctx),
+        if spec.task && Tasks.declared?(ctx) && Sake.Tasks.running?(),
           do: Tasks.start(spec, args, ctx),
           else: execute(spec, args, ctx)
 
