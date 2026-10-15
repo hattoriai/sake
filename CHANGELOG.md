@@ -51,6 +51,21 @@ First release.
   resource; a subject module's optional `authorize_resource?/2` refuses a
   tenant the person does not belong to. Works under a generated Phoenix
   endpoint (its parsed body, its `protect_from_forgery`).
+- The authorization extensions on the authorization server. The client
+  credentials grant (`io.modelcontextprotocol/oauth-client-credentials`)
+  for machine clients the host registers with
+  `Sake.Auth.Clients.create/2` (a secret, or public keys for
+  `private_key_jwt`), acting as the principal the subject module's
+  `client_principal/1` names, with tokens that have no subject. The JWT
+  bearer grant (RFC 7523) for `trusted_issuers:` (`Sake.Auth.TrustedIssuer`):
+  an enterprise identity provider's ID-JAG
+  (`io.modelcontextprotocol/enterprise-managed-authorization`), verified
+  for its type, issuer, audience, client, resource, expiry and single use,
+  or a workload identity token, mapped to an account by the subject
+  module's `assertion_principal/2`. Neither grant issues a refresh token;
+  key sets are fetched and cached, `jti`s are remembered against replay,
+  and the metadata advertises only what is configured. Signed JWTs need
+  the optional `jose` dependency.
 - `Sake.Auth.Store.ETS` (development) and `Sake.Auth.Store.Ecto`
   (production) token/client/code/consent stores, plus a grants API for a
   settings page and `Sake.Auth.prune/1` for expired rows.
@@ -73,6 +88,12 @@ First release.
   The interactive step is pluggable (`Sake.Client.Auth.Browser` with a
   loopback listener, `Sake.Client.Auth.Headless`), and so is token
   persistence (`Sake.Client.Auth.Store`).
+- `Sake.Client.Auth` runs the grants without a person too: `grant:
+  :client_credentials` (`client_secret_basic`, `client_secret_post` or
+  `private_key_jwt`), `grant: :jwt_bearer` (a workload's JWT) and `grant:
+  :enterprise` (the RFC 8693 token exchange of an ID token for an ID-JAG
+  at the identity provider, then the JWT bearer grant), renewing an
+  expiring token by running the grant again.
 - `Sake.Stdio` and `mix sake.stdio`: the same server over standard input
   and output, on both eras, with concurrent requests, cancellation,
   progress and log notifications, elicitation, sampling and roots,
@@ -87,5 +108,6 @@ First release.
   the authorization-server scenarios against the development server's own
   authorization server, and, as a separate step, the extension scenarios.
   Its baselines list the known, documented gaps (SSE resumability, the
-  client's standalone GET stream); every `auth/*` client scenario and
-  every tasks extension scenario passes.
+  client's standalone GET stream); every `auth/*` client scenario, every
+  tasks extension scenario and every client auth extension scenario but
+  DPoP's passes.
