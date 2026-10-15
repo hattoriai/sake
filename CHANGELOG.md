@@ -47,10 +47,31 @@ First release.
   probing, elicitation via `on_input`, sampling and roots via `sampling:`
   and `roots:`, tool calls followed through tasks (and
   `call_tool_async/3`, `get_task/2`, `update_task/3`, `cancel_task/2`),
-  and a parsed `WWW-Authenticate` challenge on a 401 (client-side OAuth
-  itself is not yet implemented).
+  and a parsed `WWW-Authenticate` challenge on a 401.
+- `Sake.Client.Auth`: with `auth:`, the client runs the MCP authorization
+  flow itself on a 401: protected resource metadata (RFC 9728, from the
+  challenge or the well-known URIs) checked against the endpoint,
+  authorization server metadata (RFC 8414 and OpenID Connect Discovery,
+  issuer validated), pre-registered credentials bound to their issuer, a
+  Client ID Metadata Document, or dynamic registration (RFC 7591, with
+  `application_type`), the authorization code with PKCE S256, `state`,
+  `resource` (RFC 8707) and `iss` validation (RFC 9207), token endpoint
+  authentication (`client_secret_basic`, `client_secret_post`, `none`),
+  refresh before expiry and on a 401, step-up on a 403
+  `insufficient_scope` with a retry limit, and the 2025-03-26 fallbacks.
+  The interactive step is pluggable (`Sake.Client.Auth.Browser` with a
+  loopback listener, `Sake.Client.Auth.Headless`), and so is token
+  persistence (`Sake.Client.Auth.Store`).
+- `Sake.Stdio` and `mix sake.stdio`: the same server over standard input
+  and output, on both eras, with concurrent requests, cancellation,
+  progress and log notifications, elicitation, sampling and roots,
+  subscriptions, tasks, and shutdown when standard input closes.
+  `Sake.Client.connect/2` launches a stdio server with
+  `{:stdio, command, args}`, probing the era as the stdio transport asks;
+  `on_notification:` sees a call's notifications on either transport.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite wired into CI, with a baseline of
   known, documented gaps (SSE resumability, the client's standalone GET
-  stream, client-side OAuth).
+  stream); every server scenario, and every `auth/*` client scenario,
+  passes.

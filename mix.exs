@@ -90,13 +90,14 @@ defmodule Sake.MixProject do
         "guides/authorization.md",
         "guides/tenants.md",
         "guides/client.md",
+        "guides/stdio.md",
         "guides/protocol_versions.md",
         "guides/security.md",
         "CHANGELOG.md"
       ],
       groups_for_extras: [
         Guides:
-          ~w(guides/quickstart.md guides/tools.md guides/tasks.md guides/resources_and_prompts.md guides/authorization.md guides/tenants.md guides/client.md),
+          ~w(guides/quickstart.md guides/tools.md guides/tasks.md guides/resources_and_prompts.md guides/authorization.md guides/tenants.md guides/client.md guides/stdio.md),
         Reference: ~w(guides/protocol_versions.md guides/security.md)
       ],
       groups_for_modules: [
@@ -116,7 +117,8 @@ defmodule Sake.MixProject do
           Sake.Plug,
           Sake.Plug.Streams,
           Sake.Plug.Headers,
-          Sake.Router
+          Sake.Router,
+          Sake.Stdio
         ],
         Tasks: [
           Sake.Tasks,
@@ -152,7 +154,11 @@ defmodule Sake.MixProject do
           Sake.Client,
           Sake.Client.Session,
           Sake.Client.Challenge,
-          Sake.Client.ToolResult
+          Sake.Client.ToolResult,
+          Sake.Client.Auth,
+          Sake.Client.Auth.Browser,
+          Sake.Client.Auth.Headless,
+          Sake.Client.Auth.Store
         ],
         Protocol: [Sake.Protocol, Sake.JSONRPC, Sake.Schema]
       ]

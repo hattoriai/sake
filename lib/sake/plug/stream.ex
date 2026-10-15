@@ -104,7 +104,8 @@ defmodule Sake.Plug.Stream do
   # dead connection must kill the handler), so its body must never exit
   # abnormally: a raise or throw there would tear down the SSE connection
   # via the link before the outcome could become a proper JSON-RPC error.
-  defp run_safely(parsed, ctx, handler) do
+  @doc false
+  def run_safely(parsed, ctx, handler) do
     run(parsed, ctx, handler)
   rescue
     e ->
@@ -138,32 +139,10 @@ defmodule Sake.Plug.Stream do
 
     receive do
       {:sake_progress, token, current, total, message} ->
-        params =
-          %{"progressToken" => token, "progress" => current}
-          |> put_some("total", total)
-          |> put_some("message", message)
-
-        continue(
-          conn,
-          opts,
-          id,
-          ctx,
-          task,
-          JSONRPC.notification("notifications/progress", params)
-        )
+        continue(conn, opts, id, ctx, task, progress(token, current, total, message))
 
       {:sake_log, level, data} ->
-        continue(
-          conn,
-          opts,
-          id,
-          ctx,
-          task,
-          JSONRPC.notification("notifications/message", %{
-            "level" => to_string(level),
-            "data" => data
-          })
-        )
+        continue(conn, opts, id, ctx, task, log(level, data))
 
       {:sake_request, _from, request_id, method, params} ->
         # A legacy server request (elicitation, sampling, roots): the server
@@ -208,34 +187,56 @@ defmodule Sake.Plug.Stream do
   end
 
   defp finish(conn, id, ctx, outcome) do
-    message =
-      case outcome do
-        {:reply, result} ->
-          JSONRPC.result(id, result)
-
-        {:error, error} ->
-          %{"jsonrpc" => "2.0", "id" => id, "error" => error}
-
-        {:forbidden, _scopes} ->
-          JSONRPC.error(id, JSONRPC.code(:invalid_request), "Insufficient scope")
-
-        :noreply ->
-          JSONRPC.result(id, %{})
-
-        {:subscribe, _} ->
-          JSONRPC.result(id, %{})
-
-        {:unsubscribe, _} ->
-          JSONRPC.result(id, %{})
-
-        _ ->
-          JSONRPC.error(id, JSONRPC.code(:internal), "Unexpected outcome")
-      end
-
     _ = ctx
-    {_, conn} = SSE.event(conn, message)
+    {_, conn} = SSE.event(conn, response(id, outcome))
     conn
   end
+
+  # The messages a request's stream carries, shared with `Sake.Stdio`.
+
+  @doc false
+  def response(id, outcome) do
+    case outcome do
+      {:reply, result} ->
+        JSONRPC.result(id, result)
+
+      {:error, error} ->
+        %{"jsonrpc" => "2.0", "id" => id, "error" => error}
+
+      {:forbidden, _scopes} ->
+        JSONRPC.error(id, JSONRPC.code(:invalid_request), "Insufficient scope")
+
+      :noreply ->
+        JSONRPC.result(id, %{})
+
+      {:subscribe, _} ->
+        JSONRPC.result(id, %{})
+
+      {:unsubscribe, _} ->
+        JSONRPC.result(id, %{})
+
+      _ ->
+        JSONRPC.error(id, JSONRPC.code(:internal), "Unexpected outcome")
+    end
+  end
+
+  @doc false
+  def progress(token, current, total, message) do
+    params =
+      %{"progressToken" => token, "progress" => current}
+      |> put_some("total", total)
+      |> put_some("message", message)
+
+    JSONRPC.notification("notifications/progress", params)
+  end
+
+  @doc false
+  def log(level, data),
+    do:
+      JSONRPC.notification("notifications/message", %{
+        "level" => to_string(level),
+        "data" => data
+      })
 
   # ---- subscriptions/listen
 
@@ -248,44 +249,19 @@ defmodule Sake.Plug.Stream do
   # Task notifications need the tasks extension; a client asking for them
   # without it gets -32021 instead of a stream.
   defp listen(conn, opts, id, params, ctx) do
-    requested = params["notifications"] || %{}
-
-    if is_map(requested) and Map.has_key?(requested, "taskIds") and
-         not Sake.Server.Tasks.declared?(ctx) do
-      {:error, code, message, data} = Sake.Server.Tasks.missing_capability()
-
-      Sake.Plug.outcome_to_response(
-        conn,
-        id,
-        {:error, %{"code" => code, "message" => message, "data" => data}}
-      )
-    else
-      open_listen(conn, opts, id, requested, ctx)
+    case refused(params, ctx) do
+      nil -> open_listen(conn, opts, id, params, ctx)
+      error -> Sake.Plug.outcome_to_response(conn, id, {:error, error})
     end
   end
 
-  defp open_listen(conn, opts, id, requested, ctx) do
-    honoured =
-      requested
-      |> Enum.filter(fn
-        {k, true} -> Map.has_key?(@filters, k)
-        {"resourceSubscriptions", uris} -> is_list(uris) and uris != []
-        _ -> false
-      end)
-      |> Map.new()
-      |> put_task_ids(Sake.Server.Tasks.visible(is_map(requested) && requested["taskIds"], ctx))
-
+  defp open_listen(conn, opts, id, params, ctx) do
+    honoured = honoured(params, ctx)
     Streams.register_listen(opts.server, id, honoured)
     conn = SSE.start(conn)
     meta = %{Protocol.meta(:subscription_id) => id}
 
-    ack =
-      JSONRPC.notification("notifications/subscriptions/acknowledged", %{
-        "notifications" => honoured,
-        "_meta" => meta
-      })
-
-    case SSE.event(conn, ack) do
+    case SSE.event(conn, acknowledged(honoured, meta)) do
       {:ok, conn} -> listen_loop(conn, opts, id, honoured, meta)
       {:error, _} -> conn
     end
@@ -320,23 +296,63 @@ defmodule Sake.Plug.Stream do
     end
   end
 
+  # The part of a `subscriptions/listen` filter Sake honours, its
+  # acknowledgement, and the notification (if any) an event becomes on the
+  # stream; shared with `Sake.Stdio`.
+
+  @doc false
+  # The JSON-RPC error a listen request gets instead of a stream, if any:
+  # task notifications need the tasks extension.
+  def refused(params, ctx) do
+    requested = params["notifications"]
+
+    if is_map(requested) and Map.has_key?(requested, "taskIds") and
+         not Sake.Server.Tasks.declared?(ctx) do
+      {:error, code, message, data} = Sake.Server.Tasks.missing_capability()
+      %{"code" => code, "message" => message, "data" => data}
+    end
+  end
+
+  @doc false
+  def honoured(params, ctx) do
+    requested = params["notifications"] || %{}
+
+    requested
+    |> Enum.filter(fn
+      {k, true} -> Map.has_key?(@filters, k)
+      {"resourceSubscriptions", uris} -> is_list(uris) and uris != []
+      _ -> false
+    end)
+    |> Map.new()
+    |> put_task_ids(Sake.Server.Tasks.visible(is_map(requested) && requested["taskIds"], ctx))
+  end
+
   # The caller's own tasks only: anything else was left out of `taskIds`.
   defp put_task_ids(honoured, []), do: honoured
   defp put_task_ids(honoured, ids), do: Map.put(honoured, "taskIds", ids)
 
-  defp notification_for({:list_changed, kind}, honoured, meta) do
+  @doc false
+  def acknowledged(honoured, meta),
+    do:
+      JSONRPC.notification("notifications/subscriptions/acknowledged", %{
+        "notifications" => honoured,
+        "_meta" => meta
+      })
+
+  @doc false
+  def notification_for({:list_changed, kind}, honoured, meta) do
     key = Enum.find_value(@filters, fn {k, v} -> if v == kind, do: k end)
 
     if honoured[key] == true,
       do: JSONRPC.notification("notifications/#{kind}/list_changed", %{"_meta" => meta})
   end
 
-  defp notification_for({:task, task}, honoured, meta) do
+  def notification_for({:task, task}, honoured, meta) do
     if task["taskId"] in (honoured["taskIds"] || []),
       do: JSONRPC.notification("notifications/tasks", Map.put(task, "_meta", meta))
   end
 
-  defp notification_for({:resource_updated, uri}, honoured, meta) do
+  def notification_for({:resource_updated, uri}, honoured, meta) do
     if uri in (honoured["resourceSubscriptions"] || []),
       do:
         JSONRPC.notification("notifications/resources/updated", %{"uri" => uri, "_meta" => meta})

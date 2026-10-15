@@ -4,25 +4,6 @@
 server: []
 
 client:
-  # The client has no OAuth flow of its own (see guides/client.md): it
-  # returns `{:error, {:unauthorized, challenge}}` on a 401 and leaves the
-  # flow to the caller. Every auth/* scenario needs the client to run the
-  # authorization flow itself, so all of them fail the same way ("did not
-  # make an authorization/token request").
-  - auth/metadata-default
-  - auth/metadata-var1
-  - auth/metadata-var2
-  - auth/metadata-var3
-  - auth/basic-cimd
-  - auth/scope-from-www-authenticate
-  - auth/scope-from-scopes-supported
-  - auth/scope-omitted-when-undefined
-  - auth/scope-step-up
-  - auth/scope-retry-limit
-  - auth/token-endpoint-auth-basic
-  - auth/token-endpoint-auth-post
-  - auth/token-endpoint-auth-none
-  - auth/pre-registration
   # The client does not resume a dropped SSE stream (see
   # guides/protocol_versions.md); it has no reconnection logic to send the
   # GET request this scenario looks for.

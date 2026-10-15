@@ -155,6 +155,19 @@ defmodule Sake.ClientTest do
 
         assert {:ok, %{text: "file:///f (unnamed)"}, _} = Client.call_tool(session, "roots", %{})
       end
+
+      test "on_notification sees a call's progress", %{url: url} do
+        parent = self()
+        on_notification = fn method, params -> send(parent, {:notified, method, params}) end
+
+        assert {:ok, session} = Client.connect(url, era: @era, on_notification: on_notification)
+
+        assert {:ok, %{text: "counted to 2"}, _} =
+                 Client.call_tool(session, "slow", %{"n" => 2, "delay_ms" => 0})
+
+        assert_received {:notified, "notifications/progress", %{"progress" => 1, "total" => 2}}
+        assert_received {:notified, "notifications/progress", %{"progress" => 2}}
+      end
     end
   end
 

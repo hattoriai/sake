@@ -1,6 +1,7 @@
 defmodule Sake.Client do
   @moduledoc """
-  A client for MCP servers over Streamable HTTP, on both protocol eras.
+  A client for MCP servers over Streamable HTTP or stdio, on both protocol
+  eras.
 
       {:ok, session} = Sake.Client.connect("https://mcp.example.com/mcp", headers: [{"authorization", "Bearer ..."}])
       {:ok, tools, session} = Sake.Client.list_tools(session)
@@ -9,20 +10,36 @@ defmodule Sake.Client do
   The client is functional: every call returns the updated session. Pass
   `on_input:` to answer elicitation requests, `sampling:` to answer
   sampling requests (`fn params, session -> {:ok, result} | {:error,
-  error} end`) and `roots:` to share roots (a list of `%{"uri" => ...,
-  "name" => ...}` maps, or a function of the session that returns one);
-  a 401 comes back as `{:error, {:unauthorized, %Sake.Client.Challenge{}}}`.
+  error} end`), `roots:` to share roots (a list of `%{"uri" => ...,
+  "name" => ...}` maps, or a function of the session that returns one),
+  `on_notification:` (a function of a method and its params) to see the
+  progress and log notifications of a call, and `auth:` to have the client
+  run the MCP authorization flow itself on a 401 (see `Sake.Client.Auth`);
+  without it, a 401 comes back as
+  `{:error, {:unauthorized, %Sake.Client.Challenge{}}}`.
 
   On the modern protocol the client declares the tasks extension, so a
   server may answer a tool call with a task; `call_tool/3` follows it to
   the end (`task_timeout:`, in ms, default five minutes), and
   `call_tool_async/3` hands it back instead. `tasks: false` leaves the
   extension out.
+
+  `{:stdio, command, args}` in place of a URL launches the server as a
+  subprocess and talks to it over its standard input and output:
+
+      {:ok, session} = Sake.Client.connect({:stdio, "npx", ["-y", "@modelcontextprotocol/server-everything"]})
+
+  Stdio options: `env:` (a map or list of name-value pairs; a `nil` value
+  unsets the variable), `cd:`, `stderr:` (`:inherit`, the default, shares
+  this VM's standard error; `:ignore` discards it), `probe_timeout:` (ms
+  to wait for an answer to the modern probe before falling back to
+  `initialize`, default 10 000), `close_timeout:` (ms `close/1` waits for
+  the server to exit before killing it, default 5 000).
   """
 
   require Logger
 
-  alias Sake.Client.{Inputs, Session, ToolResult, Transport}
+  alias Sake.Client.{Auth, Inputs, Session, ToolResult, Transport}
   alias Sake.{Content, JSONRPC, Protocol, Schema}
 
   # The errors only a modern server sends; a legacy server answers the
@@ -32,31 +49,74 @@ defmodule Sake.Client do
   @legacy_errors [-32_601, -32_602]
   @max_retries 3
   @tasks_extension "io.modelcontextprotocol/tasks"
+  @probe_timeout 10_000
 
-  @spec connect(String.t(), keyword()) :: {:ok, Session.t()} | {:error, term()}
-  def connect(url, opts \\ []) do
-    session = build_session(url, opts)
+  # A probe that ends in one of these was answered by a modern server, or
+  # needs authorizing whatever the era: no legacy handshake follows.
+  @final_probe_errors [:no_common_version, :unauthorized, :insufficient_scope, :auth]
+
+  # How many times one request may run the authorization flow (a 401, then
+  # a step-up on a 403) before the error goes back to the caller.
+  @max_authorizations 2
+
+  @spec connect(String.t() | {:stdio, String.t(), [String.t()]}, keyword()) ::
+          {:ok, Session.t()} | {:error, term()}
+  def connect(target, opts \\ [])
+
+  def connect({:stdio, command, args}, opts) do
+    with {:ok, pid} <- Sake.Client.Stdio.start(command, args, opts) do
+      case open(%{build_session(nil, opts) | stdio: pid}, opts) do
+        {:ok, session} ->
+          {:ok, session}
+
+        error ->
+          Sake.Client.Stdio.close(pid)
+          error
+      end
+    end
+  end
+
+  def connect(url, opts), do: open(build_session(url, opts), opts)
+
+  defp open(session, opts) do
     legacy_version = opts[:legacy_version] || hd(Protocol.legacy())
 
     case opts[:era] do
-      :modern -> modern_connect(%{session | era: :modern, revision: Protocol.modern()})
-      :legacy -> legacy_connect(%{session | era: :legacy}, legacy_version)
-      nil -> probe(session, legacy_version)
+      :modern ->
+        case modern_connect(modern(session)) do
+          {:ok, session} -> {:ok, session}
+          {:error, reason, _session} -> {:error, reason}
+        end
+
+      :legacy ->
+        legacy_connect(%{session | era: :legacy}, legacy_version)
+
+      nil ->
+        probe(session, legacy_version, opts)
     end
   end
 
   defp build_session(url, opts) do
+    client_info = opts[:client_info] || %{"name" => "Sake", "version" => Sake.version()}
+    req = opts[:req] || []
+
     %Session{
       url: url,
       headers: opts[:headers] || [],
-      client_info: opts[:client_info] || %{"name" => "Sake", "version" => Sake.version()},
+      client_info: client_info,
       capabilities: opts[:capabilities] || default_capabilities(opts),
       on_input: opts[:on_input],
       sampling: opts[:sampling],
       roots: opts[:roots],
+      on_notification: opts[:on_notification],
       tasks: Keyword.get(opts, :tasks, true),
       task_timeout: opts[:task_timeout] || 300_000,
-      req: opts[:req] || []
+      # There is no HTTP authorization on stdio: the server takes its
+      # credentials from its environment.
+      auth:
+        url && opts[:auth] &&
+          Auth.new(url, opts[:auth], client_name: client_info["name"], req: req),
+      req: req
     }
   end
 
@@ -72,30 +132,59 @@ defmodule Sake.Client do
   defp put_capability(caps, nil, _name, _value), do: caps
   defp put_capability(caps, _option, name, value), do: Map.put(caps, name, value)
 
-  defp probe(session, legacy_version) do
-    case modern_connect(%{session | era: :modern, revision: Protocol.modern()}) do
+  defp modern(session), do: %{session | era: :modern, revision: Protocol.modern()}
+
+  # The probe's session goes on to the legacy handshake: a token the probe
+  # obtained is not thrown away with it, so the person authorizes once.
+  defp legacy(session), do: %{session | era: :legacy, revision: nil, session_id: nil}
+
+  # Over stdio a legacy server answers the probe with whatever error it
+  # likes, or not at all (the stdio transport's "Backward Compatibility"):
+  # only an error a modern server sends keeps the client modern. The
+  # session a failed probe returns has used the probe's id, so a late
+  # answer to it can never be taken for the answer to `initialize`.
+  defp probe(%Session{stdio: pid} = session, legacy_version, opts) when is_pid(pid) do
+    timeout = opts[:probe_timeout] || @probe_timeout
+
+    case modern_connect(modern(session), timeout: timeout) do
       {:ok, session} ->
         {:ok, session}
 
-      {:error, {:no_common_version, _} = e} ->
+      {:error, {:no_common_version, _} = e, _session} ->
         {:error, e}
 
-      {:error, {:unauthorized, _} = e} ->
-        {:error, e}
-
-      {:error, {:insufficient_scope, _} = e} ->
-        {:error, e}
-
-      {:error, {:rpc, %{"code" => code} = error}} when code in @modern_errors ->
+      {:error, {:rpc, %{"code" => code} = error}, _session} when code in @modern_errors ->
         {:error, {:rpc, error}}
 
-      {:error, {:rpc, %{"code" => code}}} when code in @legacy_errors ->
-        legacy_connect(%{session | era: :legacy}, legacy_version)
+      {:error, {:rpc, _error}, session} ->
+        legacy_connect(legacy(session), legacy_version)
 
-      {:error, {:http, _status, body}} ->
-        handle_probe_http_error(body, session, legacy_version)
+      {:error, :timeout, session} ->
+        legacy_connect(legacy(session), legacy_version)
 
-      {:error, reason} ->
+      {:error, reason, _session} ->
+        {:error, reason}
+    end
+  end
+
+  defp probe(session, legacy_version, _opts) do
+    case modern_connect(modern(session)) do
+      {:ok, session} ->
+        {:ok, session}
+
+      {:error, {kind, _} = e, _session} when kind in @final_probe_errors ->
+        {:error, e}
+
+      {:error, {:rpc, %{"code" => code} = error}, _session} when code in @modern_errors ->
+        {:error, {:rpc, error}}
+
+      {:error, {:rpc, %{"code" => code}}, session} when code in @legacy_errors ->
+        legacy_connect(legacy(session), legacy_version)
+
+      {:error, {:http, _status, body}, session} ->
+        handle_probe_http_error(body, legacy(session), legacy_version)
+
+      {:error, reason, _session} ->
         {:error, reason}
     end
   end
@@ -118,20 +207,20 @@ defmodule Sake.Client do
        when is_map(body) and is_map_key(body, "error") do
     if body["error"]["code"] in @modern_errors,
       do: {:error, {:rpc, body["error"]}},
-      else: legacy_connect(%{session | era: :legacy}, legacy_version)
+      else: legacy_connect(session, legacy_version)
   end
 
   defp handle_probe_http_error(_body, session, legacy_version),
-    do: legacy_connect(%{session | era: :legacy}, legacy_version)
+    do: legacy_connect(session, legacy_version)
 
-  defp modern_connect(session) do
-    case discover(session) do
+  defp modern_connect(session, opts \\ []) do
+    case request(session, "server/discover", %{}, opts) do
       {:ok, result, session} ->
         supported = result["supportedVersions"] || [Protocol.modern()]
 
         case Enum.find(supported, &(&1 == Protocol.modern())) do
           nil ->
-            {:error, {:no_common_version, supported}}
+            {:error, {:no_common_version, supported}, session}
 
           version ->
             {:ok,
@@ -144,11 +233,11 @@ defmodule Sake.Client do
              }}
         end
 
-      {:error, {:rpc, %{"code" => -32_022, "data" => %{"supported" => supported}}}, _} ->
-        {:error, {:no_common_version, supported}}
+      {:error, {:rpc, %{"code" => -32_022, "data" => %{"supported" => supported}}}, session} ->
+        {:error, {:no_common_version, supported}, session}
 
-      {:error, reason, _session} ->
-        {:error, reason}
+      {:error, reason, session} ->
+        {:error, reason, session}
     end
   end
 
@@ -161,7 +250,7 @@ defmodule Sake.Client do
 
     with {:ok, result, session} <- request(session, "initialize", params),
          {:ok, :accepted, session} <-
-           Transport.post(session, JSONRPC.notification("notifications/initialized")) do
+           post(session, JSONRPC.notification("notifications/initialized"), []) do
       {:ok,
        %{
          session
@@ -172,7 +261,6 @@ defmodule Sake.Client do
        }}
     else
       {:error, reason, _} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
       {:ok, _other, _} -> {:error, :bad_initialized_ack}
     end
   end
@@ -330,6 +418,8 @@ defmodule Sake.Client do
   end
 
   @spec close(Session.t()) :: :ok
+  def close(%Session{stdio: pid}) when is_pid(pid), do: Sake.Client.Stdio.close(pid)
+
   def close(%Session{era: :legacy, session_id: sid} = session) when is_binary(sid),
     do: Transport.delete(session)
 
@@ -369,7 +459,9 @@ defmodule Sake.Client do
         do: Map.put(params, "_meta", meta(session)),
         else: params
 
-    case Transport.post(session, JSONRPC.request(id, method, params), opts) do
+    params = progress_token(params, session, id)
+
+    case post(session, JSONRPC.request(id, method, params), opts) do
       {:ok, %{"result" => %{"resultType" => "input_required"} = result}, session}
       when attempt < @max_retries ->
         retry_with_inputs(session, method, params, result, opts, attempt)
@@ -383,10 +475,54 @@ defmodule Sake.Client do
       {:ok, :accepted, session} ->
         {:ok, %{}, session}
 
-      {:error, reason} ->
+      {:error, reason, session} ->
         {:error, reason, session}
     end
   end
+
+  # ---- authorization
+
+  # One message, with the session's token when it has one. A 401 runs the
+  # authorization flow (the refresh token first, the first time), a 403
+  # `insufficient_scope` a step-up; either way the same message is sent
+  # again with the new token. The JSON-RPC id stays the same: the server
+  # refused the request at the HTTP level, so it never saw that id.
+  defp post(session, message, opts, authorizations \\ 0) do
+    session = if session.auth, do: %{session | auth: Auth.fresh(session.auth)}, else: session
+
+    case Transport.post(session, message, opts) do
+      {:error, {:unauthorized, challenge} = error}
+      when session.auth != nil and authorizations < @max_authorizations ->
+        session
+        |> reauthorize(error, &Auth.unauthorized(&1, challenge, authorizations == 0))
+        |> retry(message, opts, authorizations)
+
+      {:error, {:insufficient_scope, challenge} = error}
+      when session.auth != nil and authorizations < @max_authorizations ->
+        session
+        |> reauthorize(error, &Auth.insufficient_scope(&1, challenge))
+        |> retry(message, opts, authorizations)
+
+      {:error, reason} ->
+        {:error, reason, session}
+
+      {:ok, result, session} ->
+        {:ok, result, session}
+    end
+  end
+
+  defp reauthorize(session, error, fun) do
+    case fun.(session.auth) do
+      {:ok, auth} -> {:ok, %{session | auth: auth}}
+      {:error, reason, auth} -> {:error, {:auth, reason}, %{session | auth: auth}}
+      :exhausted -> {:error, error, session}
+    end
+  end
+
+  defp retry({:ok, session}, message, opts, authorizations),
+    do: post(session, message, opts, authorizations + 1)
+
+  defp retry(error, _message, _opts, _authorizations), do: error
 
   # Only answers go back: a request nothing could answer (a sampling or
   # roots request without `sampling:` or `roots:`) is left out, and the
@@ -408,6 +544,13 @@ defmodule Sake.Client do
 
   defp put_request_state(params, nil), do: params
   defp put_request_state(params, state), do: Map.put(params, "requestState", state)
+
+  # A client that takes notifications asks for progress on every request,
+  # under the request's own id.
+  defp progress_token(params, %Session{on_notification: nil}, _id), do: params
+
+  defp progress_token(params, _session, id),
+    do: Map.update(params, "_meta", %{"progressToken" => id}, &Map.put(&1, "progressToken", id))
 
   defp meta(session) do
     %{
