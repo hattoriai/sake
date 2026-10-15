@@ -4,7 +4,7 @@ defmodule SakeDev.Server do
     name: "sake-dev",
     version: Sake.version(),
     instructions:
-      "An example server: echo, add, a slow tool with progress, sampling, roots, a task, issues, and a triage prompt."
+      "An example server: echo, add, a slow tool with progress, sampling, roots, a task, issues on a board (an MCP App), and a triage prompt."
 
   scope "issues:read", "Read issues"
   scope "issues:write", "Change issues"
@@ -17,9 +17,11 @@ defmodule SakeDev.Server do
     SakeDev.Tools.Connect,
     SakeDev.Tools.Summarize,
     SakeDev.Tools.Roots,
-    SakeDev.Tools.Export
+    SakeDev.Tools.Export,
+    SakeDev.Tools.IssueBoard,
+    SakeDev.Tools.IssueDetails
   ]
 
-  resources [SakeDev.Resources.Readme, SakeDev.Resources.Issue]
+  resources [SakeDev.Resources.Readme, SakeDev.Resources.Issue, SakeDev.UI.IssueBoard]
   prompts [SakeDev.Prompts.Triage]
 end

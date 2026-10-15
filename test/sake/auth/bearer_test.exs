@@ -30,7 +30,8 @@ defmodule Sake.Auth.BearerTest do
              "connect",
              "summarize",
              "roots",
-             "export"
+             "export",
+             "issue_board"
            ]
 
     assert result["cacheScope"] == "private"
