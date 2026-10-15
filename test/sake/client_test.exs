@@ -117,6 +117,16 @@ defmodule Sake.ClientTest do
                     "type" => "object",
                     "properties" => %{"n" => %{"type" => "number", "x-mcp-header" => "N"}}
                   }
+                },
+                %{
+                  "name" => "twice",
+                  "inputSchema" => %{
+                    "type" => "object",
+                    "properties" => %{
+                      "a" => %{"type" => "string", "x-mcp-header" => "Region"},
+                      "b" => %{"type" => "string", "x-mcp-header" => "Region"}
+                    }
+                  }
                 }
               ]
             }
@@ -138,6 +148,59 @@ defmodule Sake.ClientTest do
       end)
 
     assert log =~ "bad" and log =~ "x-mcp-header"
+    assert log =~ ~s("twice": invalid x-mcp-header \(duplicate names\))
+  end
+
+  test "a false argument is mirrored into its header like any other value" do
+    bypass = Bypass.open()
+    url = "http://localhost:#{bypass.port}/mcp"
+    test = self()
+
+    Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      msg = JSON.decode!(body)
+
+      result =
+        case msg["method"] do
+          "server/discover" ->
+            %{"supportedVersions" => ["2026-07-28"], "capabilities" => %{"tools" => %{}}}
+
+          "tools/list" ->
+            %{
+              "tools" => [
+                %{
+                  "name" => "flags",
+                  "inputSchema" => %{
+                    "type" => "object",
+                    "properties" => %{
+                      "verbose" => %{"type" => "boolean", "x-mcp-header" => "Verbose"},
+                      "debug" => %{"type" => "boolean", "x-mcp-header" => "Debug"}
+                    }
+                  }
+                }
+              ]
+            }
+
+          "tools/call" ->
+            send(test, {:headers, conn.req_headers})
+            %{"content" => []}
+        end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        JSON.encode!(%{"jsonrpc" => "2.0", "id" => msg["id"], "result" => result})
+      )
+    end)
+
+    {:ok, session} = Client.connect(url)
+    {:ok, _tools, session} = Client.list_tools(session)
+    {:ok, _result, _session} = Client.call_tool(session, "flags", %{"verbose" => false})
+
+    assert_received {:headers, headers}
+    assert {"mcp-param-verbose", "false"} in headers
+    refute List.keymember?(headers, "mcp-param-debug", 0)
   end
 
   test "pagination stops when a server keeps returning the same cursor" do

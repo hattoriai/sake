@@ -51,7 +51,25 @@ defmodule Sake.Client do
   defp default_capabilities(nil), do: %{}
   defp default_capabilities(_on_input), do: %{"elicitation" => %{}}
 
-  defp probe(session, legacy_version) do
+  # An unsupported-version answer that lists the very revision the client
+  # sent is not a verdict on that revision (a server mid-deploy, or an
+  # intermediary that answered for it), and the specification asks a
+  # client to retry with a mutually supported version: the probe tries
+  # once more. Otherwise there is nothing to retry with, since Sake
+  # speaks a single modern revision.
+  defp probe(session, legacy_version, retried? \\ false) do
+    case probe_once(session, legacy_version) do
+      {:error, {:no_common_version, supported}} = error ->
+        if not retried? and Protocol.modern() in supported,
+          do: probe(session, legacy_version, true),
+          else: error
+
+      other ->
+        other
+    end
+  end
+
+  defp probe_once(session, legacy_version) do
     case modern_connect(%{session | era: :modern, revision: Protocol.modern()}) do
       {:ok, session} ->
         {:ok, session}
@@ -80,11 +98,9 @@ defmodule Sake.Client do
   end
 
   # A `4xx` with a JSON-RPC error body from a modern server: `-32022` means
-  # the client's revision is unsupported (retry with the server's list is
-  # pointless, since Sake only speaks one modern revision, so this is
-  # reported directly); the other modern error codes are reported as-is;
-  # anything else (-32601, -32602, or no recognisable error body) means
-  # legacy.
+  # the client's revision is unsupported (see `probe/3` for the one retry);
+  # the other modern error codes are reported as-is; anything else
+  # (-32601, -32602, or no recognisable error body) means legacy.
   defp handle_probe_http_error(
          %{"error" => %{"code" => -32_022, "data" => %{"supported" => supported}}},
          _session,
@@ -348,9 +364,8 @@ defmodule Sake.Client do
 
   defp tool_spec(%{"name" => name} = t) do
     schema = t["inputSchema"] || %{"type" => "object"}
-    headers = Schema.header_paths(schema)
 
-    case check_headers(schema, headers) do
+    case check_headers(schema, Schema.header_entries(schema)) do
       :ok ->
         %Sake.Tool.Spec{
           module: nil,
@@ -362,7 +377,7 @@ defmodule Sake.Client do
           output_schema: t["outputSchema"],
           annotations: t["annotations"] || %{},
           meta: t["_meta"],
-          headers: headers
+          headers: Schema.header_paths(schema)
         }
 
       {:error, reason} ->
