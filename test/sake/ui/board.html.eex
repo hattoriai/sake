@@ -1,0 +1,11 @@
+<!doctype html>
+<html>
+  <head><title><%= @title %></title></head>
+  <body>
+    <h1><%= @title %></h1>
+    <ul>
+      <%= for item <- @items do %><li><%= item %></li><% end %>
+    </ul>
+    <script><%= raw @script %></script>
+  </body>
+</html>

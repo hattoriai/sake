@@ -91,11 +91,15 @@ working until it expires.
   2026-07-28 extension `io.modelcontextprotocol/tasks` instead (see
   `guides/tasks.md`), on the modern era only; a legacy session runs
   optional task tools synchronously and is refused required ones.
-- **Apps** — UI-surface extensions layered on top of MCP are out of scope
-  for this package entirely.
 
 Sampling and roots are supported on every revision, deprecated as they are
 in 2026-07-28 (SEP-2577); see `guides/tools.md`.
+
+MCP Apps (the `io.modelcontextprotocol/ui` extension) work on every
+revision: a host declares the extension in each request's capabilities on
+2026-07-28 and in `initialize` on the legacy revisions, and the server
+advertises it in `server/discover` and in its `initialize` result; see
+`guides/apps.md`.
 
 ## Conformance status
 

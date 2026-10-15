@@ -129,6 +129,11 @@ An embedded resource or image in a message uses the same
  ]}
 ```
 
+## MCP Apps
+
+The HTML document of an MCP App is a resource too, declared with
+`use Sake.UI` and listed with the others; see `guides/apps.md`.
+
 List resources and prompts on a server the same way as tools:
 
 ```elixir

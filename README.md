@@ -66,6 +66,7 @@ See `guides/quickstart.md` for turning on authorization in five steps, or
 | Elicitation (form, url) | yes | yes (url from 2025-11-25) | form only |
 | Sampling, roots | yes (deprecated) | yes (sampling tools from 2025-11-25) | yes |
 | Tasks (`io.modelcontextprotocol/tasks`) | yes | — (task tools run synchronously) | — |
+| MCP Apps (`io.modelcontextprotocol/ui`) | yes | yes | yes |
 | Subscriptions | `subscriptions/listen` stream | `resources/subscribe` | `resources/subscribe` |
 | Batched requests | — (stateless, one at a time) | — | yes |
 | Stdio transport | yes | yes | yes |
@@ -88,6 +89,7 @@ runs the same flow from the client's side (`guides/client.md`).
 - [Quickstart](guides/quickstart.md)
 - [Tools](guides/tools.md)
 - [Tasks](guides/tasks.md)
+- [MCP Apps](guides/apps.md)
 - [Resources and prompts](guides/resources_and_prompts.md)
 - [Authorization](guides/authorization.md)
 - [Multi-tenant endpoints](guides/tenants.md)
@@ -99,7 +101,7 @@ runs the same flow from the client's side (`guides/client.md`).
 ## Status
 
 0.1: the server (both eras, one endpoint, and stdio; with elicitation,
-sampling, roots and the tasks extension), the authorization server
+sampling, roots, the tasks extension and MCP Apps), the authorization server
 (bearer, CIMD, dynamic registration, consent, token rotation), and the
 client (HTTP and stdio), which runs the MCP authorization flow itself
 (discovery, CIMD or dynamic registration, PKCE, refresh, step-up) and

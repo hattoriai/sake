@@ -35,7 +35,8 @@ defmodule Sake.Client.StdioTest do
                  "connect",
                  "summarize",
                  "roots",
-                 "export"
+                 "export",
+                 "issue_board"
                ]
 
         assert {:ok, %{text: "héllo ✓"}, session} =

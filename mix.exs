@@ -28,7 +28,7 @@ defmodule Sake.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger, :crypto, :ssl]]
+    [extra_applications: [:logger, :crypto, :ssl, :eex]]
   end
 
   def cli do
@@ -52,6 +52,7 @@ defmodule Sake.MixProject do
       {:jose, "~> 1.11", optional: true},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:phoenix, "~> 1.8", optional: true},
+      {:phoenix_html, "~> 4.1", optional: true},
       {:phoenix_pubsub, "~> 2.1", optional: true},
       {:plug, "~> 1.16"},
       {:postgrex, ">= 0.0.0", only: [:dev, :test]},
@@ -87,6 +88,7 @@ defmodule Sake.MixProject do
         "guides/quickstart.md",
         "guides/tools.md",
         "guides/tasks.md",
+        "guides/apps.md",
         "guides/resources_and_prompts.md",
         "guides/authorization.md",
         "guides/tenants.md",
@@ -98,7 +100,7 @@ defmodule Sake.MixProject do
       ],
       groups_for_extras: [
         Guides:
-          ~w(guides/quickstart.md guides/tools.md guides/tasks.md guides/resources_and_prompts.md guides/authorization.md guides/tenants.md guides/client.md guides/stdio.md),
+          ~w(guides/quickstart.md guides/tools.md guides/tasks.md guides/apps.md guides/resources_and_prompts.md guides/authorization.md guides/tenants.md guides/client.md guides/stdio.md),
         Reference: ~w(guides/protocol_versions.md guides/security.md)
       ],
       groups_for_modules: [
@@ -106,6 +108,7 @@ defmodule Sake.MixProject do
           Sake.Server,
           Sake.Tool,
           Sake.Resource,
+          Sake.UI,
           Sake.Prompt,
           Sake.Context,
           Sake.Content,
