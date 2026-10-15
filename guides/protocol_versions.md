@@ -90,25 +90,65 @@ working until it expires.
 
 ## Conformance status
 
-The official `@modelcontextprotocol/conformance` suite (see
-`conformance/`) runs in CI against the development server (`mix dev`'s
-`/open/mcp`, unauthenticated) and, for the client suite, against
-`Sake.Client` driving `conformance/client.exs`. As of the version pinned
-in `conformance/package.json`, its own newest recognized `--spec-version`
-is `2025-11-25` — it does not yet have scenarios for `2026-07-28` — so the
-server suite runs against `2025-06-18` and `2025-11-25`; both exercise the
-same dual-era endpoint a modern client also reaches once it opens a
-session.
+The official `@modelcontextprotocol/conformance` suite (the version pinned
+in `conformance/package.json`, 0.2.0-alpha.12) runs in CI through
+`mix test.conformance` (`conformance/run.sh`) against the development
+server:
 
-`conformance/expected-failures.yaml` is the baseline of scenarios that
-fail on purpose; CI only turns red on a *new* failure. Currently:
+- **Server scenarios**, for each of 2025-06-18, 2025-11-25 and 2026-07-28,
+  against `/open/mcp` (`SakeDev.ConformanceServer`, unauthenticated). The
+  suite speaks each revision's own wire: an `initialize` handshake and a
+  session for the legacy two, stateless requests with per-request `_meta`
+  for 2026-07-28 (`server-stateless`, `caching`, the header validation
+  scenarios, `sep-2164-resource-not-found` and the `input-required-result-*`
+  multi round-trip scenarios among them). Every scenario applicable to a
+  revision runs, including the ones the suite still marks pending.
+- **Client scenarios**, for the same three revisions, with `Sake.Client`
+  driven by `conformance/client.exs` against the suite's reference servers.
+- **Authorization-server scenarios** (`authorization-server-metadata-endpoint`,
+  `authorization-code-grant`) against the development server's own
+  authorization server. `conformance/authorization.sh` registers a client
+  through dynamic client registration and plays the person in the browser:
+  it signs in as the development account and approves the consent page.
 
-- **`tools-call-sampling`** (server) — no sampling support (above).
+`conformance/expected-failures.yaml` is the baseline of scenarios that fail
+on purpose; CI turns red on a *new* failure and on a listed scenario that
+now passes, and the suite counts a warning (an unmet SHOULD) as a failure.
+Currently:
+
+- **`tools-call-sampling`** (server, legacy revisions),
+  **`input-required-result-basic-sampling`**,
+  **`input-required-result-basic-list-roots`**,
+  **`input-required-result-multiple-input-requests`** and
+  **`input-required-result-capability-check`** (server, 2026-07-28) — no
+  sampling or roots support (above); the last needs a tool that falls back
+  to sampling.
+- **Two checks of `server-stateless`** (server, 2026-07-28) — the scenario's
+  `test_missing_capability` fixture needs a tool that requires sampling, to
+  show the `-32021` error for a client that did not declare it.
+- **`server-sse-polling`** (server, 2025-11-25) — no resumability (above),
+  so a stream carries no priming event and no `retry` field.
+- **`input-required-result-ignore-extra-params`** (server, 2026-07-28) — the
+  scenario sends answers with no `requestState`, to a question it never
+  asked. Sake honours answers only alongside the signed state it issued
+  for them (see `guides/security.md`), so it ignores them and asks again;
+  the scenario expected the call to complete.
 - **`sse-retry`** (client) — no resumability (above).
 - **`elicitation-sep1034-client-defaults`** (client) — the fixture server
   sends its elicitation request outside the tool call's response stream,
   so it can only arrive on the standalone GET stream, which the client
   does not open (above).
-- **Every `auth/*` client scenario** (14 of them) — `Sake.Client` has no
-  OAuth flow of its own (see `guides/client.md`'s "401 challenge"
-  section).
+- **Every `auth/*` client scenario** (14 at 2025-11-25, 25 at 2026-07-28)
+  — `Sake.Client` has no OAuth flow of its own (see `guides/client.md`'s
+  "401 challenge" section).
+
+The extension scenarios (the tasks extension's `tasks-*`, the skills
+extension's `sep-2640-*`, and the client auth extensions such as DPoP and
+client credentials) belong to no revision. `mix test.conformance
+extensions` runs them in a separate CI step against their own baseline,
+`conformance/expected-failures-extensions.yaml`: the `tasks-*` scenarios
+fail (the tasks extension is not implemented, above), except
+`tasks-status-notifications`, which the suite currently skips; the skills
+scenarios pass as not applicable (Sake declares no skills
+extension), and the client auth extensions fail for the same reason as
+the `auth/*` scenarios.

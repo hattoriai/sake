@@ -12,6 +12,14 @@ if scenario, do: IO.puts(:stderr, "MCP_CONFORMANCE_SCENARIO=#{scenario}")
 
 [url | _] = Enum.reverse(System.argv())
 
+# Some scenarios pass the tool calls they want made (with arguments) as
+# JSON in MCP_CONFORMANCE_CONTEXT.
+context =
+  case System.get_env("MCP_CONFORMANCE_CONTEXT") do
+    nil -> %{}
+    json -> JSON.decode!(json)
+  end
+
 report = fn label, value ->
   text = if is_binary(value), do: value, else: inspect(value)
   IO.puts(JSON.encode!(%{"label" => label, "result" => text}))
@@ -46,15 +54,47 @@ case Sake.Client.connect(url, on_input: on_input) do
           {[], session}
       end
 
+    # A plain value of the right type for every required argument, the
+    # way a model filling in a call would have to.
+    sample = fn
+      %{"type" => "number"} -> 1
+      %{"type" => "integer"} -> 1
+      %{"type" => "boolean"} -> true
+      %{"type" => "object"} -> %{}
+      %{"type" => "array"} -> []
+      _ -> "test"
+    end
+
+    by_name = Map.new(tools, &{&1.name, &1})
+
+    arguments = fn
+      # json-schema-2020-12-preservation: the echo tool takes another
+      # tool's input schema back verbatim, so the suite can see what
+      # survived the client's parsing.
+      %{name: "json_schema_echo"} ->
+        %{"schema" => by_name["json_schema_2020_12_tool"].input_schema}
+
+      tool ->
+        schema = tool.input_schema
+        properties = schema["properties"] || %{}
+        Map.new(schema["required"] || [], &{&1, sample.(properties[&1] || %{})})
+    end
+
+    calls =
+      case context["toolCalls"] do
+        nil -> Enum.map(tools, &{&1.name, arguments.(&1)})
+        listed -> Enum.map(listed, &{&1["name"], &1["arguments"] || %{}})
+      end
+
     session =
-      Enum.reduce(tools, session, fn tool, session ->
-        case Sake.Client.call_tool(session, tool.name, %{}) do
+      Enum.reduce(calls, session, fn {name, args}, session ->
+        case Sake.Client.call_tool(session, name, args) do
           {:ok, result, session} ->
-            report.("call_tool:#{tool.name}", result.text)
+            report.("call_tool:#{name}", result.text)
             session
 
           {:error, reason, session} ->
-            report.("call_tool_error:#{tool.name}", reason)
+            report.("call_tool_error:#{name}", reason)
             session
         end
       end)

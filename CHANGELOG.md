@@ -34,6 +34,10 @@ First release.
   challenge on a 401 (client-side OAuth itself is not yet implemented).
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
-- The official MCP conformance suite wired into CI, with a baseline of
-  known, documented gaps (sampling, SSE resumability, the client's
-  standalone GET stream, client-side OAuth).
+- The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the
+  server and client scenarios of 2025-06-18, 2025-11-25 and 2026-07-28,
+  the authorization-server scenarios against the development server's own
+  authorization server, and, as a separate step, the extension scenarios.
+  Its baselines list the known, documented gaps (sampling and roots, SSE
+  resumability, the client's standalone GET stream, client-side OAuth,
+  the tasks extension).

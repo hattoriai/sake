@@ -2,6 +2,6 @@
   "name": "sake-conformance",
   "private": true,
   "devDependencies": {
-    "@modelcontextprotocol/conformance": "0.1.16"
+    "@modelcontextprotocol/conformance": "0.2.0-alpha.12"
   }
 }
