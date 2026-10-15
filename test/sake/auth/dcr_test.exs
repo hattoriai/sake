@@ -125,4 +125,29 @@ defmodule Sake.Auth.DCRTest do
     assert register(%{"client_name" => "x", "redirect_uris" => ["https://a.example/cb"]}).status ==
              404
   end
+
+  # Plug.Test does not check that a plug answers on the conn its last
+  # Plug.Conn call returned; Bandit refuses a stale one.
+  test "a refusal after the body is read goes out on a real server, and the connection lives on" do
+    Application.ensure_all_started(:req)
+    url = SakeTest.HTTP.start(Sake.Auth.DCR) <> "/oauth/register"
+    req = [retry: false, headers: [{"content-type", "application/json"}]]
+
+    assert %{status: 400, body: %{"error" => "invalid_client_metadata"}} =
+             Req.post!(url, [body: "[]"] ++ req)
+
+    assert %{status: 400, body: %{"error" => "invalid_client_metadata"}} =
+             Req.post!(url, [body: "{"] ++ req)
+
+    assert %{status: 201} =
+             Req.post!(
+               url,
+               [
+                 json: %{
+                   "client_name" => "Claude Code",
+                   "redirect_uris" => ["http://localhost:53421/callback"]
+                 }
+               ] ++ req
+             )
+  end
 end

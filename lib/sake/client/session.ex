@@ -10,6 +10,7 @@ defmodule Sake.Client.Session do
     :server_capabilities,
     :instructions,
     :on_input,
+    :auth,
     headers: [],
     client_info: %{},
     capabilities: %{},

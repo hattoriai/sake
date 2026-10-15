@@ -90,8 +90,30 @@ defmodule Sake.Plug do
 
   defp post(conn, opts) do
     with :ok <- accept(conn),
-         {:ok, json, conn} <- Sake.Plug.Body.json(conn, opts.json_limit),
-         {:ok, parsed} <- parse(json),
+         {:ok, json, conn} <- Sake.Plug.Body.json(conn, opts.json_limit) do
+      message(conn, opts, json)
+    else
+      {:error, :accept} ->
+        send_error(
+          conn,
+          406,
+          nil,
+          JSONRPC.code(:invalid_request),
+          "Accept must include application/json and text/event-stream"
+        )
+
+      {:error, :too_large, conn} ->
+        send_resp(conn, 413, "")
+
+      {:error, :json, conn} ->
+        send_error(conn, 400, nil, JSONRPC.code(:parse_error), "Parse error")
+    end
+  end
+
+  # The body has been read: from here on every answer goes out on the conn
+  # the read returned, never the one `post/2` was called with.
+  defp message(conn, opts, json) do
+    with {:ok, parsed} <- parse(json),
          :ok <- shape(parsed) do
       case ProtocolVersion.detect(conn) do
         {:unsupported, v} ->
@@ -114,21 +136,6 @@ defmodule Sake.Plug do
           legacy(conn, opts, parsed, header_version)
       end
     else
-      {:error, :accept} ->
-        send_error(
-          conn,
-          406,
-          nil,
-          JSONRPC.code(:invalid_request),
-          "Accept must include application/json and text/event-stream"
-        )
-
-      {:error, :too_large} ->
-        send_resp(conn, 413, "")
-
-      {:error, :json} ->
-        send_error(conn, 400, nil, JSONRPC.code(:parse_error), "Parse error")
-
       {:error, :malformed} ->
         send_error(conn, 400, nil, JSONRPC.code(:invalid_request), "Invalid request")
 

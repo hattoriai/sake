@@ -7,7 +7,7 @@ defmodule Sake.Client.Transport do
   # `params["_meta"]["ai.hattori.sake/key"]` when a Sake server sent it, or
   # by the fixed key `"legacy"` for a foreign server that omits it.
 
-  alias Sake.Client.{Challenge, Session}
+  alias Sake.Client.{Auth, Challenge, Session}
   alias Sake.JSONRPC
   alias Sake.Plug.Headers
   alias Sake.Protocol
@@ -18,7 +18,10 @@ defmodule Sake.Client.Transport do
   @spec post(Session.t(), map(), keyword()) ::
           {:ok, map() | :accepted, Session.t()} | {:error, term()}
   def post(session, message, opts \\ []) do
-    headers = [{"accept", @accept}] ++ era_headers(session, message, opts) ++ session.headers
+    headers =
+      [{"accept", @accept}] ++
+        era_headers(session, message, opts) ++ Auth.headers(session.auth, session.headers)
+
     id = message["id"]
 
     result =
@@ -227,7 +230,9 @@ defmodule Sake.Client.Transport do
 
   @doc false
   def delete(session) do
-    headers = [{"mcp-session-id", session.session_id}] ++ session.headers
+    headers =
+      [{"mcp-session-id", session.session_id}] ++ Auth.headers(session.auth, session.headers)
+
     _ = Req.delete(session.url, [headers: headers, retry: false] ++ session.req)
     :ok
   end

@@ -10,8 +10,11 @@ defmodule Sake.Plug.Body do
 
   import Plug.Conn
 
+  # Every outcome carries the conn as it stands after the read: once
+  # `read_body/2` has run, the conn passed in is stale, and answering on it
+  # (even with an error) is a misuse an adapter such as Bandit refuses.
   @spec json(Plug.Conn.t(), pos_integer()) ::
-          {:ok, term(), Plug.Conn.t()} | {:error, :too_large | :json}
+          {:ok, term(), Plug.Conn.t()} | {:error, :too_large | :json, Plug.Conn.t()}
   def json(conn, limit) do
     case conn.body_params do
       %Plug.Conn.Unfetched{} -> raw(conn, limit)
@@ -24,15 +27,15 @@ defmodule Sake.Plug.Body do
   defp raw(conn, limit) do
     case read_body(conn, length: limit, read_length: limit) do
       {:ok, body, conn} -> decode(body, conn)
-      {:more, _partial, _conn} -> {:error, :too_large}
-      {:error, _} -> {:error, :json}
+      {:more, _partial, conn} -> {:error, :too_large, conn}
+      {:error, _} -> {:error, :json, conn}
     end
   end
 
   defp decode(body, conn) do
     case JSON.decode(body) do
       {:ok, json} -> {:ok, json, conn}
-      {:error, _} -> {:error, :json}
+      {:error, _} -> {:error, :json, conn}
     end
   end
 end
