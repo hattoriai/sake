@@ -1,0 +1,16 @@
+# Baseline of the extension scenarios (`./run.sh extensions`), kept apart
+# from expected-failures.yaml because extensions are not part of any
+# revision. The same rules apply: a new failure or a stale entry fails the
+# run. The skills scenarios (sep-2640-*) pass because Sake declares no
+# skills extension, which the suite reports as not applicable.
+server: []
+
+client:
+  # The client runs the core authorization flow, but not these extension
+  # grants and proof-of-possession schemes (hattoriai/sake#4).
+  - auth/client-credentials-jwt
+  - auth/client-credentials-basic
+  - auth/enterprise-managed-authorization
+  - auth/dpop
+  - auth/dpop-nonce
+  - auth/wif-jwt-bearer

@@ -34,7 +34,7 @@ defmodule Sake.Server.Dispatch do
   defp dispatch(server, "server/discover", _params, ctx) do
     {:ok,
      %{
-       "supportedVersions" => [Protocol.modern()],
+       "supportedVersions" => Protocol.supported(),
        "capabilities" => capabilities(server),
        "instructions" => server.__sake__(:instructions)
      }
@@ -296,7 +296,7 @@ defmodule Sake.Server.Dispatch do
   defp read_result(spec, uri_params, uri, server, ctx) do
     case Results.resource(spec.module.read(uri_params, ctx), spec, uri, ctx) do
       {:ok, result} -> {:ok, cacheable(result, server, ctx, [spec.ttl])}
-      {:error, :not_found} -> {:error, not_found_code(ctx), "Resource not found: #{uri}"}
+      {:error, :not_found} -> not_found(uri, ctx)
       {:error, {:missing_capability, caps}} -> missing_capability(caps)
       {:error, text} -> {:error, JSONRPC.code(:internal), text}
     end
@@ -304,10 +304,19 @@ defmodule Sake.Server.Dispatch do
 
   defp find_resource(server, uri) do
     case Server.resource(server, uri) do
-      {:ok, spec, params} -> {:ok, spec, params}
-      :error -> {:error, JSONRPC.code(:invalid_params), "Resource not found: #{uri}"}
+      {:ok, spec, params} ->
+        {:ok, spec, params}
+
+      :error ->
+        {:error, JSONRPC.code(:invalid_params), "Resource not found: #{uri}", %{"uri" => uri}}
     end
   end
+
+  # The error names the URI in `data`, as both eras' specifications
+  # recommend, so a client reading several resources can tell which one
+  # was missing.
+  defp not_found(uri, ctx),
+    do: {:error, not_found_code(ctx), "Resource not found: #{uri}", %{"uri" => uri}}
 
   defp not_found_code(%Context{era: :legacy}), do: JSONRPC.code(:legacy_resource_not_found)
   defp not_found_code(_), do: JSONRPC.code(:invalid_params)
@@ -372,9 +381,6 @@ defmodule Sake.Server.Dispatch do
       :error ->
         {:error, JSONRPC.code(:invalid_params), "Invalid request state"}
 
-      {:error, :missing_state} ->
-        {:error, JSONRPC.code(:invalid_params), "Missing request state"}
-
       {:ok, inputs} ->
         run_with_inputs(name, args, ctx, inputs, fun)
     end
@@ -389,10 +395,10 @@ defmodule Sake.Server.Dispatch do
 
   # `inputResponses` are only ever honoured alongside the signed
   # `requestState` that proves Sake asked for them; on its own it would let
-  # any client inject forged elicitation answers on the first call.
-  defp resolve_inputs(_name, _args, %{"inputResponses" => _responses}, _ctx),
-    do: {:error, :missing_state}
-
+  # any client inject forged elicitation answers on the first call. Without
+  # the state they are ignored, not refused: the handler runs as if nothing
+  # had been answered and asks again, which is what the specification
+  # recommends when a retry lacks the information the server needs.
   defp resolve_inputs(_name, _args, _params, _ctx), do: {:ok, %{}}
 
   defp run_with_inputs(name, args, ctx, inputs, fun) do

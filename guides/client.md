@@ -26,7 +26,7 @@ returning `{:ok, session}` (no prior session to update).
 `get_prompt/3`, `complete/4` (`{:prompt, name}` or `{:resource, uri}`, an
 argument name, and the partial value), `ping/1`, `discover/1` (the modern
 handshake call directly, if you need it), and `close/1` (sends a `DELETE`
-on a legacy session; a no-op on modern, which has none to close; stops
+on a legacy session, whatever the server answers; a no-op on modern, which has none to close; stops
 a stdio server).
 
 ## Stdio
@@ -49,7 +49,10 @@ text content block joined), and `meta` (the result's `_meta`).
 
 `connect/2` with no `era:` option tries the modern handshake
 (`server/discover`) first. An error only a modern server sends (`-32020`,
-`-32021`, `-32022`) is reported as-is. "Method not found" (`-32601`) or
+`-32021`, `-32022`) is reported as-is, with one exception: an unsupported
+version error (`-32022`) whose list of supported revisions includes the
+one the client sent is retried once, and only a second refusal comes back
+as `{:error, {:no_common_version, supported}}`. "Method not found" (`-32601`) or
 "invalid params" (`-32602`) — over HTTP 200 or a 4xx — or a failure with
 no JSON-RPC error at all means "this is a legacy server", and the client
 retries with the legacy `initialize` handshake. Force one era directly

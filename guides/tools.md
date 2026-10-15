@@ -201,8 +201,12 @@ answering key `"legacy"` (the common case: one question at a time). A
 client's `on_input` map (see `guides/client.md`) is keyed the same way.
 
 `inputResponses` sent back without the matching `requestState` are
-rejected — the modern retry mechanism ties an answer to the exact call it
+ignored — the modern retry mechanism ties an answer to the exact call it
 answers, so a client cannot resume a handler from an unrelated response.
+The handler runs as if nothing had been answered and asks again, as the
+specification recommends for a retry that lacks what the server needs. A
+`requestState` that fails verification (tampered, expired, or issued for
+another call) is refused with `-32602`.
 
 Inside a task (see `guides/tasks.md`), an elicitation waits on the task
 for the client's `tasks/update` instead; nothing runs twice there.

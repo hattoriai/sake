@@ -129,7 +129,9 @@ defmodule Sake.StdioTest do
       serve(pipe)
       Pipe.push(pipe, modern(1, "server/discover"))
 
-      assert %{"id" => 1, "result" => %{"supportedVersions" => [@modern]} = result} = recv(pipe)
+      assert %{"id" => 1, "result" => %{"supportedVersions" => [@modern | _]} = result} =
+               recv(pipe)
+
       assert result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"] == "stdio-test"
 
       Pipe.push(pipe, modern(2, "tools/list"))

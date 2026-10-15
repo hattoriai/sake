@@ -129,6 +129,22 @@ defmodule Sake.SchemaTest do
     assert_raise ArgumentError, ~r/header/, fn ->
       Schema.build([{:a, :string, header: "X"}, {:b, :string, header: "x"}])
     end
+
+    assert_raise ArgumentError, ~r/unique/, fn ->
+      Schema.build([{:a, :string, header: "X"}, {:b, :string, header: "X"}])
+    end
+  end
+
+  test "header entries keep a name that is used twice" do
+    schema = %{
+      "type" => "object",
+      "properties" => %{
+        "a" => %{"type" => "string", "x-mcp-header" => "Region"},
+        "b" => %{"type" => "string", "x-mcp-header" => "Region"}
+      }
+    }
+
+    assert Schema.header_entries(schema) == [{"Region", ["a"]}, {"Region", ["b"]}]
   end
 
   property "a valid value for a built schema validates" do

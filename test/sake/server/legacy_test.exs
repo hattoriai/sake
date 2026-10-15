@@ -69,7 +69,8 @@ defmodule Sake.Server.LegacyTest do
   end
 
   test "legacy resource not found code" do
-    assert {:error, %{"code" => -32_002}} = call("resources/read", %{"uri" => "issue://9"})
+    assert {:error, %{"code" => -32_002, "data" => %{"uri" => "issue://9"}}} =
+             call("resources/read", %{"uri" => "issue://9"})
   end
 
   test "ping, logging, subscriptions, notifications" do

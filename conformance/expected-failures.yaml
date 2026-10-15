@@ -1,7 +1,20 @@
-# Baseline of conformance scenarios that fail on purpose. CI turns red only
-# on a *new* failure or a stale entry (a listed scenario that now passes).
-# See guides/protocol_versions.md for the reasoning behind each entry.
-server: []
+# Baseline of conformance scenarios that fail on purpose, for the core run
+# of run.sh (every revision's server and client scenarios). CI turns red
+# only on a *new* failure or a stale entry (a listed scenario that now
+# passes); a warning counts as a failure. One file serves every revision:
+# an entry is only checked where its scenario runs. `scenario:check-id`
+# lists one check of a scenario whose other checks must pass. See
+# guides/protocol_versions.md for the reasoning behind each entry.
+server:
+  # No resumability (see guides/protocol_versions.md): a legacy POST
+  # stream carries no priming event and no `retry` field, which the
+  # scenario reports as warnings.
+  - server-sse-polling
+  # Sake honours `inputResponses` only with the signed `requestState` it
+  # issued for them (see guides/tools.md). The scenario sends answers with
+  # no state, to a question it never asked; Sake ignores them and asks
+  # again instead of completing, which the scenario reports as a warning.
+  - input-required-result-ignore-extra-params
 
 client:
   # The client does not resume a dropped SSE stream (see

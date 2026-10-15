@@ -94,4 +94,38 @@ defmodule Sake.Plug.HeadersTest do
     assert {:error, "Mcp-Param-Precision header contains invalid characters"} =
              Headers.validate(conn_with(base ++ [{"mcp-param-precision", "2\x01"}]), parsed, spec)
   end
+
+  test "whitespace around a header value is not part of it" do
+    parsed =
+      {:request, 1, "tools/call",
+       %{"name" => "add", "arguments" => %{"a" => 1, "b" => 2, "precision" => 2}}}
+
+    {:ok, spec} = Sake.Server.tool(SakeDev.Server, "add")
+
+    padded = [
+      {"mcp-method", " tools/call\t"},
+      {"mcp-name", "add  "},
+      {"mcp-param-precision", "\t2 "}
+    ]
+
+    assert :ok = Headers.validate(conn_with(padded), parsed, spec)
+
+    # Whitespace inside the value still counts, and a value that only
+    # matches once its own whitespace is gone is a mismatch.
+    assert {:error, "Mcp-Name header value 'a dd' does not match body value 'add'"} =
+             Headers.validate(
+               conn_with([{"mcp-method", "tools/call"}, {"mcp-name", "a dd"}]),
+               parsed,
+               spec
+             )
+
+    spaced = {:request, 1, "tools/call", %{"name" => " add", "arguments" => %{}}}
+
+    assert {:error, "Mcp-Name header value 'add' does not match body value ' add'"} =
+             Headers.validate(
+               conn_with([{"mcp-method", "tools/call"}, {"mcp-name", " add"}]),
+               spaced,
+               nil
+             )
+  end
 end

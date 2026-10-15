@@ -213,7 +213,7 @@ defmodule Sake.ElicitTest do
       assert %{"result" => %{"content" => [%{"text" => "Connected."}]}} = ModernClient.json(conn)
     end
 
-    test "inputResponses without a request state are rejected" do
+    test "inputResponses without a request state are ignored and asked for again" do
       conn =
         ModernClient.post(
           ModernClient.opts(),
@@ -228,8 +228,25 @@ defmodule Sake.ElicitTest do
           capabilities: @caps
         )
 
-      assert %{"error" => %{"code" => -32_602, "message" => "Missing request state"}} =
-               ModernClient.json(conn)
+      # The forged answer never reaches the handler: it asks the same
+      # question again, with a fresh state that carries no answers.
+      assert %{
+               "result" => %{
+                 "resultType" => "input_required",
+                 "inputRequests" => %{"who" => _},
+                 "requestState" => state
+               }
+             } = ModernClient.json(conn)
+
+      ctx =
+        Sake.Context.new(
+          secret: ModernClient.secret(),
+          method: "tools/call",
+          scope: nil,
+          client_capabilities: @caps
+        )
+
+      assert {:ok, %{}} == Sake.Server.RequestState.verify(ctx, "confirm", %{}, state)
     end
 
     test "a resource can elicit and complete on retry" do

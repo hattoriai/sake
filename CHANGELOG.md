@@ -71,7 +71,10 @@ First release.
   `on_notification:` sees a call's notifications on either transport.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
-- The official MCP conformance suite wired into CI, with a baseline of
-  known, documented gaps (SSE resumability, the client's standalone GET
-  stream); every server scenario, and every `auth/*` client scenario,
-  passes.
+- The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the
+  server and client scenarios of 2025-06-18, 2025-11-25 and 2026-07-28,
+  the authorization-server scenarios against the development server's own
+  authorization server, and, as a separate step, the extension scenarios.
+  Its baselines list the known, documented gaps (SSE resumability, the
+  client's standalone GET stream); every `auth/*` client scenario and
+  every tasks extension scenario passes.

@@ -1,8 +1,10 @@
 defmodule SakeDev.Conformance.Tools.TestInputRequiredResultMultiRound do
   @moduledoc false
+  # SEP-2322: two questions in two rounds. The second round's request state
+  # carries the first answer, so it differs from the first round's.
   use Sake.Tool,
     name: "test_input_required_result_multi_round",
-    description: "Asks for a name, then for a color"
+    description: "Asks two questions, one round each"
 
   @impl true
   def execute(%{}, ctx) do
@@ -12,15 +14,16 @@ defmodule SakeDev.Conformance.Tools.TestInputRequiredResultMultiRound do
            Sake.Elicit.form(ctx, :step2, "Step 2: What is your favorite color?", schema("color")) do
       {:ok, "#{name} likes #{color}."}
     else
-      other -> {:error, "Missing input: #{inspect(other)}"}
+      {:error, :unsupported} -> {:error, "This tool needs a client that supports elicitation."}
+      _ -> {:error, "Both questions need an answer."}
     end
   end
 
-  defp schema(property) do
+  defp schema(field) do
     %{
       "type" => "object",
-      "properties" => %{property => %{"type" => "string"}},
-      "required" => [property]
+      "properties" => %{field => %{"type" => "string"}},
+      "required" => [field]
     }
   end
 end

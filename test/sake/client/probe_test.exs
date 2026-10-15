@@ -75,7 +75,65 @@ defmodule Sake.Client.ProbeTest do
              session.instructions == "hi"
   end
 
-  test "an unsupported version answer makes the client retry with a supported one", %{
+  test "an unsupported version answer listing the client's revision is retried once", %{
+    bypass: bypass,
+    url: url
+  } do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+      {msg, conn} = read(conn)
+      assert msg["method"] == "server/discover"
+
+      if Agent.get_and_update(calls, &{&1, &1 + 1}) == 0 do
+        json(conn, 400, %{
+          "jsonrpc" => "2.0",
+          "id" => msg["id"],
+          "error" => %{
+            "code" => -32_022,
+            "message" => "Unsupported",
+            "data" => %{"supported" => ["2026-07-28"], "requested" => "2026-07-28"}
+          }
+        })
+      else
+        json(conn, 200, %{
+          "jsonrpc" => "2.0",
+          "id" => msg["id"],
+          "result" => %{"supportedVersions" => ["2026-07-28"], "capabilities" => %{}}
+        })
+      end
+    end)
+
+    assert {:ok, %{era: :modern, revision: "2026-07-28"}} = Client.connect(url)
+    assert Agent.get(calls, & &1) == 2
+  end
+
+  test "a server that keeps refusing the client's revision is not retried forever", %{
+    bypass: bypass,
+    url: url
+  } do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+      {msg, conn} = read(conn)
+      Agent.update(calls, &(&1 + 1))
+
+      json(conn, 400, %{
+        "jsonrpc" => "2.0",
+        "id" => msg["id"],
+        "error" => %{
+          "code" => -32_022,
+          "message" => "Unsupported",
+          "data" => %{"supported" => ["2026-07-28"], "requested" => "2026-07-28"}
+        }
+      })
+    end)
+
+    assert {:error, {:no_common_version, ["2026-07-28"]}} = Client.connect(url)
+    assert Agent.get(calls, & &1) == 2
+  end
+
+  test "an unsupported version answer without a common revision is an error", %{
     bypass: bypass,
     url: url
   } do
