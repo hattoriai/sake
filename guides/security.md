@@ -88,9 +88,10 @@ signed token binding the principal, the method, the component name, and a
 digest of the original arguments — a retry cannot be replayed against a
 different principal, a different tool, or with different arguments than
 the ones that triggered the original elicitation, and expires after ten
-minutes. `inputResponses` sent without a `requestState` are rejected
-outright, even if they would otherwise look like a plausible answer: there
-is no unsigned path back into a handler that is already mid-flow.
+minutes. `inputResponses` sent without a `requestState` are ignored, even
+if they would otherwise look like a plausible answer: the handler starts
+over and asks its question again, so there is no unsigned path back into a
+handler that is already mid-flow.
 
 ## Loopback redirects
 

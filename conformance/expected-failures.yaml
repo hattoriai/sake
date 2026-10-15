@@ -1,12 +1,38 @@
-# Baseline of conformance scenarios that fail on purpose. CI turns red only
-# on a *new* failure or a stale entry (a listed scenario that now passes).
-# See guides/protocol_versions.md for the reasoning behind each entry.
+# Baseline of conformance scenarios that fail on purpose, for the core run
+# of run.sh (every revision's server and client scenarios). CI turns red
+# only on a *new* failure or a stale entry (a listed scenario that now
+# passes); a warning counts as a failure. One file serves every revision:
+# an entry is only checked where its scenario runs. `scenario:check-id`
+# lists one check of a scenario whose other checks must pass. See
+# guides/protocol_versions.md for the reasoning behind each entry.
 server:
-  # Sake does not implement server-initiated sampling
-  # (`sampling/createMessage`; see guides/protocol_versions.md), so the
-  # development server has no `test_sampling` tool and the scenario fails
-  # with "Unknown tool".
+  # Sake has no sampling (`sampling/createMessage`) and no roots
+  # (`roots/list`), in either era (see guides/protocol_versions.md), so
+  # the development server has none of the fixtures these scenarios call
+  # and they fail with "Unknown tool". tools-call-sampling is the legacy
+  # server-to-client request; the input-required-result-* ones ask for the
+  # same inputs through an input-required result, and capability-check
+  # needs a tool that falls back to sampling when the client has no
+  # elicitation.
   - tools-call-sampling
+  - input-required-result-basic-sampling
+  - input-required-result-basic-list-roots
+  - input-required-result-multiple-input-requests
+  - input-required-result-capability-check
+  # The same gap: the scenario's `test_missing_capability` fixture needs
+  # sampling, to show a -32021 error for a client that did not declare
+  # it. The rest of server-stateless passes.
+  - server-stateless:sep-2575-server-rejects-undeclared-capability
+  - server-stateless:sep-2575-missing-capability-http-400
+  # No resumability (see guides/protocol_versions.md): a legacy POST
+  # stream carries no priming event and no `retry` field, which the
+  # scenario reports as warnings.
+  - server-sse-polling
+  # Sake honours `inputResponses` only with the signed `requestState` it
+  # issued for them (see guides/tools.md). The scenario sends answers with
+  # no state, to a question it never asked; Sake ignores them and asks
+  # again instead of completing, which the scenario reports as a warning.
+  - input-required-result-ignore-extra-params
 
 client:
   # The client does not resume a dropped SSE stream (see

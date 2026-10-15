@@ -221,9 +221,11 @@ defmodule Sake.Client.Transport do
   defp name_header("resources/read", %{"uri" => u}), do: [{"mcp-name", Headers.encode_value(u)}]
   defp name_header(_, _), do: []
 
+  # The value is bound through a one-element generator: a bare `value =`
+  # line in a comprehension is also a filter, and would drop `false`.
   defp param_headers(%Sake.Tool.Spec{headers: headers}, args) do
     for {name, path} <- headers,
-        value = get_in(args, path),
+        value <- [get_in(args, path)],
         value != nil,
         do: {"mcp-param-" <> String.downcase(name), Headers.encode_value(value)}
   end

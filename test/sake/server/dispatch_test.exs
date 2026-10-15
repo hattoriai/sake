@@ -18,7 +18,9 @@ defmodule Sake.Server.DispatchTest do
   test "server/discover" do
     assert {:reply, r} = call("server/discover")
     assert r["resultType"] == "complete"
-    assert r["supportedVersions"] == ["2026-07-28"]
+    # Every revision the endpoint serves, the same list an unsupported
+    # version error carries: the legacy ones are reached with `initialize`.
+    assert r["supportedVersions"] == ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"]
     assert r["capabilities"]["tools"] == %{"listChanged" => true}
 
     assert r["_meta"]["io.modelcontextprotocol/serverInfo"] == %{
@@ -208,10 +210,15 @@ defmodule Sake.Server.DispatchTest do
     assert {:reply, %{"contents" => [%{"text" => "# sake-dev" <> _}]}} =
              call("resources/read", %{"uri" => "dev://readme"})
 
-    assert {:error, %{"code" => -32_602, "message" => "Resource not found: issue://9"}} =
-             call("resources/read", %{"uri" => "issue://9"})
+    assert {:error,
+            %{
+              "code" => -32_602,
+              "message" => "Resource not found: issue://9",
+              "data" => %{"uri" => "issue://9"}
+            }} = call("resources/read", %{"uri" => "issue://9"})
 
-    assert {:error, %{"code" => -32_602}} = call("resources/read", %{"uri" => "x://y"})
+    assert {:error, %{"code" => -32_602, "data" => %{"uri" => "x://y"}}} =
+             call("resources/read", %{"uri" => "x://y"})
   end
 
   test "prompts and completion" do

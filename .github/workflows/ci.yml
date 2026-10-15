@@ -184,7 +184,19 @@ jobs:
       - run: mix deps.get
 
       # `test.conformance` runs `dev.exs` (the development server), which
-      # needs the `:dev` environment, not `:test`.
-      - run: mix test.conformance
+      # needs the `:dev` environment, not `:test`. The core run covers the
+      # server and client scenarios of 2025-06-18, 2025-11-25 and
+      # 2026-07-28 and the authorization-server scenarios.
+      - name: Conformance (core)
+        run: mix test.conformance
+        env:
+          MIX_ENV: dev
+
+      # The extension scenarios (tasks, skills, the auth extensions)
+      # against their own baseline, conformance/expected-failures-extensions.yaml.
+      # It runs even when the core run failed, so both results show.
+      - name: Conformance (extensions)
+        if: success() || failure()
+        run: mix test.conformance extensions
         env:
           MIX_ENV: dev

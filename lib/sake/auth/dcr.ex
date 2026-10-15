@@ -23,8 +23,23 @@ defmodule Sake.Auth.DCR do
     config = Sake.Auth.config()
 
     if config.dcr do
-      with {:ok, doc, conn} when is_map(doc) <- Sake.Plug.Body.json(conn, 65_536),
-           {:ok, client} <- build(doc) do
+      # Every answer goes out on the conn the body read returned: the one
+      # `call/2` was given is stale once the body has been read.
+      case Sake.Plug.Body.json(conn, 65_536) do
+        {:ok, doc, conn} when is_map(doc) -> register(conn, config, doc)
+        {:ok, _doc, conn} -> error(conn, "invalid_client_metadata")
+        {:error, _reason, conn} -> error(conn, "invalid_client_metadata")
+      end
+    else
+      send_resp(conn, 404, "")
+    end
+  end
+
+  def call(conn, _opts), do: send_resp(conn, 405, "")
+
+  defp register(conn, config, doc) do
+    case build(doc) do
+      {:ok, client} ->
         {module, state} = Sake.Auth.store(config)
         :ok = module.put_client(state, client)
 
@@ -43,16 +58,11 @@ defmodule Sake.Auth.DCR do
         |> put_resp_header("cache-control", "no-store")
         |> put_resp_content_type("application/json")
         |> send_resp(201, JSON.encode!(response))
-      else
-        {:error, code} when is_binary(code) -> error(conn, code)
-        _ -> error(conn, "invalid_client_metadata")
-      end
-    else
-      send_resp(conn, 404, "")
+
+      {:error, code} ->
+        error(conn, code)
     end
   end
-
-  def call(conn, _opts), do: send_resp(conn, 405, "")
 
   defp build(doc) do
     with :ok <- validate(doc) do

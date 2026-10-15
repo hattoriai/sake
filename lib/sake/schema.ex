@@ -67,7 +67,7 @@ defmodule Sake.Schema do
   defp put_opt(map, key, value), do: Map.put(map, key, value)
 
   defp check_headers!(schema) do
-    paths = header_paths(schema)
+    paths = header_entries(schema)
 
     for {name, path} <- paths do
       prop = get_in(schema, Enum.flat_map(path, &["properties", &1]))
@@ -97,16 +97,26 @@ defmodule Sake.Schema do
 
   @doc "Header name → property path for every `x-mcp-header` reachable through `properties` only."
   @spec header_paths(map()) :: %{String.t() => [String.t()]}
-  def header_paths(schema), do: header_paths(schema, [], %{})
+  def header_paths(schema), do: schema |> header_entries() |> Map.new()
 
-  defp header_paths(%{"properties" => props}, path, acc) do
+  @doc """
+  Every `x-mcp-header` reachable through `properties` only, as `{name,
+  path}` pairs. Unlike `header_paths/1`, a name used twice appears twice,
+  so a check for duplicates sees it.
+  """
+  @spec header_entries(map()) :: [{String.t(), [String.t()]}]
+  def header_entries(schema), do: schema |> header_entries([], []) |> Enum.reverse()
+
+  defp header_entries(%{"properties" => props}, path, acc) when is_map(props) do
     Enum.reduce(props, acc, fn {name, prop}, acc ->
-      acc = if h = prop["x-mcp-header"], do: Map.put(acc, h, path ++ [name]), else: acc
-      header_paths(prop, path ++ [name], acc)
+      header = is_map(prop) && prop["x-mcp-header"]
+      acc = if header, do: [{header, path ++ [name]} | acc], else: acc
+
+      header_entries(prop, path ++ [name], acc)
     end)
   end
 
-  defp header_paths(_, _, acc), do: acc
+  defp header_entries(_, _, acc), do: acc
 
   @spec valid_header_name?(term()) :: boolean()
   def valid_header_name?(name) when is_binary(name),

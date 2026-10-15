@@ -148,6 +148,30 @@ defmodule Sake.PlugTest do
       assert conn.status == 400 and ModernClient.json(conn)["error"]["code"] == -32_602
     end
 
+    test "a missing _meta or protocol version in _meta is -32602, not a mismatch", %{opts: opts} do
+      for meta <- [nil, %{"io.modelcontextprotocol/clientCapabilities" => %{}}] do
+        params = if meta, do: %{"_meta" => meta}, else: %{}
+
+        conn =
+          conn(:post, "/mcp", JSON.encode!(Sake.JSONRPC.request(7, "server/discover", params)))
+          |> put_req_header("content-type", "application/json")
+          |> put_req_header("accept", "application/json, text/event-stream")
+          |> put_req_header("mcp-protocol-version", "2026-07-28")
+          |> put_req_header("mcp-method", "server/discover")
+          |> Sake.Plug.call(opts)
+
+        assert conn.status == 400
+
+        assert %{
+                 "id" => 7,
+                 "error" => %{
+                   "code" => -32_602,
+                   "message" => "Missing io.modelcontextprotocol/protocolVersion in _meta"
+                 }
+               } = ModernClient.json(conn)
+      end
+    end
+
     test "unknown version, unknown method, notification, batch", %{opts: opts} do
       conn = ModernClient.post(opts, "tools/list", %{}, version: "2099-01-01")
       assert conn.status == 400
@@ -393,7 +417,7 @@ defmodule Sake.PlugTest do
                LegacyClient.json(conn)["result"]["protocolVersion"] == "2025-11-25"
     end
 
-    test "DELETE with a session is 204, session ignored on modern requests", %{opts: opts} do
+    test "DELETE with a session is 405, session ignored on modern requests", %{opts: opts} do
       session = LegacyClient.initialize(opts)
 
       conn =
@@ -401,7 +425,11 @@ defmodule Sake.PlugTest do
         |> put_req_header("mcp-session-id", session.id)
         |> Sake.Plug.call(opts)
 
-      assert conn.status == 204
+      # The session cannot be ended (it is a signed token), so the server
+      # refuses rather than claim it did, and the session keeps working.
+      assert conn.status == 405
+      conn = LegacyClient.post(opts, session, "tools/list")
+      assert conn.status == 200 and LegacyClient.json(conn)["result"]["tools"] != []
       conn = ModernClient.post(opts, "tools/list", %{}, headers: [{"mcp-session-id", session.id}])
       assert conn.status == 200 and get_resp_header(conn, "mcp-session-id") == []
     end
@@ -410,6 +438,14 @@ defmodule Sake.PlugTest do
       session = LegacyClient.initialize(opts)
       conn = LegacyClient.post(opts, session, "resources/read", %{"uri" => "issue://9"})
       assert conn.status == 200 and LegacyClient.json(conn)["error"]["code"] == -32_002
+    end
+
+    test "initialize with the modern per-request _meta is a modern request", %{opts: opts} do
+      conn = ModernClient.post(opts, "initialize", %{})
+
+      assert conn.status == 404
+      assert get_resp_header(conn, "mcp-session-id") == []
+      assert %{"id" => 1, "error" => %{"code" => -32_601}} = ModernClient.json(conn)
     end
 
     test "initialize with a modern version header still opens a legacy session", %{opts: opts} do
