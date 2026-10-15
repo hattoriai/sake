@@ -7,13 +7,16 @@ defmodule Sake.Client do
       {:ok, result, session} = Sake.Client.call_tool(session, "search", %{"query" => "x"})
 
   The client is functional: every call returns the updated session. Pass
-  `on_input:` to answer elicitation requests; a 401 comes back as
-  `{:error, {:unauthorized, %Sake.Client.Challenge{}}}`.
+  `on_input:` to answer elicitation requests, `sampling:` to answer
+  sampling requests (`fn params, session -> {:ok, result} | {:error,
+  error} end`) and `roots:` to share roots (a list of `%{"uri" => ...,
+  "name" => ...}` maps, or a function of the session that returns one);
+  a 401 comes back as `{:error, {:unauthorized, %Sake.Client.Challenge{}}}`.
   """
 
   require Logger
 
-  alias Sake.Client.{Session, ToolResult, Transport}
+  alias Sake.Client.{Inputs, Session, ToolResult, Transport}
   alias Sake.{Content, JSONRPC, Protocol, Schema}
 
   # The errors only a modern server sends; a legacy server answers the
@@ -36,20 +39,29 @@ defmodule Sake.Client do
   end
 
   defp build_session(url, opts) do
-    on_input = opts[:on_input]
-
     %Session{
       url: url,
       headers: opts[:headers] || [],
       client_info: opts[:client_info] || %{"name" => "Sake", "version" => Sake.version()},
-      capabilities: opts[:capabilities] || default_capabilities(on_input),
-      on_input: on_input,
+      capabilities: opts[:capabilities] || default_capabilities(opts),
+      on_input: opts[:on_input],
+      sampling: opts[:sampling],
+      roots: opts[:roots],
       req: opts[:req] || []
     }
   end
 
-  defp default_capabilities(nil), do: %{}
-  defp default_capabilities(_on_input), do: %{"elicitation" => %{}}
+  # A client claims only what it can answer: each answering option turns
+  # on its own capability.
+  defp default_capabilities(opts) do
+    %{}
+    |> put_capability(opts[:on_input], "elicitation", %{})
+    |> put_capability(opts[:sampling], "sampling", %{})
+    |> put_capability(opts[:roots], "roots", %{"listChanged" => false})
+  end
+
+  defp put_capability(caps, nil, _name, _value), do: caps
+  defp put_capability(caps, _option, name, value), do: Map.put(caps, name, value)
 
   defp probe(session, legacy_version) do
     case modern_connect(%{session | era: :modern, revision: Protocol.modern()}) do
@@ -316,8 +328,14 @@ defmodule Sake.Client do
     end
   end
 
+  # Only answers go back: a request nothing could answer (a sampling or
+  # roots request without `sampling:` or `roots:`) is left out, and the
+  # server asks again or carries on without it.
   defp retry_with_inputs(session, method, params, result, opts, attempt) do
-    responses = answer(session, result["inputRequests"] || %{})
+    responses =
+      for {key, {:ok, answer}} <- Inputs.answer(session, result["inputRequests"] || %{}),
+          into: %{},
+          do: {key, answer}
 
     retry =
       params
@@ -330,11 +348,6 @@ defmodule Sake.Client do
 
   defp put_request_state(params, nil), do: params
   defp put_request_state(params, state), do: Map.put(params, "requestState", state)
-
-  defp answer(%Session{on_input: nil}, requests),
-    do: Map.new(requests, fn {k, _} -> {k, %{"action" => "cancel"}} end)
-
-  defp answer(%Session{on_input: fun} = session, requests), do: fun.(requests, session)
 
   defp meta(session) do
     %{

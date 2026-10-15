@@ -2,12 +2,12 @@ defmodule Sake.Client.Transport do
   @moduledoc false
   # One HTTP round trip: JSON or SSE. `post/3` returns the final JSON-RPC
   # message for the request (or `:accepted` for notifications), after
-  # answering any legacy elicitation requests seen on the stream. A legacy
-  # `elicitation/create` request is keyed for `on_input` by
-  # `params["_meta"]["ai.hattori.sake/key"]` when a Sake server sent it, or
-  # by the fixed key `"legacy"` for a foreign server that omits it.
+  # answering any legacy server requests seen on the stream (elicitation,
+  # sampling, roots; see `Sake.Client.Inputs`). A legacy request is keyed
+  # by `params["_meta"]["ai.hattori.sake/key"]` when a Sake server sent it,
+  # or by the fixed key `"legacy"` for a foreign server that omits it.
 
-  alias Sake.Client.{Challenge, Session}
+  alias Sake.Client.{Challenge, Inputs, Session}
   alias Sake.JSONRPC
   alias Sake.Plug.Headers
   alias Sake.Protocol
@@ -86,33 +86,26 @@ defmodule Sake.Client.Transport do
 
   defp handle_event(event, resp, session) do
     case JSONRPC.parse(event) do
-      {:request, rid, "elicitation/create", params} ->
+      {:request, rid, method, params} ->
         # The handler's key travels in `_meta` under our vendor prefix (see
         # `Sake.Elicit`); a foreign server that omits it falls back to the
         # fixed key `"legacy"`, since a legacy stream only ever asks one
         # question at a time.
         key = get_in(params, ["_meta", @vendor_key]) || "legacy"
-
-        answer =
-          if session.on_input,
-            do:
-              session.on_input.(
-                %{key => %{"method" => "elicitation/create", "params" => params}},
-                session
-              )[key],
-            else: %{"action" => "cancel"}
-
-        _ = post(session, JSONRPC.result(rid, answer || %{"action" => "cancel"}))
-        resp
-
-      {:request, rid, _other, _} ->
-        _ = post(session, JSONRPC.error(rid, JSONRPC.code(:method_not_found), "Method not found"))
+        requests = %{key => %{"method" => method, "params" => params}}
+        _ = post(session, reply(rid, Inputs.answer(session, requests)[key]))
         resp
 
       _ ->
         put_in(resp.private[:sake_events], (resp.private[:sake_events] || []) ++ [event])
     end
   end
+
+  defp reply(rid, {:ok, result}), do: JSONRPC.result(rid, result)
+  defp reply(rid, {:error, error}), do: %{"jsonrpc" => "2.0", "id" => rid, "error" => error}
+
+  defp reply(rid, nil),
+    do: JSONRPC.error(rid, JSONRPC.code(:method_not_found), "Method not found")
 
   defp final?(event, id),
     do:

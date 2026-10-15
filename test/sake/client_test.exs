@@ -100,7 +100,104 @@ defmodule Sake.ClientTest do
         assert {:ok, %{is_error: true, text: "Cancelled."}, _} =
                  Client.call_tool(session, "confirm", %{})
       end
+
+      test "sampling through sampling:", %{url: url} do
+        parent = self()
+
+        sampling = fn params, _session ->
+          send(parent, {:sampled, params})
+
+          {:ok,
+           %{
+             "role" => "assistant",
+             "content" => %{"type" => "text", "text" => "Short."},
+             "model" => "test-model"
+           }}
+        end
+
+        assert {:ok, session} = Client.connect(url, era: @era, sampling: sampling)
+        assert session.capabilities == %{"sampling" => %{}}
+
+        assert {:ok, %{text: "Short.", is_error: false}, _} =
+                 Client.call_tool(session, "summarize", %{"text" => "Long."})
+
+        assert_receive {:sampled, %{"maxTokens" => 100, "messages" => [%{"role" => "user"}]}}
+      end
+
+      test "roots through roots:, as a list or a function", %{url: url} do
+        roots = [%{"uri" => "file:///work", "name" => "Work"}]
+        assert {:ok, session} = Client.connect(url, era: @era, roots: roots)
+        assert session.capabilities == %{"roots" => %{"listChanged" => false}}
+
+        assert {:ok, %{text: "file:///work (Work)"}, _} = Client.call_tool(session, "roots", %{})
+
+        assert {:ok, session} =
+                 Client.connect(url,
+                   era: @era,
+                   roots: fn _session -> [%{"uri" => "file:///f"}] end
+                 )
+
+        assert {:ok, %{text: "file:///f (unnamed)"}, _} = Client.call_tool(session, "roots", %{})
+      end
     end
+  end
+
+  test "on a legacy stream, a sampling error goes back as a JSON-RPC error", %{url: url} do
+    sampling = fn _params, _session -> {:error, %{"code" => -1, "message" => "Declined"}} end
+    assert {:ok, session} = Client.connect(url, era: :legacy, sampling: sampling)
+
+    assert {:ok, %{is_error: true, text: "The client did not summarize."}, _} =
+             Client.call_tool(session, "summarize", %{"text" => "x"})
+  end
+
+  test "a legacy server request nothing can answer gets an error; elicitation a cancel" do
+    bypass = Bypass.open()
+    url = "http://localhost:#{bypass.port}/mcp"
+    parent = self()
+
+    Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      msg = JSON.decode!(body)
+
+      case msg do
+        %{"method" => "initialize"} ->
+          json(conn, msg["id"], %{"protocolVersion" => "2025-11-25", "capabilities" => %{}})
+
+        %{"method" => "notifications/initialized"} ->
+          Plug.Conn.resp(conn, 202, "")
+
+        %{"method" => "tools/call"} ->
+          requests = [
+            Sake.JSONRPC.request("s1", "sampling/createMessage", %{"messages" => []}),
+            Sake.JSONRPC.request("r1", "roots/list", %{}),
+            Sake.JSONRPC.request("e1", "elicitation/create", %{"message" => "?"}),
+            Sake.JSONRPC.request("p1", "ping", %{}),
+            Sake.JSONRPC.result(msg["id"], %{"content" => []})
+          ]
+
+          conn
+          |> Plug.Conn.put_resp_content_type("text/event-stream")
+          |> Plug.Conn.resp(200, Enum.map_join(requests, &"data: #{JSON.encode!(&1)}\n\n"))
+
+        answer ->
+          send(parent, {:answer, answer})
+          Plug.Conn.resp(conn, 202, "")
+      end
+    end)
+
+    assert {:ok, session} = Client.connect(url, era: :legacy)
+    assert {:ok, %{content: []}, _} = Client.call_tool(session, "x", %{})
+
+    assert_receive {:answer, %{"id" => "s1", "error" => %{"code" => -32_601}}}
+    assert_receive {:answer, %{"id" => "r1", "error" => %{"code" => -32_601}}}
+    assert_receive {:answer, %{"id" => "e1", "result" => %{"action" => "cancel"}}}
+    assert_receive {:answer, %{"id" => "p1", "error" => %{"code" => -32_601}}}
+  end
+
+  defp json(conn, id, result) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.resp(200, JSON.encode!(%{"jsonrpc" => "2.0", "id" => id, "result" => result}))
   end
 
   test "a bad tool definition from a server is dropped with a warning" do
