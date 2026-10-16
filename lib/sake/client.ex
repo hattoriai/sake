@@ -26,6 +26,11 @@ defmodule Sake.Client do
   `call_tool_async/3` hands it back instead. `tasks: false` leaves the
   extension out.
 
+  `max_response_size:` (bytes, default 16 MiB) caps what the client reads
+  of one HTTP response: a JSON body, or one Server-Sent Event still being
+  received. A server that sends more ends the request with
+  `{:error, :response_too_large}`.
+
   `ui: true` declares MCP Apps (see `Sake.UI`), on both eras, for a client
   that renders them: the server then lists its app-only tools and UI
   resources, and each `Sake.Tool.Spec` from `list_tools/1` carries the
@@ -142,6 +147,7 @@ defmodule Sake.Client do
       log_level: opts[:log_level] && to_string(opts[:log_level]),
       tasks: Keyword.get(opts, :tasks, true),
       task_timeout: opts[:task_timeout] || 300_000,
+      max_response_size: Keyword.get(opts, :max_response_size, 16_777_216),
       auth: auth,
       req: req
     }

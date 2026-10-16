@@ -19,15 +19,16 @@ defmodule Sake.Client.Auth.BrowserTest do
       redirect_uri = "http://127.0.0.1:#{free_port()}/callback"
       parent = self()
 
-      # Stands in for the person's browser: it asks for a favicon first.
+      # Stands in for the person's browser: it asks for a favicon first. It
+      # reads the page after `authorize/2` has returned, so the test waits
+      # for it, and hears of a failed request rather than of nothing.
       open = fn url ->
         send(parent, {:opened, url})
 
         Task.start(fn ->
           base = String.replace_suffix(redirect_uri, "/callback", "")
-          send(parent, {:favicon, Req.get!(base <> "/favicon.ico", retry: false).status})
-          resp = Req.get!(redirect_uri <> "?code=c&state=s&iss=x", retry: false)
-          send(parent, {:page, resp.status, resp.body})
+          send(parent, {:favicon, Req.get(base <> "/favicon.ico", retry: false)})
+          send(parent, {:page, Req.get(redirect_uri <> "?code=c&state=s&iss=x", retry: false)})
         end)
       end
 
@@ -37,8 +38,8 @@ defmodule Sake.Client.Auth.BrowserTest do
                Browser.authorize(url, open: open)
 
       assert_received {:opened, ^url}
-      assert_receive {:favicon, 404}
-      assert_receive {:page, 200, body}
+      assert_receive {:favicon, {:ok, %{status: 404}}}, 2_000
+      assert_receive {:page, {:ok, %{status: 200, body: body}}}, 2_000
       assert body =~ "close this window"
     end
 
