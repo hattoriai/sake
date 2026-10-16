@@ -5,6 +5,17 @@ defmodule Sake do
   See `Sake.Server` to expose tools, `Sake.Plug` to mount the endpoint,
   `Sake.Auth` to protect it with your own login, and `Sake.Client` to call
   other servers.
+
+  ## Configuration
+
+    * `config :sake, :json_library, Jason` — the library Sake encodes
+      your data with (tool results, resources, prompts, notifications):
+      `JSON` (the default), `Jason`, or any module with `encode!/1` and
+      `encode_to_iodata!/1`. Choose Jason when your structs derive
+      `Jason.Encoder` rather than `JSON.Encoder`. See the tools guide.
+    * `config :sake, :secret_key_base` — the signing secret, when neither
+      `Sake.Plug` nor `{Sake, ...}` is given one.
+    * `config :sake, :opentelemetry` — see the observability guide.
   """
 
   @version Mix.Project.config()[:version]
@@ -30,6 +41,8 @@ defmodule Sake do
 
   @doc false
   def start_link(opts) do
+    Sake.JSON.configure!()
+
     if secret = opts[:secret_key_base],
       do: :persistent_term.put({Sake, :secret_key_base}, Sake.Secret.resolve(secret))
 

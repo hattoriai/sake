@@ -353,7 +353,7 @@ defmodule Sake.Client.Stdio do
 
   # A port that already closed has its exit waiting in the mailbox.
   defp write(state, message) do
-    Port.command(state.port, [JSON.encode!(message), ?\n])
+    Port.command(state.port, [Sake.JSON.encode_to_iodata!(message), ?\n])
   rescue
     ArgumentError -> true
   end

@@ -35,7 +35,7 @@ defmodule Sake.Client.Transport do
 
   def post(session, message, opts) do
     headers =
-      [{"accept", @accept}] ++
+      [{"accept", @accept}, {"content-type", "application/json"}] ++
         era_headers(session, message, opts) ++
         Auth.headers(session.auth, "POST", session.url, session.headers)
 
@@ -45,7 +45,9 @@ defmodule Sake.Client.Transport do
       Req.post(
         session.url,
         [
-          json: message,
+          # Not Req's `json:`, which always encodes with Jason: the
+          # message carries the host's arguments, for the configured library.
+          body: Sake.JSON.encode_to_iodata!(message),
           headers: headers,
           retry: false,
           decode_body: false,

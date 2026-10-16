@@ -294,7 +294,8 @@ defmodule Sake.Stdio do
     {:noreply, state}
   end
 
-  defp write(state, message), do: IO.write(state.output, [JSON.encode!(message), ?\n])
+  defp write(state, message),
+    do: IO.write(state.output, [Sake.JSON.encode_to_iodata!(message), ?\n])
 
   # ---- messages
 

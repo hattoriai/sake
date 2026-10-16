@@ -20,7 +20,7 @@ defmodule Sake.Server.Results do
           %{"content" => []}
 
         structured when is_map(structured) or is_list(structured) ->
-          json = JSON.encode!(structured)
+          json = Sake.JSON.encode!(structured)
 
           %{
             "content" => [Content.to_wire(Content.text(json))],
@@ -55,7 +55,7 @@ defmodule Sake.Server.Results do
 
         data when is_map(data) or is_list(data) ->
           [
-            Content.resource(uri, JSON.encode!(data),
+            Content.resource(uri, Sake.JSON.encode!(data),
               mime_type: spec.mime_type || "application/json"
             )
           ]

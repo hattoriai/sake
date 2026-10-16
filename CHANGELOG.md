@@ -255,6 +255,12 @@ First release.
   function may throw to abandon a legacy call; a stdio session's
   requests go out under ids of the transport's own. A legacy GET stream
   sends a comment as soon as it opens.
+- `config :sake, :json_library`: the library Sake encodes the host's data
+  with, `JSON` (the default) or `Jason` (for structs that derive
+  `Jason.Encoder`, such as many Ecto schemas), or any module with
+  `encode!/1` and `encode_to_iodata!/1`, checked when Sake starts. A
+  struct the library cannot encode raises with a pointer to the setting.
+  Decoding, tokens and OAuth responses always use `JSON`.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the
@@ -265,3 +271,5 @@ First release.
   client's standalone GET stream); every `auth/*` client scenario, every
   tasks extension scenario and every client auth extension scenario
   (DPoP's included) passes.
+- CI runs the tests on Elixir 1.18 (OTP 27), 1.19 (OTP 28) and 1.20
+  (OTP 29).
