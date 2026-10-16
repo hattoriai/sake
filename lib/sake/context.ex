@@ -7,7 +7,8 @@ defmodule Sake.Context do
   endpoint has authorization; `inputs` holds the client's answers
   (elicitation, sampling, roots) on a retry; `progress` reports progress
   to the client when it asked for it; `task` is the task ID when the
-  component runs as a task (see `Sake.Tasks`).
+  component runs as a task (see `Sake.Tasks`); `assigns` holds what the
+  server's middleware decided for this request (see `Sake.Middleware`).
   """
 
   @type t :: %__MODULE__{}
@@ -24,6 +25,7 @@ defmodule Sake.Context do
             trace: %{},
             log_level: nil,
             inputs: %{},
+            assigns: %{},
             conn_assigns: %{},
             progress: nil,
             server: nil,

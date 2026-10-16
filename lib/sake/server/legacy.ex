@@ -42,7 +42,7 @@ defmodule Sake.Server.Legacy do
   def handle(server, {:request, id, method, params}, ctx) do
     ctx = %{ctx | request_id: id, method: method, server: server, era: :legacy}
 
-    case dispatch(server, method, params, ctx) do
+    case Dispatch.request(server, method, params, ctx, &dispatch/4) do
       {:ok, result} -> {:reply, result}
       {:error, code, message} -> {:error, error(code, message)}
       {:error, code, message, data} -> {:error, Map.put(error(code, message), "data", data)}
@@ -81,7 +81,8 @@ defmodule Sake.Server.Legacy do
   defp dispatch(server, "resources/subscribe", %{"uri" => uri}, ctx) when is_binary(uri) do
     case Server.resource(server, uri) do
       {:ok, %{subscribe: true} = spec, _} ->
-        if Server.allowed?(spec, ctx), do: {:subscribe, uri}, else: {:forbidden, spec.scopes}
+        with :ok <- Dispatch.listed(:resources, spec, %{"uri" => uri}, ctx),
+             do: subscribe(spec, uri, ctx)
 
       _ ->
         {:error, JSONRPC.code(:invalid_params), "Resource does not support subscriptions: #{uri}"}
@@ -93,6 +94,11 @@ defmodule Sake.Server.Legacy do
 
   defp dispatch(_server, _method, _params, _ctx),
     do: {:error, JSONRPC.code(:method_not_found), "Method not found"}
+
+  # A resource the server's middleware hides is answered by `dispatch/4` as one
+  # without subscriptions; the scopes are checked after.
+  defp subscribe(spec, uri, ctx),
+    do: if(Server.allowed?(spec, ctx), do: {:subscribe, uri}, else: {:forbidden, spec.scopes})
 
   defp error(code, message), do: %{"code" => code, "message" => message}
 end

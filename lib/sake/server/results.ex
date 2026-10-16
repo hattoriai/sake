@@ -4,7 +4,7 @@ defmodule Sake.Server.Results do
 
   alias Sake.Content
 
-  @spec tool(term(), Sake.Tool.Spec.t(), Sake.Context.t()) :: map()
+  @spec tool(term(), Sake.Tool.Spec.t() | nil, Sake.Context.t()) :: map()
   def tool({:ok, value}, spec, ctx), do: tool({:ok, value, []}, spec, ctx)
 
   def tool({:ok, value, opts}, _spec, _ctx) do

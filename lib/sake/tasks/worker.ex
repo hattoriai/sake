@@ -9,7 +9,7 @@ defmodule Sake.Tasks.Worker do
 
   require Logger
 
-  alias Sake.Server.Results
+  alias Sake.Server.{Middleware, Results}
   alias Sake.{Tasks, Trace}
   alias Sake.Tasks.Record
 
@@ -71,7 +71,7 @@ defmodule Sake.Tasks.Worker do
         {:failed, %{"code" => code, "message" => message, "data" => data}}
 
       result ->
-        {:completed, Results.tool(result, spec, ctx)}
+        result |> Results.tool(spec, ctx) |> after_call(spec, args, ctx)
     end
   rescue
     exception ->
@@ -90,6 +90,26 @@ defmodule Sake.Tasks.Worker do
 
       {:failed, @failure}
   end
+
+  # The `tools/call` that started the task ran `:before_call`; its
+  # `:after_call` runs here, with that request's assigns, once the tool has
+  # a result. A halt fails the task with the error the call would have
+  # answered with (a tool error stays a result).
+  defp after_call(result, spec, args, ctx) do
+    payload = %{tool: spec, arguments: args, result: result}
+
+    case Middleware.after_result(:after_call, payload, ctx) do
+      {:ok, result} -> {:completed, result}
+      {:halt, reason} -> reason |> Middleware.refusal(%{"name" => spec.name}, ctx) |> refused()
+    end
+  end
+
+  defp refused({:ok, result}), do: {:completed, result}
+  defp refused({:forbidden, scopes}), do: {:failed, Sake.Plug.Stream.forbidden(scopes)}
+  defp refused({:error, code, message}), do: {:failed, %{"code" => code, "message" => message}}
+
+  defp refused({:error, code, message, data}),
+    do: {:failed, %{"code" => code, "message" => message, "data" => data}}
 
   defp trace_outcome({:completed, result}), do: {:reply, result}
   defp trace_outcome({:failed, error}), do: {:error, error}

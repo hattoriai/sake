@@ -20,6 +20,12 @@ defmodule Sake.Server do
   shortens the `ttlMs` of every list page that includes it, and a
   resource's `ttl:` also sets the `ttlMs` of its `resources/read` result
   (the shortest ttl always wins).
+
+  `middleware event, plugs` runs host code around the server's calls
+  (see `Sake.Middleware`); declare it once or more per event, and the
+  plugs run in the order declared:
+
+      middleware :before_call, [MyApp.MCP.Audit, {MyApp.MCP.Tenant, field: :org_id}]
   """
 
   @callback __sake__(atom()) :: term()
@@ -32,7 +38,8 @@ defmodule Sake.Server do
       @sake_resources []
       @sake_prompts []
       Module.register_attribute(__MODULE__, :sake_scopes, accumulate: true)
-      import Sake.Server, only: [scope: 2, tools: 1, resources: 1, prompts: 1]
+      Module.register_attribute(__MODULE__, :sake_middleware, accumulate: true)
+      import Sake.Server, only: [scope: 2, tools: 1, resources: 1, prompts: 1, middleware: 2]
       @before_compile Sake.Server
     end
   end
@@ -44,6 +51,9 @@ defmodule Sake.Server do
   defmacro resources(list), do: quote(do: @sake_resources(unquote(list)))
   defmacro prompts(list), do: quote(do: @sake_prompts(unquote(list)))
 
+  defmacro middleware(event, plugs),
+    do: quote(do: @sake_middleware({unquote(event), unquote(plugs)}))
+
   defmacro __before_compile__(env) do
     opts = Module.get_attribute(env.module, :sake_opts)
     name = required!(opts, :name, env.module)
@@ -51,6 +61,7 @@ defmodule Sake.Server do
 
     quote do
       @sake_specs Sake.Server.compile!(__MODULE__, @sake_tools, @sake_resources, @sake_prompts)
+      @sake_pipelines Sake.Server.compile_middleware!(__MODULE__, Enum.reverse(@sake_middleware))
 
       @impl Sake.Server
       unquote(Sake.Server.info_defs(name, version, opts))
@@ -78,6 +89,7 @@ defmodule Sake.Server do
       def __sake__(:resources), do: elem(@sake_specs, 1)
       def __sake__(:prompts), do: elem(@sake_specs, 2)
       def __sake__(:scopes), do: Enum.reverse(@sake_scopes)
+      def __sake__(:middleware), do: @sake_pipelines
     end
   end
 
@@ -101,6 +113,39 @@ defmodule Sake.Server do
     check_unique!(server, "prompt", Enum.map(p, & &1.name))
     check_uis!(server, t, r)
     {t, r, p}
+  end
+
+  @doc false
+  # The middleware by event, each plug with what its `init/1` returned:
+  # like a Plug's, `init/1` runs once, here, when the server compiles.
+  def compile_middleware!(server, declarations) do
+    Enum.reduce(declarations, %{}, fn {event, plugs}, acc ->
+      if event not in Sake.Middleware.events() do
+        raise ArgumentError,
+              "#{inspect(server)}: #{inspect(event)} is not a middleware event; " <>
+                "the events are #{inspect(Sake.Middleware.events())}"
+      end
+
+      entries = plugs |> List.wrap() |> Enum.map(&plug!(server, &1))
+      Map.update(acc, event, entries, &(&1 ++ entries))
+    end)
+  end
+
+  defp plug!(server, {module, opts}) when is_atom(module) do
+    Code.ensure_compiled!(module)
+
+    if not function_exported?(module, :call, 2) do
+      raise ArgumentError, "#{inspect(server)}: middleware #{inspect(module)} has no call/2"
+    end
+
+    {module, if(function_exported?(module, :init, 1), do: module.init(opts), else: opts)}
+  end
+
+  defp plug!(server, module) when is_atom(module), do: plug!(server, {module, []})
+
+  defp plug!(server, other) do
+    raise ArgumentError,
+          "#{inspect(server)}: middleware must be a module or {module, opts}, got #{inspect(other)}"
   end
 
   # A host fetches a tool's UI with resources/read, so the UI has to be

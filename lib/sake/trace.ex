@@ -210,6 +210,27 @@ defmodule Sake.Trace do
     end
   end
 
+  # ---- middleware
+
+  @doc """
+  Marks the current span with the middleware halt that refused its
+  request (see `Sake.Middleware`): the event and the plug. Whether the
+  span is an error follows from the answer the client gets, as for any
+  other request.
+  """
+  @spec halt(atom(), module()) :: :ok
+  def halt(event, plug) do
+    if enabled?() do
+      _ =
+        Backend.set(Backend.current(), %{
+          "sake.middleware.event" => to_string(event),
+          "sake.middleware.plug" => inspect(plug)
+        })
+    end
+
+    :ok
+  end
+
   # ---- the span of this process
 
   @doc """
@@ -369,6 +390,10 @@ if Code.ensure_loaded?(:otel_tracer) do
       start(parent, name, :server, attributes, links)
     end
 
+    @doc "The current context, whose span is the one `set/2` marks."
+    @spec current() :: span
+    def current, do: :otel_ctx.get_current()
+
     @doc "Starts a span, the child of the current one."
     @spec child_span(String.t(), atom(), map()) :: span
     def child_span(name, kind, attributes),
@@ -476,6 +501,7 @@ else
 
     def server_span(_meta, _headers, _name, _attributes), do: nil
     def child_span(_name, _kind, _attributes), do: nil
+    def current, do: nil
     def within(_span, fun), do: fun.()
     def set(span, _attributes), do: span
     def error(_span, _message), do: :ok

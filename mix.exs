@@ -94,6 +94,7 @@ defmodule Sake.MixProject do
         "guides/resources_and_prompts.md",
         "guides/authorization.md",
         "guides/tenants.md",
+        "guides/middleware.md",
         "guides/client.md",
         "guides/stdio.md",
         "guides/observability.md",
@@ -104,7 +105,7 @@ defmodule Sake.MixProject do
       ],
       groups_for_extras: [
         Guides:
-          ~w(guides/quickstart.md guides/tools.md guides/tasks.md guides/apps.md guides/resources_and_prompts.md guides/authorization.md guides/tenants.md guides/client.md guides/stdio.md guides/observability.md guides/testing.md),
+          ~w(guides/quickstart.md guides/tools.md guides/tasks.md guides/apps.md guides/resources_and_prompts.md guides/authorization.md guides/tenants.md guides/middleware.md guides/client.md guides/stdio.md guides/observability.md guides/testing.md),
         Reference: ~w(guides/protocol_versions.md guides/security.md)
       ],
       groups_for_modules: [
@@ -115,6 +116,7 @@ defmodule Sake.MixProject do
           Sake.UI,
           Sake.Prompt,
           Sake.Context,
+          Sake.Middleware,
           Sake.Content,
           Sake.Elicit,
           Sake.Sampling,

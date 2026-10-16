@@ -24,4 +24,6 @@ defmodule SakeDev.Server do
 
   resources [SakeDev.Resources.Readme, SakeDev.Resources.Issue, SakeDev.UI.IssueBoard]
   prompts [SakeDev.Prompts.Triage]
+
+  middleware :after_call, [SakeDev.Middleware.Audit]
 end
