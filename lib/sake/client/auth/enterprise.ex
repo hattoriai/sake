@@ -93,13 +93,14 @@ defmodule Sake.Client.Auth.Enterprise do
   """
   @spec saml(map(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def saml(idp, assertion, req) do
-    params = [
-      grant_type: @token_exchange,
-      requested_token_type: @refresh_token,
-      audience: idp.issuer,
-      subject_token: assertion,
-      subject_token_type: @saml2
-    ]
+    params =
+      [
+        grant_type: @token_exchange,
+        requested_token_type: @refresh_token,
+        audience: idp.issuer,
+        subject_token: assertion,
+        subject_token_type: @saml2
+      ] ++ saml_scope(idp[:saml_scope])
 
     case post(idp, params, req) do
       {:ok, 200, %{"issued_token_type" => @refresh_token} = body, _headers} ->
@@ -130,6 +131,13 @@ defmodule Sake.Client.Auth.Enterprise do
     end
   end
 
+  # Some providers issue a refresh token only when `offline_access` is
+  # asked for: `saml_scope:` is the scope of this exchange alone, and
+  # none is sent without it.
+  defp saml_scope(nil), do: []
+  defp saml_scope([]), do: []
+  defp saml_scope(scopes), do: [scope: Enum.join(scopes, " ")]
+
   # RFC 8693 §2.2.1 carries the issued token in `access_token`, whatever
   # its type; an identity provider may also (or instead) answer a request
   # for a refresh token in the `refresh_token` member of RFC 6749 §5.1.
@@ -147,16 +155,17 @@ defmodule Sake.Client.Auth.Enterprise do
   defp expires_at(_seconds), do: nil
 
   defp post(idp, params, req) do
-    {params, headers} = Grant.authenticate(params, registration(idp))
+    {params, headers} = Grant.authenticate(params, registration(idp), idp.token_endpoint)
     HTTP.post(idp.token_endpoint, [form: params], headers, req)
   end
 
   # The client's credentials at the identity provider, sent the way its
   # metadata says it takes them (RFC 8414 §2: `client_secret_basic` when
   # it does not say), or as the key of a client_secret_jwt assertion when
-  # that is the only secret method it lists. The assertion is for the
-  # provider's issuer, or its token endpoint when only that is known
-  # (RFC 7523 §3 allows either).
+  # that is the only secret method it lists. A client assertion is for
+  # the provider's issuer, or its token endpoint when only that is known
+  # or `assertion_audience: :token_endpoint` asks for it (RFC 7523 §3
+  # allows either).
   defp registration(idp) do
     secret = idp[:client_secret]
 
@@ -171,7 +180,8 @@ defmodule Sake.Client.Auth.Enterprise do
       "client_id" => idp[:client_id],
       "client_secret" => secret,
       "token_endpoint_auth_method" => method,
-      "issuer" => idp[:issuer] || idp.token_endpoint
+      "issuer" => idp[:issuer],
+      "assertion_audience" => idp[:assertion_audience]
     }
   end
 

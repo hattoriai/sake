@@ -192,7 +192,7 @@ defmodule Sake.Client.Auth.Grant do
   # retry: a client assertion is single use, and the server may have
   # recorded the first one before it looked at the proof.
   defp post(endpoint, params, registration, req, dpop, retried?) do
-    {form, headers} = authenticate(params, registration)
+    {form, headers} = authenticate(params, registration, endpoint)
 
     case HTTP.post(endpoint, [form: form], proof(dpop, endpoint) ++ headers, req) do
       {:ok, 400, %{"error" => "use_dpop_nonce"}, %{"dpop-nonce" => [nonce | _]}}
@@ -211,34 +211,37 @@ defmodule Sake.Client.Auth.Grant do
 
   @doc """
   Adds the client authentication a registration calls for to a token
-  request: its parameters, and the headers to send.
+  request to `endpoint`: its parameters, and the headers to send.
   """
-  @spec authenticate(keyword(), map()) :: {keyword(), [{String.t(), String.t()}]}
-  def authenticate(params, registration)
+  @spec authenticate(keyword(), map(), String.t()) :: {keyword(), [{String.t(), String.t()}]}
+  def authenticate(params, registration, endpoint)
 
   # private_key_jwt (RFC 7523 §2.2): an assertion signed with the client's
   # own key.
   def authenticate(
         params,
-        %{"token_endpoint_auth_method" => "private_key_jwt", "private_key" => {key, alg}} = reg
+        %{"token_endpoint_auth_method" => "private_key_jwt", "private_key" => {key, alg}} = reg,
+        endpoint
       ),
-      do: {params ++ client_assertion(JWT.sign(assertion_claims(reg), key, alg)), []}
+      do: {params ++ client_assertion(JWT.sign(assertion_claims(reg, endpoint), key, alg)), []}
 
   # client_secret_jwt (RFC 7523 §2.2 with an HMAC, OpenID Connect Core
   # §9): the same assertion, signed with the client secret, so the secret
   # itself never goes on the wire.
   def authenticate(
         params,
-        %{"token_endpoint_auth_method" => "client_secret_jwt", "client_secret" => secret} = reg
+        %{"token_endpoint_auth_method" => "client_secret_jwt", "client_secret" => secret} = reg,
+        endpoint
       )
       when is_binary(secret),
-      do: {params ++ client_assertion(hs256(assertion_claims(reg), secret)), []}
+      do: {params ++ client_assertion(hs256(assertion_claims(reg, endpoint), secret)), []}
 
   # RFC 6749 §2.3.1: the id and secret are form-encoded before they are
   # joined for HTTP Basic, so a colon in either survives the trip.
   def authenticate(
         params,
-        %{"token_endpoint_auth_method" => "client_secret_basic", "client_secret" => secret} = reg
+        %{"token_endpoint_auth_method" => "client_secret_basic", "client_secret" => secret} = reg,
+        _endpoint
       )
       when is_binary(secret) do
     credentials = URI.encode_www_form(reg["client_id"]) <> ":" <> URI.encode_www_form(secret)
@@ -248,33 +251,47 @@ defmodule Sake.Client.Auth.Grant do
 
   def authenticate(
         params,
-        %{"token_endpoint_auth_method" => "client_secret_post", "client_secret" => secret} = reg
+        %{"token_endpoint_auth_method" => "client_secret_post", "client_secret" => secret} = reg,
+        _endpoint
       )
       when is_binary(secret),
       do: {params ++ [client_id: reg["client_id"], client_secret: secret], []}
 
   # A client without an identifier at all (a workload presenting only its
   # JWT grant) sends none.
-  def authenticate(params, %{"client_id" => nil}), do: {params, []}
-  def authenticate(params, reg), do: {params ++ [client_id: reg["client_id"]], []}
+  def authenticate(params, %{"client_id" => nil}, _endpoint), do: {params, []}
+  def authenticate(params, reg, _endpoint), do: {params ++ [client_id: reg["client_id"]], []}
 
   defp client_assertion(jwt), do: [client_assertion_type: @assertion_type, client_assertion: jwt]
 
   # RFC 7523 §2.2 and §3: the client names itself as issuer and subject,
-  # for this authorization server (its issuer identifier, as
-  # draft-ietf-oauth-rfc7523bis asks), with a short expiry and a unique
-  # `jti`. No client_id parameter is needed: the assertion carries it.
-  defp assertion_claims(reg) do
+  # for this server, with a short expiry and a unique `jti`. No client_id
+  # parameter is needed: the assertion carries it.
+  defp assertion_claims(reg, endpoint) do
     now = System.system_time(:second)
 
     %{
       "iss" => reg["client_id"],
       "sub" => reg["client_id"],
-      "aud" => reg["issuer"],
+      "aud" => audience(reg, endpoint),
       "iat" => now,
       "exp" => now + @assertion_lifetime,
       "jti" => 18 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
     }
+  end
+
+  # The audience is the server's issuer identifier by default, as
+  # draft-ietf-oauth-rfc7523bis asks: an assertion for one server's
+  # issuer cannot be replayed at another's token endpoint (audience
+  # injection). Some servers want their token endpoint URL instead
+  # (`assertion_audience: :token_endpoint`), or another value; a server
+  # known by its token endpoint alone gets that.
+  defp audience(reg, endpoint) do
+    case reg["assertion_audience"] do
+      :token_endpoint -> endpoint
+      aud when is_binary(aud) -> aud
+      _issuer -> reg["issuer"] || endpoint
+    end
   end
 
   # HS256 (RFC 7518 §3.2), for client_secret_jwt alone and by hand: Sake

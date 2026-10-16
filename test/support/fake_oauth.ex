@@ -43,8 +43,8 @@ defmodule SakeTest.FakeOAuth do
   #     `["client_secret_post"]`).
   #   * `:hmac_secret` — the client secret a client_secret_jwt assertion
   #     is checked against, at both token endpoints: HS256, the client as
-  #     `iss` and `sub`, the issuer or the endpoint as `aud`, a `jti`, and an
-  #     unexpired `exp`. Any other assertion is `invalid_client`.
+  #     `iss` and `sub`, the issuer or the endpoint (or the literal
+  #     `urn:test:audience`) as `aud`, a `jti`, and an unexpired `exp`. Any other assertion is `invalid_client`.
   #   * `:state` — the Agent with the issued codes and tokens (required).
 
   @behaviour Plug
@@ -254,7 +254,7 @@ defmodule SakeTest.FakeOAuth do
        when not is_map_key(opts, :assertion_checked) do
     issuer = base(conn) <> issuer_path(opts)
 
-    if hmac_ok?(jwt, opts.hmac_secret, [issuer, issuer <> "/token"]),
+    if hmac_ok?(jwt, opts.hmac_secret, [issuer, issuer <> "/token", "urn:test:audience"]),
       do: token(conn, p, Map.put(opts, :assertion_checked, true)),
       else: json(conn, 401, %{"error" => "invalid_client"})
   end
@@ -302,7 +302,9 @@ defmodule SakeTest.FakeOAuth do
 
   defp token_exchange(conn, %{"client_assertion" => jwt} = p, %{hmac_secret: secret} = opts)
        when not is_map_key(opts, :assertion_checked) do
-    if hmac_ok?(jwt, secret, [base(conn) <> "/idp", base(conn) <> "/idp/token"]),
+    audiences = [base(conn) <> "/idp", base(conn) <> "/idp/token", "urn:test:audience"]
+
+    if hmac_ok?(jwt, secret, audiences),
       do: token_exchange(conn, p, Map.put(opts, :assertion_checked, true)),
       else: json(conn, 401, %{"error" => "invalid_client"})
   end

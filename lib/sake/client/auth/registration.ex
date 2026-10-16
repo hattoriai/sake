@@ -81,13 +81,17 @@ defmodule Sake.Client.Auth.Registration do
     })
   end
 
-  # The private key of `private_key_jwt` stays in the session: it is
-  # added to a pre-registered client's registration, which is never
-  # persisted, and is not JSON.
-  defp with_key(%Auth{private_key: nil}, registration), do: registration
+  # The private key of `private_key_jwt` and the audience of the client
+  # assertions stay in the session: they are added to a pre-registered
+  # client's registration, which is never persisted, and are not JSON.
+  defp with_key(%Auth{private_key: key, assertion_audience: aud}, registration) do
+    registration
+    |> put_present("private_key", key)
+    |> put_present("assertion_audience", aud)
+  end
 
-  defp with_key(%Auth{private_key: key}, registration),
-    do: Map.put(registration, "private_key", key)
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   defp secret_method(%Auth{private_key: {_key, _alg}}, _metadata), do: "private_key_jwt"
   defp secret_method(%Auth{client_secret: secret}, metadata), do: secret_method(secret, metadata)

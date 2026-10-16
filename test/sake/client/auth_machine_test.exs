@@ -460,6 +460,22 @@ defmodule Sake.Client.AuthMachineTest do
                posts(requests(), "/idp/token")
     end
 
+    test "saml_scope is the scope of the SAML exchange alone", ctx do
+      {base, url} = serve(ctx)
+      auth = saml_auth(base)
+      scoped = put_in(auth[:idp][:saml_scope], ["openid", "offline_access"])
+
+      assert {:ok, _session} = Client.connect(url, auth: scoped)
+      [{saml, _}, {exchange, _}] = posts(requests(), "/idp/token")
+      assert saml["scope"] == "openid offline_access"
+      refute Map.has_key?(exchange, "scope")
+
+      # None is sent by default.
+      assert {:ok, _session} = Client.connect(url, auth: auth)
+      [{saml, _}, _] = posts(requests(), "/idp/token")
+      refute Map.has_key?(saml, "scope")
+    end
+
     test "the refresh token may come in access_token, as RFC 8693 carries it", ctx do
       {base, url} = serve(ctx, saml_in: :access_token)
 
@@ -572,16 +588,71 @@ defmodule Sake.Client.AuthMachineTest do
       assert aud == base <> "/idp/token"
     end
 
+    test "assertion_audience at the authorization server, for both assertion methods", ctx do
+      pem = Keys.pem(:ec)
+
+      # The fake server checks a client_secret_jwt assertion (its HMAC and
+      # its audience); a private_key_jwt one is read from the request.
+      for {method, extra, opts} <- [
+            {"client_secret_jwt", [client_secret: @secret], [hmac_secret: @secret]},
+            {"private_key_jwt", [private_key: pem], []}
+          ],
+          {aud, expected} <- [
+            {nil, & &1},
+            {:issuer, & &1},
+            {:token_endpoint, &(&1 <> "/token")},
+            {"urn:test:audience", fn _ -> "urn:test:audience" end}
+          ] do
+        {base, url} = serve(ctx, opts)
+
+        auth =
+          [grant: :client_credentials, client_id: "svc", token_endpoint_auth_method: method] ++
+            extra ++ if(aud, do: [assertion_audience: aud], else: [])
+
+        assert {:ok, _session} = Client.connect(url, auth: auth)
+        [{token, _}] = posts(requests(), "/token")
+        {:ok, _header, claims} = JWT.peek(token["client_assertion"])
+        assert claims["aud"] == expected.(base), "#{method} with #{inspect(aud)}"
+      end
+    end
+
+    test "assertion_audience at the identity provider", ctx do
+      {base, url} = serve(ctx, hmac_secret: @secret, idp_auth_methods: ["client_secret_jwt"])
+
+      for {aud, expected} <- [
+            {nil, base <> "/idp"},
+            {:issuer, base <> "/idp"},
+            {:token_endpoint, base <> "/idp/token"},
+            {"urn:test:audience", "urn:test:audience"}
+          ] do
+        idp =
+          [issuer: base <> "/idp", client_id: "idp-agent", client_secret: @secret] ++
+            if(aud, do: [assertion_audience: aud], else: [])
+
+        auth = [grant: :enterprise, client_id: "agent", id_token: "id.token.x", idp: idp]
+
+        # The fake provider refuses an assertion for any other audience.
+        assert {:ok, _session} = Client.connect(url, auth: auth)
+        [{exchange, _}] = posts(requests(), "/idp/token")
+        {_header, claims} = hs256_claims(exchange["client_assertion"])
+        assert claims["aud"] == expected, inspect(aud)
+      end
+    end
+
     test "the assertion is an HMAC over the secret, made with :crypto alone" do
       # No jose, and no key: verifying it by hand with the secret is all
       # it takes.
       {params, []} =
-        Grant.authenticate([], %{
-          "client_id" => "c",
-          "client_secret" => @secret,
-          "token_endpoint_auth_method" => "client_secret_jwt",
-          "issuer" => "https://as.example"
-        })
+        Grant.authenticate(
+          [],
+          %{
+            "client_id" => "c",
+            "client_secret" => @secret,
+            "token_endpoint_auth_method" => "client_secret_jwt",
+            "issuer" => "https://as.example"
+          },
+          "https://as.example/token"
+        )
 
       [h, c, mac] = String.split(params[:client_assertion], ".")
 
@@ -687,7 +758,25 @@ defmodule Sake.Client.AuthMachineTest do
              client_id: "a",
              id_token: "t",
              idp: idp ++ [token_endpoint_auth_method: "client_secret_jwt"]
-           ], ~r/idp: client_secret_jwt needs/}
+           ], ~r/idp: client_secret_jwt needs/},
+          {[
+             grant: :client_credentials,
+             client_id: "a",
+             client_secret: "s",
+             assertion_audience: :aud
+           ], ~r/auth: :assertion_audience must be/},
+          {[
+             grant: :enterprise,
+             client_id: "a",
+             id_token: "t",
+             idp: idp ++ [assertion_audience: 1]
+           ], ~r/idp: :assertion_audience must be/},
+          {[
+             grant: :enterprise,
+             client_id: "a",
+             saml_assertion: "s",
+             idp: idp ++ [saml_scope: "x"]
+           ], ~r/saml_scope must be a list/}
         ] do
       assert_raise ArgumentError, message, fn -> Client.connect(url, auth: opts) end
     end

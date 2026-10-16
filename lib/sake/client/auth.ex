@@ -71,11 +71,15 @@ defmodule Sake.Client.Auth do
       read it from the provider's metadata), and the client's
       `client_id:` and `client_secret:` at the provider
       (`token_endpoint_auth_method:` overrides the method its metadata
-      suggests, `"client_secret_jwt"` included).
+      suggests, `"client_secret_jwt"` included, and
+      `assertion_audience:` is as below, for the provider).
 
       With SAML single sign-on, `:saml_assertion` (the base64url-encoded
       assertion, or a function like `:assertion`'s) replaces `:id_token`,
-      and `:idp` needs `issuer:`. The assertion is first exchanged at the
+      and `:idp` needs `issuer:`; `idp: [saml_scope: [...]]` is the
+      `scope` of the SAML exchange alone (none by default; some
+      providers want `"offline_access"` before they issue a refresh
+      token). The assertion is first exchanged at the
       provider for a refresh token, which is then exchanged for the
       ID-JAG (draft-ietf-oauth-identity-assertion-authz-grant §4.5). The
       refresh token is kept, in the session and the `:store`, and used for
@@ -112,7 +116,11 @@ defmodule Sake.Client.Auth do
   "client_secret_jwt"` signs the same assertion with HS256 over
   `:client_secret` instead (at least 32 bytes), which needs no `jose`;
   it is also chosen for a server that lists it as its only secret
-  method. Machine grants get no refresh token: an
+  method. `:assertion_audience` sets the `aud` of both kinds of client
+  assertion: `:issuer` (the default, the server's issuer identifier, as
+  draft-ietf-oauth-rfc7523bis asks), `:token_endpoint` (the token
+  endpoint's URL, which some servers want), or a string to send as it
+  is. Machine grants get no refresh token: an
   expired token is replaced by running the grant again.
 
   Without `auth:`, a 401 is returned as
@@ -146,6 +154,7 @@ defmodule Sake.Client.Auth do
     :client_id,
     :client_secret,
     :token_endpoint_auth_method,
+    :assertion_audience,
     :client_issuer,
     :client_metadata_url,
     :client_name,
@@ -182,6 +191,7 @@ defmodule Sake.Client.Auth do
       saml_assertion: opts[:saml_assertion],
       idp: idp(opts[:idp]),
       token_endpoint_auth_method: opts[:token_endpoint_auth_method],
+      assertion_audience: assertion_audience!(opts[:assertion_audience], "auth:"),
       client_issuer: opts[:issuer],
       client_metadata_url: metadata_url(opts[:client_metadata_url]),
       client_name: opts[:client_name] || defaults[:client_name] || "Sake",
@@ -255,8 +265,28 @@ defmodule Sake.Client.Auth do
   end
 
   defp idp(nil), do: nil
-  defp idp(opts) when is_list(opts), do: Map.new(opts)
-  defp idp(%{} = opts), do: opts
+  defp idp(opts) when is_list(opts), do: idp(Map.new(opts))
+
+  defp idp(%{} = opts) do
+    assertion_audience!(opts[:assertion_audience], "idp:")
+
+    unless is_nil(opts[:saml_scope]) or
+             (is_list(opts[:saml_scope]) and Enum.all?(opts[:saml_scope], &is_binary/1)),
+           do: raise(ArgumentError, "idp: :saml_scope must be a list of strings")
+
+    opts
+  end
+
+  defp assertion_audience!(aud, _where)
+       when aud in [nil, :issuer, :token_endpoint] or is_binary(aud),
+       do: aud
+
+  defp assertion_audience!(_aud, where),
+    do:
+      raise(
+        ArgumentError,
+        "#{where} :assertion_audience must be :issuer, :token_endpoint or a string"
+      )
 
   defp check_grant!(%__MODULE__{grant: :client_credentials} = auth) do
     unless is_binary(auth.client_id) and

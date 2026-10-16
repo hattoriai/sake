@@ -364,7 +364,11 @@ draft-ietf-oauth-identity-assertion-authz-grant: it first exchanges
 the assertion at the provider for a refresh token (a token exchange
 with `subject_token_type` `urn:ietf:params:oauth:token-type:saml2`,
 `requested_token_type` `urn:ietf:params:oauth:token-type:refresh_token`
-and the provider's issuer as `audience`), then exchanges that refresh
+and the provider's issuer as `audience`, and no `scope` unless
+`idp: [saml_scope: [...]]` gives one; some providers issue a refresh
+token only when `offline_access` is asked for, so
+`saml_scope: ["offline_access"]` is the setting for them), then
+exchanges that refresh
 token for the ID-JAG, as it would an ID token. Sake never reads the
 assertion; it passes it on as it is.
 
@@ -394,9 +398,25 @@ authorization server, or `idp: [token_endpoint_auth_method:
 "client_secret_jwt"]` at the identity provider, where some providers
 require it for the token exchange; it is also chosen, at either, when
 the metadata lists it and neither `client_secret_basic` nor
-`client_secret_post`. At an identity provider given by `token_endpoint:`
-alone, the assertion's `aud` is that endpoint. Sake's own authorization
-server does not take it (see the security guide).
+`client_secret_post`. Sake's own authorization server does not take it
+(see the security guide).
+
+The `aud` of a client assertion, `private_key_jwt` or
+`client_secret_jwt`, is the server's issuer identifier by default, as
+draft-ietf-oauth-rfc7523bis asks: an assertion made for one server's
+issuer cannot be replayed at another's token endpoint. Some servers
+want their token endpoint URL instead (Okta's `private_key_jwt`
+documentation, for one), so `assertion_audience:` picks it:
+
+```elixir
+auth: [..., assertion_audience: :issuer]           # the default
+auth: [..., assertion_audience: :token_endpoint]   # the token endpoint's URL
+auth: [..., assertion_audience: "https://..."]     # this exact value
+idp: [..., assertion_audience: :token_endpoint]    # the same, at the identity provider
+```
+
+At an identity provider given by `token_endpoint:` alone, the default
+`aud` is that endpoint, since no issuer is known.
 
 `grant: :client_credentials` and `grant: :enterprise` declare their
 extension (`io.modelcontextprotocol/oauth-client-credentials`,

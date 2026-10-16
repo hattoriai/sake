@@ -108,7 +108,11 @@ First release.
   (`token_endpoint_auth_method: "client_secret_jwt"`, or when the server
   lists it as its only secret method) and at the identity provider. The
   authorization server does not offer `client_secret_jwt`: it keeps only
-  a hash of each secret, and verifies no HMAC. `:client_credentials` and
+  a hash of each secret, and verifies no HMAC. `assertion_audience:`
+  (`:issuer`, the default, `:token_endpoint` or a string), in `auth:`
+  and in `idp:`, sets the `aud` of the client's `private_key_jwt` and
+  `client_secret_jwt` assertions; `idp: [saml_scope: [...]]` is the
+  `scope` of the SAML exchange (none by default). `:client_credentials` and
   `:enterprise` declare their extension in the client's capabilities
   (per request on 2026-07-28, in `initialize` on the legacy revisions).
 - DPoP (RFC 9449, SEP-1932), sender-constrained tokens, on both sides and
