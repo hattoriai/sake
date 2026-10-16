@@ -143,6 +143,10 @@ First release.
   `scope` of the SAML exchange (none by default). `:client_credentials` and
   `:enterprise` declare their extension in the client's capabilities
   (per request on 2026-07-28, in `initialize` on the legacy revisions).
+- Single-use JWTs (client assertions, JWT grants, DPoP proofs) are
+  remembered in the replay store, the `Sake` child's `replay:` (by
+  default the `auth:` store): with `Sake.Auth.Store.Ecto`, a table every
+  node of a cluster shares.
 - DPoP (RFC 9449, SEP-1932), sender-constrained tokens, on both sides and
   both eras. The authorization server binds the tokens of a request that
   carries a proof to the proof's key (`token_type: DPoP`, the key's

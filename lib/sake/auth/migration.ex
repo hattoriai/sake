@@ -91,12 +91,23 @@ if Code.ensure_loaded?(Ecto.Migration) do
         unique_index(:sake_oauth_consents, [:subject_id, :client_id, :resource], prefix: prefix)
       )
 
+      # The single-use JWTs already seen (client assertions, JWT grants,
+      # DPoP proofs), by a digest of their issuer and `jti`, until they
+      # expire.
+      create table(:sake_oauth_replays, primary_key: false, prefix: prefix) do
+        add(:key, :string, primary_key: true)
+        add(:expires_at, :utc_datetime, null: false)
+      end
+
+      create(index(:sake_oauth_replays, [:expires_at], prefix: prefix))
+
       :ok
     end
 
     @spec down(keyword()) :: :ok
     def down(opts \\ []) do
       prefix = opts[:prefix]
+      drop(table(:sake_oauth_replays, prefix: prefix))
       drop(table(:sake_oauth_consents, prefix: prefix))
       drop(table(:sake_oauth_tokens, prefix: prefix))
       drop(table(:sake_oauth_codes, prefix: prefix))

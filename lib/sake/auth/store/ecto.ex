@@ -241,6 +241,25 @@ if Code.ensure_loaded?(Ecto.Query) do
       :ok
     end
 
+    # The primary key makes the insert the check: a second insert of the
+    # same key, from any node, inserts nothing.
+    @impl true
+    def once(%{repo: repo} = s, key, expires_at) do
+      row = %{key: key, expires_at: DateTime.from_unix!(expires_at)}
+
+      case repo.insert_all(S.Replay, [row], on_conflict: :nothing, prefix: s.prefix) do
+        {1, _} -> :ok
+        {0, _} -> :replayed
+      end
+    end
+
+    @impl true
+    def prune_once(%{repo: repo} = s, now) do
+      now = DateTime.from_unix!(now)
+      repo.delete_all(from(r in S.Replay, where: r.expires_at < ^now), prefix: s.prefix)
+      :ok
+    end
+
     @impl true
     def tokens_for_subject(%{repo: repo} = s, subject_id) do
       from(t in S.Token, where: t.subject_id == ^subject_id)
@@ -325,6 +344,7 @@ if Code.ensure_loaded?(Ecto.Query) do
     def prune(%{repo: repo} = s, now, consents_before) do
       repo.delete_all(from(c in S.Code, where: c.expires_at <= ^now), prefix: s.prefix)
       repo.delete_all(from(t in S.Token, where: t.expires_at <= ^now), prefix: s.prefix)
+      repo.delete_all(from(r in S.Replay, where: r.expires_at < ^now), prefix: s.prefix)
 
       live =
         from(t in S.Token,

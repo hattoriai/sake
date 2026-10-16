@@ -81,10 +81,13 @@ assertion must name the client as both `iss` and `sub`, and may not
 claim to live longer than an hour.
 
 Assertions and ID-JAGs are single use: their `jti` is remembered, per
-issuer, until they expire. The memory is an ETS table on each node, so
+issuer, until they expire, in the replay store (the `Sake` child's
+`replay:` option, by default the `auth:` store). With
+`Sake.Auth.Store.Ecto` that is a table every node shares, so a JWT used
+on one node is refused on all of them. With the ETS store, or with only
+`external_auth:` and no `replay:`, each node remembers on its own, and
 in a cluster a JWT replayed to *another* node within its lifetime is not
-caught; identity providers issue ID-JAGs for minutes, and Sake's client
-signs its assertions for one, which keeps that window short. Key sets
+caught. Key sets
 fetched from a `jwks_uri` go through the same guarded download as a
 Client ID Metadata Document (HTTPS, no redirects, 64 KB, five seconds),
 but without the public-address check: those URLs come from your own
@@ -131,12 +134,16 @@ over 8 KB is refused before it is decoded, and a request with several
 proofs is refused outright.
 
 Proofs are single use: their `jti` is remembered per key for as long as
-the proof would be accepted. Like the assertions', that memory is per
-node; a server nonce (`dpop: [nonce: true]`) closes the gap a cluster
-leaves, since a nonce is a MAC under the Sake secret that every node
-checks the same way, valid for five to ten minutes, and so is the proof
-that carries it. A proof refused only for its nonce is not recorded,
-so the client's retry goes through.
+the proof would be accepted, in the same replay store as the
+assertions', and so across a cluster only when that store is shared.
+That includes a deployment whose MCP endpoint takes tokens from an
+external authorization server: give the `Sake` child
+`replay: {Sake.Auth.Store.Ecto, repo: MyApp.Repo}`. A server nonce
+(`dpop: [nonce: true]`) does not stand in for it: a nonce is a MAC
+under the Sake secret that every node accepts for five to ten minutes,
+so it limits how far ahead a proof can be made, not how often it is
+used. A proof refused only for its nonce is not recorded, so the
+client's retry goes through.
 
 A DPoP-bound token sent as a bearer token is refused, and so is an
 unbound one sent with the `DPoP` scheme: the token's binding, not the

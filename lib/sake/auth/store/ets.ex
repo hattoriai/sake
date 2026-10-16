@@ -137,6 +137,14 @@ defmodule Sake.Auth.Store.ETS do
     end)
   end
 
+  # Single-use JWTs are this node's to remember: `Sake.Auth.Replay` keeps
+  # and sweeps the table.
+  @impl Sake.Auth.Store
+  def once(_s, key, expires_at), do: Sake.Auth.Replay.local_once(key, expires_at)
+
+  @impl Sake.Auth.Store
+  def prune_once(_s, _now), do: :ok
+
   @impl Sake.Auth.Store
   def tokens_for_subject(_s, subject_id),
     do: for({_, %{subject_id: ^subject_id} = t} <- :ets.tab2list(@tables.tokens), do: t)

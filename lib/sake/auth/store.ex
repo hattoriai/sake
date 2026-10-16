@@ -36,6 +36,16 @@ defmodule Sake.Auth.Store do
   @callback revoke_token(state(), String.t()) :: :ok
   @callback revoke_family(state(), String.t()) :: :ok
   @callback tokens_for_subject(state(), String.t()) :: [TokenRecord.t()]
+  @doc """
+  Records `key` (a digest naming a single-use JWT: a client assertion, a
+  JWT grant, a DPoP proof) until `expires_at`, in Unix seconds: `:ok` the
+  first time, `:replayed` while it is recorded. Atomic across every node
+  that shares the store: of two calls with the same key, exactly one gets
+  `:ok`.
+  """
+  @callback once(state(), key :: String.t(), expires_at :: integer()) :: :ok | :replayed
+  @doc "Forgets the keys `once/3` recorded that expired by `now`, in Unix seconds."
+  @callback prune_once(state(), now :: integer()) :: :ok
   @doc "Remembers an approval, keyed by subject, client and resource (replacing an earlier one)."
   @callback put_consent(state(), Consent.t()) :: :ok
   @callback get_consent(

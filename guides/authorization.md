@@ -282,15 +282,17 @@ token requests without a proof refused, whatever the server's setting.
 A server with `dpop: false` refuses such a client's token requests with
 `invalid_client`, since it cannot bind them.
 
-**Nonces.** A proof's time comes from the client's clock, and a stolen
-proof can be replayed to another node of a cluster within its five
-minutes. With `nonce: true` the token endpoint and the MCP endpoint
+**Nonces.** A proof's time comes from the client's clock, so a proof
+signed ahead of time stays good for its five minutes. With `nonce: true`
+the server sets the time instead: the token endpoint and the MCP endpoint
 answer a proof without the current nonce with `use_dpop_nonce` and a
 `DPoP-Nonce` header (400 at the token endpoint, 401 at the MCP
 endpoint), and send the latest nonce on every DPoP answer. A nonce is a
 MAC of the time under the Sake secret: nothing is stored, every node
 with the same secret accepts it, and it is good for five to ten minutes.
-It costs a client one extra round trip now and then.
+It costs a client one extra round trip now and then. A nonce does not
+make a proof single use: the replay store does (see
+`guides/security.md`).
 
 Without `jose`, the metadata does not offer DPoP, the token endpoint
 ignores proofs and issues bearer tokens, and the MCP endpoint refuses the
