@@ -236,7 +236,7 @@ defmodule Sake.Auth.Token do
       {:ok, record} ->
         with {:ok, attrs} <- rotate(client, record, p, jkt),
              :ok <- still_authorized(config, {module, state}, client, record) do
-          issued_unless_revoked(config, {module, state}, hash, attrs)
+          issue_rotated(config, {module, state}, hash, attrs)
         end
     end
   end
@@ -375,23 +375,15 @@ defmodule Sake.Auth.Token do
     end
   end
 
-  # The store may only be able to revoke the rows that exist when
-  # `revoke_family/2` runs (a plain `UPDATE ... WHERE family_id = ?`, for
-  # instance): it cannot reach back and revoke a pair inserted after a
-  # concurrent request already swept the family. So the endpoint checks for
-  # itself, after inserting: if the token it just consumed shows revoked
-  # now, a concurrent reuse raced this request, and the new pair it just
-  # created must be revoked too, and denied, rather than handed out.
-  defp issued_unless_revoked(config, {module, state}, hash, attrs) do
-    response = issue(config, attrs)
+  # A reuse of the refresh token racing this rotation revokes the family;
+  # the store refuses the new pair then, atomically with that revocation
+  # (`put_rotated_tokens/3`), so the race never leaves a live pair behind.
+  defp issue_rotated(config, {module, state}, hash, attrs) do
+    {access, refresh, %{access: a, refresh: r}} = Tokens.new_pair(config, attrs)
 
-    case module.get_token(state, :refresh, hash) do
-      {:ok, %{revoked_at: at}} when not is_nil(at) ->
-        module.revoke_family(state, attrs.family_id)
-        {:error, "invalid_grant", "The refresh token was already used"}
-
-      _ ->
-        {:ok, response}
+    case module.put_rotated_tokens(state, hash, [a, r]) do
+      :ok -> {:ok, response(config, attrs, access, refresh)}
+      :revoked -> {:error, "invalid_grant", "The refresh token is expired or revoked"}
     end
   end
 
@@ -490,11 +482,6 @@ defmodule Sake.Auth.Token do
     if requested -- granted == [],
       do: {:ok, requested},
       else: {:error, "invalid_scope", "The scope exceeds what was granted"}
-  end
-
-  defp issue(config, attrs) do
-    {access, refresh, _} = Tokens.issue_pair(config, attrs)
-    response(config, attrs, access, refresh)
   end
 
   defp response(config, attrs, access, refresh) do

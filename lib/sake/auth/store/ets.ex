@@ -87,6 +87,16 @@ defmodule Sake.Auth.Store.ETS do
   def put_token(_s, token), do: atomically(fn -> insert(:tokens, token.id, token) end)
 
   @impl Sake.Auth.Store
+  def put_rotated_tokens(_s, refresh_hash, tokens) do
+    atomically(fn ->
+      case :ets.match_object(@tables.tokens, {:_, %{kind: :refresh, hash: refresh_hash}}) do
+        [{_id, %{revoked_at: nil}}] -> Enum.each(tokens, &insert(:tokens, &1.id, &1))
+        _ -> :revoked
+      end
+    end)
+  end
+
+  @impl Sake.Auth.Store
   def get_token(_s, kind, hash) do
     case :ets.match_object(@tables.tokens, {:_, %{kind: kind, hash: hash}}) do
       [{_, token}] -> {:ok, token}

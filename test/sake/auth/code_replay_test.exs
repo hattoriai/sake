@@ -38,6 +38,7 @@ defmodule Sake.Auth.CodeReplayTest.PauseStore do
   def delete_client({m, s}, id), do: m.delete_client(s, id)
   def put_code({m, s}, c), do: m.put_code(s, c)
   def put_code_tokens({m, s}, hash, tokens), do: m.put_code_tokens(s, hash, tokens)
+  def put_rotated_tokens({m, s}, hash, tokens), do: m.put_rotated_tokens(s, hash, tokens)
   def put_token({m, s}, token), do: m.put_token(s, token)
   def get_token({m, s}, kind, hash), do: m.get_token(s, kind, hash)
   def consume_refresh({m, s}, hash), do: m.consume_refresh(s, hash)

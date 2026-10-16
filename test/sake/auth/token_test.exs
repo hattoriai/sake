@@ -1,10 +1,10 @@
 defmodule Sake.Auth.TokenTest.RaceStore do
   @moduledoc false
-  # A store that delegates to the ETS store, except that its first
-  # access-token insert revokes that token's own family first: it
-  # deterministically simulates a concurrent reuse revoking the family
-  # between a refresh request's `consume_refresh` and its `issue_pair`,
-  # without an actual race.
+  # A store that delegates to the ETS store, except that storing a
+  # rotated pair revokes that pair's family first: it deterministically
+  # simulates a concurrent reuse revoking the family between a refresh
+  # request's `consume_refresh` and its `put_rotated_tokens`, without an
+  # actual race.
   @behaviour Sake.Auth.Store
   alias Sake.Auth.Store.ETS
 
@@ -17,13 +17,9 @@ defmodule Sake.Auth.TokenTest.RaceStore do
   def put_code(s, c), do: ETS.put_code(s, c)
   def consume_code(s, hash), do: ETS.consume_code(s, hash)
 
-  def put_token(s, %{kind: :access} = token) do
-    unless Process.get(__MODULE__) do
-      Process.put(__MODULE__, true)
-      ETS.revoke_family(s, token.family_id)
-    end
-
-    ETS.put_token(s, token)
+  def put_rotated_tokens(s, hash, [token | _] = tokens) do
+    ETS.revoke_family(s, token.family_id)
+    ETS.put_rotated_tokens(s, hash, tokens)
   end
 
   def put_token(s, token), do: ETS.put_token(s, token)
@@ -356,8 +352,9 @@ defmodule Sake.Auth.TokenTest do
     assert conn.status == 400
     assert body(conn)["error"] == "invalid_grant"
 
+    # The family is revoked, and the new pair was never stored.
     {mod, state} = Sake.Auth.store(config)
-    assert [_, _, _, _] = tokens = mod.tokens_for_subject(state, "u1")
+    assert [_, _] = tokens = mod.tokens_for_subject(state, "u1")
     assert Enum.all?(tokens, &(&1.revoked_at != nil))
   end
 end
