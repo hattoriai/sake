@@ -33,10 +33,18 @@ set -euo pipefail
 cd "$(dirname "$0")"
 [ -d node_modules ] || npm ci
 cd ..
+# Compiled up front, so that the wait below is for the server to start and
+# not for a cold build, which can take longer than the wait.
+mix compile
 mix run --no-halt dev.exs > conformance/results.log 2>&1 &
 PID=$!
 trap 'kill $PID' EXIT
 for _ in $(seq 1 60); do curl -fs http://localhost:4000/ > /dev/null && break; sleep 1; done
+if ! curl -fs http://localhost:4000/ > /dev/null; then
+  echo "the development server did not start; conformance/results.log:"
+  cat conformance/results.log
+  exit 1
+fi
 cd conformance
 
 CONFORMANCE="npx @modelcontextprotocol/conformance"

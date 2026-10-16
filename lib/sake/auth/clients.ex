@@ -179,7 +179,8 @@ defmodule Sake.Auth.Clients do
       jwks: attrs[:jwks],
       jwks_uri: attrs[:jwks_uri],
       application_type: attrs[:application_type] || "native",
-      dpop_bound_access_tokens: attrs[:dpop_bound_access_tokens] == true
+      dpop_bound_access_tokens: attrs[:dpop_bound_access_tokens] == true,
+      inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
     }
 
     {module, state} = Sake.Auth.store(config)

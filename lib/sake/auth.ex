@@ -98,14 +98,20 @@ defmodule Sake.Auth do
   end
 
   @doc """
-  Deletes expired codes and tokens, and the remembered consents older than
-  the refresh token lifetime that no live token family still uses. Schedule
-  it (a cron job, Oban, or a periodic task).
+  Deletes expired codes and tokens, the remembered consents older than
+  the refresh token lifetime that no live token family still uses, and
+  the dynamically registered clients that, `unused_client_ttl` seconds
+  (a day by default) after registering, hold no live token, consent or
+  code. Schedule it (a cron job, Oban, or a periodic task).
   """
   @spec prune(Config.t()) :: :ok
   def prune(config) do
     {module, state} = store(config)
     now = DateTime.utc_now()
-    module.prune(state, now, DateTime.add(now, -config.refresh_token_ttl))
+
+    module.prune(state, now, %{
+      consents: DateTime.add(now, -config.refresh_token_ttl),
+      unused_clients: DateTime.add(now, -config.unused_client_ttl)
+    })
   end
 end

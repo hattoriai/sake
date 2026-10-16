@@ -127,7 +127,8 @@ defmodule Sake.Auth.DCR do
       logo_uri: doc["logo_uri"],
       scopes: if(is_binary(doc["scope"]), do: String.split(doc["scope"]), else: nil),
       application_type: doc["application_type"] || "native",
-      dpop_bound_access_tokens: doc["dpop_bound_access_tokens"] == true
+      dpop_bound_access_tokens: doc["dpop_bound_access_tokens"] == true,
+      inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
     }
   end
 

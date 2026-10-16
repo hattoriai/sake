@@ -72,9 +72,15 @@ defmodule Sake.Auth.Store do
               resource :: String.t() | :all
             ) :: :ok
   @doc """
-  Deletes the codes and tokens that expired by `now`, and the consents
-  inserted before `consents_before` whose subject, client and resource
-  have no live (unexpired, unrevoked) refresh token left.
+  Deletes the codes and tokens that expired by `now`; the consents
+  inserted before `before.consents` whose subject, client and resource
+  have no live (unexpired, unrevoked) refresh token left; and the
+  dynamically registered clients registered before `before.unused_clients`
+  that hold no live token, no consent and no code.
   """
-  @callback prune(state(), now :: DateTime.t(), consents_before :: DateTime.t()) :: :ok
+  @callback prune(
+              state(),
+              now :: DateTime.t(),
+              before :: %{consents: DateTime.t(), unused_clients: DateTime.t()}
+            ) :: :ok
 end
