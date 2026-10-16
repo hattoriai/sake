@@ -170,3 +170,42 @@ defmodule Sake.Auth.CodeReplayTest do
     end
   end
 end
+
+defmodule Sake.Auth.UnknownCodeTest do
+  # An unknown code is refused without leaving anything behind in the ETS
+  # store (issue #36): only a family that exists is revoked.
+  use SakeTest.AuthCase, async: false
+  import Plug.Test
+  import Plug.Conn
+
+  alias Sake.Auth.Store.ETS
+
+  defp redeem(client, code) do
+    params = %{
+      "grant_type" => "authorization_code",
+      "code" => code,
+      "client_id" => client.id,
+      "redirect_uri" => hd(client.redirect_uris),
+      "code_verifier" => String.duplicate("v", 43)
+    }
+
+    conn(:post, "/oauth/token", URI.encode_query(params))
+    |> put_req_header("content-type", "application/x-www-form-urlencoded")
+    |> Sake.Auth.Token.call(Sake.Auth.Token.init([]))
+  end
+
+  defp sizes, do: for(t <- [ETS.Codes, ETS.Tokens], do: :ets.info(t, :size))
+
+  test "unknown codes leave the store as it was", %{config: config} do
+    client = public_client(config)
+    before = sizes()
+    agent = :sys.get_state(ETS)
+
+    for n <- 1..200 do
+      assert redeem(client, "never-issued-#{n}").status == 400
+    end
+
+    assert sizes() == before
+    assert :sys.get_state(ETS) == agent
+  end
+end

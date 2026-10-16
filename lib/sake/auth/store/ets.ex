@@ -15,18 +15,17 @@ defmodule Sake.Auth.Store.ETS do
   def child_spec(_opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [nil]}}
 
   # An `Agent`, not `use GenServer`: a GenServer's `init/1` callback would
-  # collide with the `Sake.Auth.Store` behaviour's `init/1` below. Its state
-  # is a map of `family_id => revoked_at`, so a family revocation is not
-  # just a sweep of the rows that exist when it runs: a token inserted for
-  # an already-revoked family (a race between rotating a refresh token and
-  # a concurrent reuse of it) is still born revoked.
+  # collide with the `Sake.Auth.Store` behaviour's `init/1` below. It owns
+  # the tables, and serializes the operations that must be atomic:
+  # consuming a code or a refresh token, storing a code's tokens, and
+  # revoking a family.
   def start_link(_) do
     Agent.start_link(
       fn ->
         for {_k, name} <- @tables,
             do: :ets.new(name, [:named_table, :public, :set, read_concurrency: true])
 
-        %{}
+        nil
       end,
       name: __MODULE__
     )
@@ -47,48 +46,41 @@ defmodule Sake.Auth.Store.ETS do
     :ok
   end
 
+  # A code is kept with its state, `:unused`, `:used` or `:revoked`, until
+  # it expires: a consumed code's row is the fence `put_code_tokens/3` and
+  # `revoke_family/2` meet on, as in the Ecto store.
   @impl Sake.Auth.Store
-  def put_code(_s, code), do: insert(:codes, code.hash, code)
+  def put_code(_s, code) do
+    :ets.insert(@tables.codes, {code.hash, code, :unused})
+    :ok
+  end
 
   @impl Sake.Auth.Store
   def consume_code(_s, hash) do
-    case :ets.take(@tables.codes, hash) do
-      [{^hash, code}] -> {:ok, code}
-      [] -> :error
-    end
-  end
+    atomically(fn ->
+      case :ets.lookup(@tables.codes, hash) do
+        [{^hash, code, :unused}] ->
+          :ets.insert(@tables.codes, {hash, code, :used})
+          {:ok, code}
 
-  # Goes through the Agent too, so it is serialized with `revoke_family/2`:
-  # whichever of the two runs last still sees the other's effect, so a
-  # token for an already-revoked family is inserted already revoked.
-  @impl Sake.Auth.Store
-  def put_token(_s, token) do
-    Agent.get_and_update(__MODULE__, fn revoked ->
-      insert(:tokens, token.id, born_revoked(token, revoked))
-      {:ok, revoked}
-    end)
-  end
-
-  # Serialized with `revoke_family/2` like `put_token/2`; a family already
-  # revoked gets none of its tokens.
-  @impl Sake.Auth.Store
-  def put_code_tokens(_s, code_hash, tokens) do
-    Agent.get_and_update(__MODULE__, fn revoked ->
-      if Map.has_key?(revoked, code_hash) do
-        {:revoked, revoked}
-      else
-        Enum.each(tokens, &insert(:tokens, &1.id, &1))
-        {:ok, revoked}
+        _ ->
+          :error
       end
     end)
   end
 
-  defp born_revoked(token, revoked) do
-    case Map.get(revoked, token.family_id) do
-      nil -> token
-      at -> %{token | revoked_at: token.revoked_at || at}
-    end
+  @impl Sake.Auth.Store
+  def put_code_tokens(_s, code_hash, tokens) do
+    atomically(fn ->
+      case :ets.lookup(@tables.codes, code_hash) do
+        [{^code_hash, _code, :used}] -> Enum.each(tokens, &insert(:tokens, &1.id, &1))
+        _ -> :revoked
+      end
+    end)
   end
+
+  @impl Sake.Auth.Store
+  def put_token(_s, token), do: insert(:tokens, token.id, token)
 
   @impl Sake.Auth.Store
   def get_token(_s, kind, hash) do
@@ -98,42 +90,43 @@ defmodule Sake.Auth.Store.ETS do
     end
   end
 
-  # Runs inside the owner Agent process, which serializes every call made
-  # through it: two concurrent callers can never both observe `used_at:
-  # nil` for the same hash, so exactly one of them marks it used.
+  # Two concurrent callers can never both observe `used_at: nil` for the
+  # same hash, so exactly one of them marks it used.
   @impl Sake.Auth.Store
   def consume_refresh(_s, hash) do
-    Agent.get_and_update(__MODULE__, fn revoked ->
-      result =
-        case :ets.match_object(@tables.tokens, {:_, %{kind: :refresh, hash: hash}}) do
-          [{id, %{used_at: nil} = record}] ->
-            insert(:tokens, id, %{record | used_at: now()})
-            {:ok, record}
+    atomically(fn ->
+      case :ets.match_object(@tables.tokens, {:_, %{kind: :refresh, hash: hash}}) do
+        [{id, %{used_at: nil} = record}] ->
+          insert(:tokens, id, %{record | used_at: now()})
+          {:ok, record}
 
-          [{_id, record}] ->
-            {:error, :used, record}
+        [{_id, record}] ->
+          {:error, :used, record}
 
-          [] ->
-            :error
-        end
-
-      {result, revoked}
+        [] ->
+          :error
+      end
     end)
   end
 
   @impl Sake.Auth.Store
   def revoke_token(_s, id), do: update(:tokens, id, &%{&1 | revoked_at: &1.revoked_at || now()})
 
-  # Also goes through the Agent: it records the family as revoked (so a
-  # token inserted for it afterward is born revoked, see `put_token/2`)
-  # and sweeps the rows that already exist, atomically in the same step.
+  # A family born of a code also revokes the code's row, so that a pair
+  # not stored yet never is (see `put_code_tokens/3`); then the family's
+  # tokens are swept. Nothing is kept for a family that does not exist:
+  # an unknown code costs nothing. A pair a refresh is about to store is
+  # the token endpoint's to catch: it checks after storing it.
   @impl Sake.Auth.Store
   def revoke_family(_s, family_id) do
-    Agent.get_and_update(__MODULE__, fn revoked ->
-      for {id, %{family_id: ^family_id}} <- :ets.tab2list(@tables.tokens),
-          do: update(:tokens, id, &%{&1 | revoked_at: &1.revoked_at || now()})
+    atomically(fn ->
+      case :ets.lookup(@tables.codes, family_id) do
+        [{^family_id, code, _state}] -> :ets.insert(@tables.codes, {family_id, code, :revoked})
+        [] -> :ok
+      end
 
-      {:ok, Map.put_new(revoked, family_id, now())}
+      ids = :ets.select(@tables.tokens, [{{:"$1", %{family_id: family_id}}, [], [:"$1"]}])
+      Enum.each(ids, &update(:tokens, &1, fn t -> %{t | revoked_at: t.revoked_at || now()} end))
     end)
   end
 
@@ -188,7 +181,7 @@ defmodule Sake.Auth.Store.ETS do
   end
 
   defp prune_expired(now) do
-    for {hash, %{expires_at: exp}} <- :ets.tab2list(@tables.codes),
+    for {hash, %{expires_at: exp}, _state} <- :ets.tab2list(@tables.codes),
         DateTime.compare(exp, now) != :gt,
         do: :ets.delete(@tables.codes, hash)
 
@@ -198,6 +191,9 @@ defmodule Sake.Auth.Store.ETS do
 
     :ok
   end
+
+  # Runs `fun` in the Agent, serialized with every other call made through it.
+  defp atomically(fun), do: Agent.get(__MODULE__, fn nil -> fun.() end)
 
   defp insert(table, key, value) do
     :ets.insert(@tables[table], {key, value})

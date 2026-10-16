@@ -463,8 +463,9 @@ instead.
 
 The default, `{Sake.Auth.Store.ETS, []}`, needs no database: an `Agent`
 owns a set of ETS tables, which also serializes the operations that must
-be atomic (consuming a refresh token, revoking a family) through the
-Agent's mailbox rather than a database transaction. It is what `mix dev`
+be atomic (consuming a code or a refresh token, storing a code's tokens,
+revoking a family) through the Agent's mailbox rather than a database
+transaction. It is what `mix dev`
 and this package's own test suite use — nothing survives a restart, which
 is exactly what you want in development and exactly what you do not want
 once real people have connected real clients to a deployed server.
