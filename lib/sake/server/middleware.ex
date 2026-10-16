@@ -77,6 +77,12 @@ defmodule Sake.Server.Middleware do
   @spec filter(:tools | :resources | :prompts, [struct()], Context.t()) ::
           {:ok, [struct()]} | {:halt, term()}
   def filter(kind, specs, ctx) do
+    if pipeline(ctx.server, :after_list) == [],
+      do: {:ok, specs},
+      else: run_filter(kind, specs, ctx)
+  end
+
+  defp run_filter(kind, specs, ctx) do
     case run(:after_list, %{kind: kind, items: specs}, ctx) do
       {:cont, %{items: items}} ->
         offered = MapSet.new(specs, &key/1)
