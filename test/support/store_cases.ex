@@ -52,6 +52,64 @@ defmodule SakeTest.StoreCases do
         assert :error = mod.consume_code(state, code.hash)
       end
 
+      test "a code's tokens are stored only while no replay revoked its family", %{
+        config: config
+      } do
+        {mod, state} = store(config)
+        expires = DateTime.utc_now() |> DateTime.add(600) |> DateTime.truncate(:second)
+
+        code = fn name ->
+          code = %Code{
+            hash: Tokens.hash(name),
+            client_id: "c",
+            redirect_uri: "http://127.0.0.1:1/cb",
+            code_challenge: "x",
+            scopes: [],
+            resource: "r",
+            subject_id: "u-code",
+            expires_at: expires
+          }
+
+          :ok = mod.put_code(state, code)
+          {:ok, _} = mod.consume_code(state, code.hash)
+          code.hash
+        end
+
+        pair = fn hash ->
+          {_, _, %{access: a, refresh: r}} =
+            Tokens.new_pair(config, %{
+              family_id: hash,
+              client_id: "c",
+              subject_id: "u-code",
+              scopes: [],
+              resource: "r"
+            })
+
+          [a, r]
+        end
+
+        # The replay revoked the family first: nothing is stored.
+        replayed = code.("replayed")
+        assert :ok = mod.revoke_family(state, replayed)
+        [a, r] = pair.(replayed)
+        assert :revoked = mod.put_code_tokens(state, replayed, [a, r])
+        assert :error = mod.get_token(state, :access, a.hash)
+        assert :error = mod.get_token(state, :refresh, r.hash)
+
+        # The pair was stored first: the replay revokes it.
+        redeemed = code.("redeemed")
+        [a, r] = pair.(redeemed)
+        assert :ok = mod.put_code_tokens(state, redeemed, [a, r])
+        assert {:ok, %TokenRecord{revoked_at: nil}} = mod.get_token(state, :access, a.hash)
+        assert :ok = mod.revoke_family(state, redeemed)
+
+        assert {:ok, %TokenRecord{revoked_at: %DateTime{}}} =
+                 mod.get_token(state, :access, a.hash)
+
+        assert {:ok, %TokenRecord{revoked_at: %DateTime{}}} =
+                 mod.get_token(state, :refresh, r.hash)
+      end
+
       test "tokens, families and revocation", %{config: config} do
         {mod, state} = store(config)
         {_a, _r, %{access: a, refresh: r}} = issue(config, %{family_id: "f1", subject_id: "u1"})

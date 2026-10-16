@@ -365,7 +365,9 @@ legitimate client has moved on. Two concurrent refreshes of the same token
 both fail closed (the store consumes it atomically); a refresh token
 presented by the wrong `client_id` is burned (marked used) even though the
 request is denied, so it cannot be retried against the right client
-either. A client may use only the grant types it registered: a client
+either. An authorization code is single use the same way: presenting it
+again revokes every token issued for it, even when the replay races the
+request that redeemed it (that request is then refused too). A client may use only the grant types it registered: a client
 without `refresh_token` in its `grant_types` gets `unauthorized_client`
 for a refresh (dynamic registration grants both when the client names
 none).
@@ -444,6 +446,16 @@ token's `id` with `on_conflict: {:replace_all_except, [:revoked_at,
 race with a concurrent revoke) replaces every column *except* those two —
 a token already marked revoked or used stays that way no matter what a
 later write for the same `id` says about it.
+
+A consumed authorization code is marked used rather than deleted, and kept
+until it expires: its row is the fence between issuing the code's tokens
+and revoking them when the code is replayed. Issuing locks the row and
+inserts the pair in one transaction, unless the row shows the family
+revoked; revoking the family marks the row revoked under the same lock
+before it sweeps the tokens. Whichever of the two runs second sees what
+the other did, so a replay that races the request redeeming the code
+never leaves a live pair behind: that request gets `invalid_grant`
+instead.
 
 ## The ETS store for development
 

@@ -8,7 +8,22 @@ defmodule Sake.Auth.Store do
   @callback list_clients(state()) :: [Client.t()]
   @callback delete_client(state(), String.t()) :: :ok
   @callback put_code(state(), Code.t()) :: :ok
+  @doc """
+  Consumes a code, if and only if it was not consumed yet, atomically. The
+  store keeps knowing the consumed code until it expires, as the fence
+  `put_code_tokens/3` checks.
+  """
   @callback consume_code(state(), String.t()) :: {:ok, Code.t()} | :error
+  @doc """
+  Stores the tokens issued for a consumed code (their `family_id` is the
+  code's hash), all of them or none: none, returning `:revoked`, when the
+  family was revoked since the code was consumed (a replay of the code).
+  A store may refuse a code it no longer knows the same way. Atomic with `revoke_family/2`: whichever of the
+  two runs second sees the other's effect, so a replay never leaves a
+  live pair behind.
+  """
+  @callback put_code_tokens(state(), code_hash :: String.t(), [TokenRecord.t()]) ::
+              :ok | :revoked
   @callback put_token(state(), TokenRecord.t()) :: :ok
   @callback get_token(state(), :access | :refresh, String.t()) :: {:ok, TokenRecord.t()} | :error
   @doc """
