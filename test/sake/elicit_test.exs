@@ -263,6 +263,7 @@ defmodule Sake.ElicitTest do
         Sake.Context.new(
           secret: ModernClient.secret(),
           method: "tools/call",
+          server: SakeDev.Server,
           scope: nil,
           client_capabilities: @caps
         )
