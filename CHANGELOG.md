@@ -280,6 +280,10 @@ First release.
   `encode!/1` and `encode_to_iodata!/1`, checked when Sake starts. A
   struct the library cannot encode raises with a pointer to the setting.
   Decoding, tokens and OAuth responses always use `JSON`.
+- A warning, once a node joins a cluster, for each piece of state Sake
+  keeps on that node only (the ETS stores, a replay table without a
+  shared store, streams without `pubsub:`), and a "Running on several
+  nodes" guide.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the
