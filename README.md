@@ -77,6 +77,7 @@ See `guides/quickstart.md` for turning on authorization in five steps, or
 | `Sake.Test`, an in-memory client for a server's tests | yes | yes | yes |
 | Middleware around calls (`Sake.Middleware`: audit, rate limits, plans, rewriting, redaction) | yes | yes | yes |
 | Composing servers (`mount`, with prefixes) | yes | yes | yes |
+| Proxying another server (`Sake.Proxy`, HTTP or stdio upstream of either era) | yes | yes | yes |
 
 ## The authorization flow, briefly
 
@@ -112,7 +113,7 @@ Client credentials with a secret work without it.
 - [Authorization](guides/authorization.md)
 - [Multi-tenant endpoints](guides/tenants.md)
 - [Middleware](guides/middleware.md)
-- [Composing servers](guides/composing.md)
+- [Composing and proxying servers](guides/composing.md)
 - [The client](guides/client.md)
 - [Stdio](guides/stdio.md)
 - [Observability](guides/observability.md)
@@ -132,8 +133,11 @@ a person: client credentials, a JWT bearer grant, enterprise-managed
 authorization) and follows tasks; OpenTelemetry traces run from the
 client's call through the server into the tool; `Sake.Test`, which
 tests a server through an in-memory client; middleware, the host's
-own code around every call; and composing, one server mounted inside
-another under a prefix. Next: DPoP and the device
+own code around every call; composing, one server mounted inside
+another under a prefix; and proxying, another MCP server's tools,
+resources and prompts behind your own login, per-user credentials and
+middleware, with input requests, tasks and notifications forwarded
+across eras. Next: DPoP and the device
 authorization grant.
 
 ## License

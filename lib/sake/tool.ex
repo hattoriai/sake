@@ -50,7 +50,8 @@ defmodule Sake.Tool do
     `mount` is `nil` for a tool the server declares itself, and
     `{server, prefix, spec}` for one it mounted (`Sake.Server.mount/2`):
     the server it came from, the mount's prefix, and the spec as that
-    server has it.
+    server has it. `proxy` is the `Sake.Proxy` whose upstream serves a
+    proxied tool; it has no `module`.
     """
     @type t :: %__MODULE__{}
     defstruct [
@@ -70,7 +71,8 @@ defmodule Sake.Tool do
       task: nil,
       visibility: [:model, :app],
       headers: %{},
-      mount: nil
+      mount: nil,
+      proxy: nil
     ]
 
     @spec to_wire(t(), String.t()) :: map()

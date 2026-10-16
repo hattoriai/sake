@@ -14,10 +14,12 @@ children = [
      subject: SakeDev.Subject,
      issuer: "http://localhost:4000",
      allow_insecure: true,
-     servers: [SakeDev.Server],
-     resources: ["/mcp", "/acme/mcp", "/beta/mcp"]
+     servers: [SakeDev.Server, SakeDev.Gateway],
+     resources: ["/mcp", "/acme/mcp", "/beta/mcp", "/gateway/mcp"]
    ]},
-  {Bandit, plug: SakeDev.Router, port: 4000}
+  {Bandit, plug: SakeDev.Router, port: 4000},
+  # The gateway's proxy, whose upstream is this server's /open/mcp.
+  SakeDev.Gateway.Open
 ]
 
 {:ok, _} = Supervisor.start_link(children, strategy: :one_for_one)

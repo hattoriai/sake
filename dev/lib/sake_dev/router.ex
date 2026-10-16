@@ -1,8 +1,9 @@
 defmodule SakeDev.Router do
   @moduledoc false
   # The development server: a login form with a session cookie, the OAuth
-  # endpoints, protected endpoints at /mcp, /acme/mcp and /beta/mcp, and an
-  # open one at /open/mcp.
+  # endpoints, protected endpoints at /mcp, /acme/mcp and /beta/mcp, an
+  # open one at /open/mcp, and a protected gateway at /gateway/mcp that
+  # mounts the example server and proxies the open one.
 
   defmodule RequireLogin do
     @moduledoc false
@@ -70,6 +71,7 @@ defmodule SakeDev.Router do
   forward "/mcp", to: Sake.Plug, init_opts: [server: SakeDev.Server, auth: true]
   forward "/acme/mcp", to: Sake.Plug, init_opts: [server: SakeDev.Server, auth: true]
   forward "/beta/mcp", to: Sake.Plug, init_opts: [server: SakeDev.Server, auth: true]
+  forward "/gateway/mcp", to: Sake.Plug, init_opts: [server: SakeDev.Gateway, auth: true]
 
   match _, do: send_resp(conn, 404, "Not found")
 

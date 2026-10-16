@@ -112,6 +112,7 @@ defmodule Sake.MixProject do
       groups_for_modules: [
         Server: [
           Sake.Server,
+          Sake.Proxy,
           Sake.Tool,
           Sake.Resource,
           Sake.UI,

@@ -199,19 +199,22 @@ defmodule Sake.Server.Mount do
   A mounted component's result as the client gets it: a URI in it (a
   resource link or an embedded resource of a tool's result, the contents
   of a read) that names a resource of the component's own server takes
-  the mount's prefixes. Any other URI is left as it is: it is not the
-  mounted server's to rename.
+  the mount's prefixes (for a proxy, one its upstream lists). Any other
+  URI is left as it is: it is not the mounted server's to rename.
   """
-  @spec outer_result(map(), struct()) :: map()
-  def outer_result(result, %{mount: {_, _, _}} = spec) do
-    owner = owner(spec)
+  @spec outer_result(map(), struct(), Sake.Context.t()) :: map()
+  def outer_result(result, %{mount: {_, _, _}} = spec, ctx) do
+    serves? = serves?(owner(spec), spec.proxy, ctx)
 
     result
-    |> update_list("content", &outer_content(&1, spec, owner))
-    |> update_list("contents", &outer_uri_key(&1, spec, owner))
+    |> update_list("content", &outer_content(&1, spec, serves?))
+    |> update_list("contents", &outer_uri_key(&1, spec, serves?))
   end
 
-  def outer_result(result, _spec), do: result
+  def outer_result(result, _spec, _ctx), do: result
+
+  defp serves?(_owner, proxy, ctx) when proxy != nil, do: &Sake.Proxy.serves?(proxy, &1, ctx)
+  defp serves?(owner, nil, _ctx), do: &match?({:ok, _, _}, Sake.Server.resource(owner, &1))
 
   defp owner(%{mount: {server, _prefix, %{mount: nil}}}), do: server
   defp owner(%{mount: {_server, _prefix, inner}}), do: owner(inner)
@@ -223,16 +226,16 @@ defmodule Sake.Server.Mount do
     end
   end
 
-  defp outer_content(%{"type" => "resource_link"} = item, spec, owner),
-    do: outer_uri_key(item, spec, owner)
+  defp outer_content(%{"type" => "resource_link"} = item, spec, serves?),
+    do: outer_uri_key(item, spec, serves?)
 
-  defp outer_content(%{"type" => "resource", "resource" => %{} = resource} = item, spec, owner),
-    do: %{item | "resource" => outer_uri_key(resource, spec, owner)}
+  defp outer_content(%{"type" => "resource", "resource" => %{} = resource} = item, spec, serves?),
+    do: %{item | "resource" => outer_uri_key(resource, spec, serves?)}
 
-  defp outer_content(item, _spec, _owner), do: item
+  defp outer_content(item, _spec, _serves?), do: item
 
-  defp outer_uri_key(%{"uri" => uri} = item, spec, owner) when is_binary(uri) do
-    with {:ok, _spec, _params} <- Sake.Server.resource(owner, uri),
+  defp outer_uri_key(%{"uri" => uri} = item, spec, serves?) when is_binary(uri) do
+    with true <- serves?.(uri),
          {:ok, outer} <- outer_uri(spec, uri) do
       %{item | "uri" => outer}
     else
@@ -240,7 +243,7 @@ defmodule Sake.Server.Mount do
     end
   end
 
-  defp outer_uri_key(item, _spec, _owner), do: item
+  defp outer_uri_key(item, _spec, _serves?), do: item
 
   @doc """
   The server and every server mounted in it, at any depth, each with the

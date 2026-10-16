@@ -10,8 +10,12 @@ defmodule Sake.Server.Tasks do
 
   @doc false
   # Whether any tool of the server can run as a task, here.
-  def supported?(server),
-    do: Tasks.running?() and Enum.any?(server.__sake__(:tools), & &1.task)
+  # A server with a proxy may make a task of any proxied call: the
+  # upstream decides.
+  def supported?(server) do
+    Tasks.running?() and
+      (Sake.Server.dynamic?(server) or Enum.any?(server.__sake__(:tools), & &1.task))
+  end
 
   @doc false
   # Whether the request's client declared the extension. Tasks are a
@@ -27,10 +31,11 @@ defmodule Sake.Server.Tasks do
 
   @doc false
   # Stores the task (so that a `tasks/get` anywhere finds it) before the
-  # worker starts, and before the client hears of it.
-  def start(spec, args, ctx) do
+  # worker starts, and before the client hears of it. `follow` runs a
+  # proxied upstream task instead of the tool (see `Sake.Tasks.Worker`).
+  def start(spec, args, ctx, follow \\ nil) do
     record = Tasks.create(ctx, spec.name)
-    :ok = Worker.start(spec, args, ctx, record)
+    :ok = Worker.start(spec, args, ctx, record, follow)
     {:ok, record |> Record.to_wire() |> Map.put("resultType", "task")}
   end
 

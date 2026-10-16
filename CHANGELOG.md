@@ -164,6 +164,22 @@ First release.
   it), and sees them by the names it gave them; its components see
   their own server in `ctx.server`, and its broadcasts reach the
   parent's clients with renamed URIs. See `guides/composing.md`.
+- `Sake.Proxy`: another MCP server's tools, resources and prompts,
+  served (or mounted) as the server's own and forwarded with
+  `Sake.Client`, over HTTP or to a stdio subprocess, to and from either
+  era. Upstream sessions per principal and credential, with a fixed
+  token, the client's own authorization, or a `credentials/1` callback
+  that lets each user act as themselves upstream; a refused session is
+  opened again once. `only`/`except` filters, a `scope` and a per-name
+  `scopes` map, and middleware decide what each principal sees. Lists
+  cached by the upstream's `ttlMs`; progress and log messages, and
+  elicitation, sampling and roots requests forwarded in every era
+  combination, with the upstream's `requestState` carried inside the
+  proxy's own, signed and bound to the principal; an upstream's task
+  re-issued as the proxy's own; list changes and subscribed resource
+  updates followed upstream and broadcast, renamed under a mount's
+  prefix. Upstream names never shadow local ones, and upstream
+  definitions are validated. See `guides/composing.md`.
 - `Sake.Client.request/4` returns a result as the server sent it (an
   input-required result, a task), and `Sake.Client.listen/3` follows a
   server's list changes and resource updates on both eras. An answering

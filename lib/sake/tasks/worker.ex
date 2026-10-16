@@ -15,8 +15,19 @@ defmodule Sake.Tasks.Worker do
 
   @failure %{"code" => -32_603, "message" => "The tool failed."}
 
-  @spec start(Sake.Tool.Spec.t(), map(), Sake.Context.t(), Record.t()) :: :ok
-  def start(spec, args, ctx, record) do
+  @doc """
+  Starts the task's run. `follow`, when given, runs instead of the tool's
+  `execute/2`: a proxied tool's upstream task, followed to its end (see
+  `Sake.Proxy.Forward.follow/3`).
+  """
+  @spec start(
+          Sake.Tool.Spec.t(),
+          map(),
+          Sake.Context.t(),
+          Record.t(),
+          (Sake.Context.t() -> term()) | nil
+        ) :: :ok
+  def start(spec, args, ctx, record, follow \\ nil) do
     ctx = %{
       ctx
       | task: record.id,
@@ -27,7 +38,9 @@ defmodule Sake.Tasks.Worker do
     # Bound here, in the `tools/call` request, so the run's span is the
     # child of the request's (see `Sake.Trace.task/3`).
     {:ok, pid} =
-      Task.Supervisor.start_child(Tasks.Supervisor, Trace.bind(fn -> run(spec, args, ctx) end),
+      Task.Supervisor.start_child(
+        Tasks.Supervisor,
+        Trace.bind(fn -> run(spec, args, ctx, follow) end),
         restart: :temporary
       )
 
@@ -36,7 +49,7 @@ defmodule Sake.Tasks.Worker do
     :ok
   end
 
-  defp run(spec, args, ctx) do
+  defp run(spec, args, ctx, follow) do
     # Trapping exits turns a crash in a process the tool started (a linked
     # `Task`) into an error the tool sees, rather than a silent death that
     # would leave the task working until it expires.
@@ -45,17 +58,19 @@ defmodule Sake.Tasks.Worker do
     meta = %{task_id: ctx.task, tool: spec.name, server: ctx.server}
 
     Trace.task(spec.name, ctx.task, fn ->
-      :telemetry.span([:sake, :task], meta, fn -> status(spec, args, ctx, meta) end)
+      :telemetry.span([:sake, :task], meta, fn -> status(spec, args, ctx, follow, meta) end)
     end)
   end
 
-  defp status(spec, args, ctx, meta) do
-    status = if Tasks.cancelled?(ctx), do: :cancelled, else: execute_and_finish(spec, args, ctx)
+  defp status(spec, args, ctx, follow, meta) do
+    status =
+      if Tasks.cancelled?(ctx), do: :cancelled, else: execute_and_finish(spec, args, ctx, follow)
+
     {status, Map.put(meta, :status, status)}
   end
 
-  defp execute_and_finish(spec, args, ctx) do
-    outcome = execute(spec, args, ctx)
+  defp execute_and_finish(spec, args, ctx, follow) do
+    outcome = execute(spec, args, ctx, follow)
     _ = Trace.outcome(trace_outcome(outcome))
 
     case Tasks.update(ctx.server, ctx.task, &finish(&1, outcome)) do
@@ -64,7 +79,7 @@ defmodule Sake.Tasks.Worker do
     end
   end
 
-  defp execute(spec, args, ctx) do
+  defp execute(spec, args, ctx, nil) do
     case spec.module.execute(args, Mount.component_ctx(spec, ctx)) do
       {:error, {:missing_capability, caps}} ->
         {_, code, message, data} = Sake.Server.Dispatch.missing_capability(caps)
@@ -73,7 +88,7 @@ defmodule Sake.Tasks.Worker do
       result ->
         result
         |> Results.tool(spec, ctx)
-        |> Mount.outer_result(spec)
+        |> Mount.outer_result(spec, ctx)
         |> after_call(spec, args, ctx)
     end
   rescue
@@ -89,6 +104,23 @@ defmodule Sake.Tasks.Worker do
       Logger.error(
         "task #{ctx.task} (tool #{spec.name}) failed: " <>
           Exception.format(kind, reason, __STACKTRACE__)
+      )
+
+      {:failed, @failure}
+  end
+
+  # A followed upstream task's result is already a wire result.
+  defp execute(spec, args, ctx, follow) do
+    case follow.(ctx) do
+      {:ok, result} -> result |> Mount.outer_result(spec, ctx) |> after_call(spec, args, ctx)
+      {:failed, error} -> {:failed, error}
+      :cancelled -> :cancelled
+    end
+  rescue
+    exception ->
+      Logger.error(
+        "task #{ctx.task} (tool #{spec.name}) failed: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
       )
 
       {:failed, @failure}
@@ -116,10 +148,13 @@ defmodule Sake.Tasks.Worker do
 
   defp trace_outcome({:completed, result}), do: {:reply, result}
   defp trace_outcome({:failed, error}), do: {:error, error}
+  defp trace_outcome(:cancelled), do: {:error, %{"code" => -32_603, "message" => "Cancelled"}}
 
   # A task that already ended (a cancellation won the race) stays as it is.
   defp finish(record, outcome),
     do: if(Record.terminal?(record), do: record, else: ended(record, outcome))
+
+  defp ended(record, :cancelled), do: %{record | status: :cancelled, input_requests: %{}}
 
   defp ended(record, {:completed, result}),
     do: %{record | status: :completed, result: result, input_requests: %{}, status_message: nil}
