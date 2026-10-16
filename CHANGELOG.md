@@ -52,7 +52,8 @@ First release.
   a replayed code revoking its family atomically with its issuance), and
   revocation (RFC 7009). Consent is remembered per person, client and
   resource; a subject module's optional `authorize_resource?/2` refuses a
-  tenant the person does not belong to. Works under a generated Phoenix
+  tenant the person does not belong to, when authorizing and on every
+  refresh. Works under a generated Phoenix
   endpoint (its parsed body, its `protect_from_forgery`).
 - The authorization extensions on the authorization server. The client
   credentials grant (`io.modelcontextprotocol/oauth-client-credentials`)
