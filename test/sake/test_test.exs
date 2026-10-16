@@ -268,6 +268,17 @@ defmodule Sake.TestTest do
         assert_notification "notifications/message", %{"data" => "Tool execution completed"}
       end
 
+      test "an unknown log level is refused, as in production" do
+        client = connect(Server, era: @era)
+
+        # Modern: the level travels with the call; legacy: logging/setLevel.
+        refused =
+          with :ok <- set_log_level(client, "loud"),
+               do: call_tool(client, "echo", %{"text" => "x"})
+
+        assert {:error, {:rpc, %{"code" => -32_602, "message" => "Unknown log level"}}} = refused
+      end
+
       test "MCP Apps: ui: true shows the app-only tools and the UI resources" do
         client = connect(Server, era: @era, ui: true)
         assert {:ok, tools} = list_tools(client)
