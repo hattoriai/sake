@@ -15,7 +15,11 @@ defmodule Sake.Auth.Subject do
   The optional `c:authorize_resource?/2` decides whether this person may
   authorize a client for an endpoint URL; without it, every signed-in
   person may. A multi-tenant host uses it to refuse a token for a tenant
-  the person does not belong to (see the tenants guide).
+  the person does not belong to (see the tenants guide). It is asked
+  again, with the principal `fetch/1` loads, on every refresh: a person
+  it now refuses (or whom `fetch/1` no longer finds) cannot renew the
+  grant, and every token of it is revoked. An access token already
+  issued lasts until it expires.
 
   Two more optional callbacks let tokens be issued without a person at
   the browser, and refuse by default:
@@ -38,7 +42,7 @@ defmodule Sake.Auth.Subject do
   @callback fetch(String.t()) :: {:ok, term()} | :error
   @callback display(term()) :: String.t()
 
-  @doc "Whether this person may authorize a client for this endpoint URL; default true."
+  @doc "Whether this person may authorize a client for this endpoint URL, or renew such a grant; default true."
   @callback authorize_resource?(principal :: term(), resource :: String.t()) :: boolean()
 
   @doc "The principal a machine client acts as (client credentials); `:error` refuses it."

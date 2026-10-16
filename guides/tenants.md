@@ -75,7 +75,14 @@ Two checks keep tenants apart, and a multi-tenant host needs both:
   token issued for `/acme/mcp` never works against `/beta/mcp`.
 - **`authorize_resource?/2`** stops Sake from *issuing* a token for a
   tenant the person does not belong to. Without it, any signed-in person
-  could authorize a client for any organization's endpoint.
+  could authorize a client for any organization's endpoint. It is asked
+  again on every refresh, so a person removed from an organization cannot
+  renew a grant they already had: the refresh fails with `invalid_grant`
+  and every token of the grant is revoked. The access token in hand lasts
+  until it expires (`access_token_ttl`, one hour by default); to cut it
+  off at once, revoke the person's grants when you remove them
+  (`Sake.Auth.list_grants/2`, then `Sake.Auth.revoke_grant/3` for each
+  client).
 
 The authorize request happens at `/oauth/authorize`, outside any tenant
 path, so the tenant is not in `conn.params` there: it is in the resource

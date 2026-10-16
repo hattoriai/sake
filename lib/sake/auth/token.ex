@@ -225,7 +225,8 @@ defmodule Sake.Auth.Token do
         {:error, "invalid_grant", "The refresh token was already used"}
 
       {:ok, record} ->
-        with {:ok, attrs} <- rotate(client, record, p, jkt) do
+        with {:ok, attrs} <- rotate(client, record, p, jkt),
+             :ok <- still_authorized(config, {module, state}, client, record) do
           issued_unless_revoked(config, {module, state}, hash, attrs)
         end
     end
@@ -346,6 +347,7 @@ defmodule Sake.Auth.Token do
              {:error, "invalid_grant", "The refresh token belongs to another client"},
          :ok <- same_key(record, jkt),
          {:ok, scopes} <- narrowed(record.scopes, p["scope"]),
+         scopes = allowed_scopes(scopes, client),
          true <-
            p["resource"] in [nil, record.resource] ||
              {:error, "invalid_grant", "resource does not match"} do
@@ -438,6 +440,32 @@ defmodule Sake.Auth.Token do
         :ok
     end
   end
+
+  # A refresh renews the grant only while the person may still have it:
+  # their account still loads, and `authorize_resource?/2` still allows
+  # the resource (someone removed from a tenant, say). Otherwise the whole
+  # family is revoked, its live access token included, and the client has
+  # to send the person through authorization again.
+  defp still_authorized(config, {module, state}, client, record) do
+    with {:ok, principal} <- refresh_principal(config, client, record),
+         true <- Subject.authorize_resource?(config.subject, principal, record.resource) do
+      :ok
+    else
+      _ ->
+        module.revoke_family(state, record.family_id)
+        {:error, "invalid_grant", "The grant is no longer authorized"}
+    end
+  end
+
+  defp refresh_principal(config, client, %{subject_id: nil}),
+    do: Subject.client_principal(config.subject, client)
+
+  defp refresh_principal(config, _client, %{subject_id: id}), do: config.subject.fetch(id)
+
+  # The scopes the client may still request: a client whose allowed scopes
+  # were narrowed since the grant renews it with only those.
+  defp allowed_scopes(scopes, %{scopes: nil}), do: scopes
+  defp allowed_scopes(scopes, %{scopes: allowed}), do: Enum.filter(scopes, &(&1 in allowed))
 
   defp fresh(record) do
     if Tokens.valid?(record, DateTime.utc_now()),
