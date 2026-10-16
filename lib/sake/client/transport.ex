@@ -8,6 +8,12 @@ defmodule Sake.Client.Transport do
   # or by the fixed key `"legacy"` for a foreign server that omits it. A
   # stdio session's messages go to `Sake.Client.Stdio` instead, and an
   # in-memory session's to `Sake.Test.Endpoint`.
+  #
+  # An answering function may throw to give up on the call (`Sake.Proxy`
+  # does, to pass a legacy server's question on to a modern client, which
+  # answers it on a retry): the question goes unanswered, the stream is
+  # dropped, which tells the server the call was abandoned, and the throw
+  # carries on from `post/3`, out of Req.
 
   alias Sake.Client.{Auth, Challenge, Inputs, Session}
   alias Sake.JSONRPC
@@ -49,6 +55,9 @@ defmodule Sake.Client.Transport do
       )
 
     case result do
+      {:ok, %Req.Response{private: %{sake_throw: {:throw, value}}}} ->
+        throw(value)
+
       {:ok, %Req.Response{status: 401} = resp} ->
         {:error, {:unauthorized, challenge(resp)}}
 
@@ -77,16 +86,23 @@ defmodule Sake.Client.Transport do
         {events, buffer} = parse_sse((resp.private[:sake_buffer] || "") <> data)
         resp = put_in(resp.private[:sake_buffer], buffer)
 
-        {resp, done?} =
-          Enum.reduce(events, {resp, false}, fn event, {resp, done?} ->
-            {handle_event(event, resp, session), done? or final?(event, id)}
-          end)
-
+        {resp, done?} = handle_events(events, resp, session, id)
         if done?, do: {:halt, {req, resp}}, else: {:cont, {req, resp}}
 
       :json ->
         {:cont, {req, %{resp | body: (resp.body || "") <> data}}}
     end
+  end
+
+  # An abandoned call reads no further.
+  defp handle_events(events, resp, session, id) do
+    Enum.reduce_while(events, {resp, false}, fn event, {resp, done?} ->
+      resp = handle_event(event, resp, session)
+
+      if Map.has_key?(resp.private, :sake_throw),
+        do: {:halt, {resp, true}},
+        else: {:cont, {resp, done? or final?(event, id)}}
+    end)
   end
 
   defp content_type(resp) do
@@ -100,8 +116,7 @@ defmodule Sake.Client.Transport do
   defp handle_event(event, resp, session) do
     case JSONRPC.parse(event) do
       {:request, rid, method, params} ->
-        _ = post(session, answer(session, rid, method, params))
-        resp
+        answer_on_stream(session, rid, method, params, resp)
 
       {:notification, method, params} ->
         notify(session, method, params)
@@ -110,6 +125,13 @@ defmodule Sake.Client.Transport do
       _ ->
         collect(resp, event)
     end
+  end
+
+  defp answer_on_stream(session, rid, method, params, resp) do
+    _ = post(session, answer(session, rid, method, params))
+    resp
+  catch
+    :throw, value -> put_in(resp.private[:sake_throw], {:throw, value})
   end
 
   defp collect(resp, event),
