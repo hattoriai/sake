@@ -93,6 +93,21 @@ defmodule Sake.MiddlewareTest do
     defp redact(other), do: other
   end
 
+  defmodule Confirm do
+    @moduledoc false
+    # Asks the person before a call, as a tool's `prepare/2` can.
+    def call(%{ctx: %{scope: %{confirm: true}} = ctx} = payload, _opts) do
+      schema = %{"type" => "object", "properties" => %{"ok" => %{"type" => "boolean"}}}
+
+      case Sake.Elicit.form(ctx, :proceed, "Proceed?", schema) do
+        {:ok, %{"ok" => true}} -> {:cont, payload}
+        _ -> {:halt, {:tool_error, "Not confirmed."}}
+      end
+    end
+
+    def call(payload, _opts), do: {:cont, payload}
+  end
+
   defmodule Whoami do
     use Sake.Tool, name: "whoami", description: "Says what it was given"
     arg :text, :string
@@ -160,17 +175,17 @@ defmodule Sake.MiddlewareTest do
     prompts [Greet, Pitch]
 
     for event <- Sake.Middleware.events() do
-      middleware(event, [{Switch, event: event}])
+      middleware event, [{Switch, event: event}]
     end
 
-    middleware(:before_request, [Audit])
-    middleware(:after_list, [{Plans, pro: ["export", "vault://keys", "pitch"]}])
-    middleware(:before_call, [Tenant, Audit])
-    middleware(:after_call, [Audit, Redact])
-    middleware(:before_read, [Tenant, Audit])
-    middleware(:after_read, [Redact])
-    middleware(:before_get, [Tenant])
-    middleware(:after_get, [Redact])
+    middleware :before_request, [Audit]
+    middleware :after_list, [{Plans, pro: ["export", "vault://keys", "pitch"]}]
+    middleware :before_call, [Tenant, Audit, Confirm]
+    middleware :after_call, [Audit, Redact]
+    middleware :before_read, [Tenant, Audit]
+    middleware :after_read, [Redact]
+    middleware :before_get, [Tenant]
+    middleware :after_get, [Redact]
   end
 
   defmodule Plain do
@@ -432,6 +447,23 @@ defmodule Sake.MiddlewareTest do
       end
     end
 
+    for era <- [:modern, :legacy] do
+      test "a plug may ask the client before the call goes on (#{era})" do
+        for {answer, expected} <- [{true, "hi for acme"}, {false, "Not confirmed."}] do
+          client =
+            connect(Server,
+              era: unquote(era),
+              scope: scope(confirm: true),
+              on_input: fn _params -> {:accept, %{"ok" => answer}} end
+            )
+
+          assert {:ok, %ToolResult{text: text}} = call_tool(client, "whoami", %{"text" => "hi"})
+          assert String.starts_with?(text, expected)
+          assert_asked "elicitation/create", %{"message" => "Proceed?"}
+        end
+      end
+    end
+
     test "a task's after_call runs when it ends, with the call's assigns" do
       client = connect(Server, scope: scope())
       assert {:ok, %ToolResult{text: "report for acme: [redacted]"}} = call_tool(client, "report")
@@ -580,7 +612,7 @@ defmodule Sake.MiddlewareTest do
       assert MapSet.member?(pro, "export")
       assert Plain.__sake__(:middleware) == %{}
 
-      assert [{Switch, :before_call}, {Tenant, []}, {Audit, []}] =
+      assert [{Switch, :before_call}, {Tenant, []}, {Audit, []}, {Confirm, []}] =
                Server.__sake__(:middleware).before_call
     end
 
@@ -588,21 +620,21 @@ defmodule Sake.MiddlewareTest do
       assert_raise ArgumentError, ~r/:before_everything is not a middleware event/, fn ->
         defmodule Unknown do
           use Sake.Server, name: "x", version: "1"
-          middleware(:before_everything, [Audit])
+          middleware :before_everything, [Audit]
         end
       end
 
       assert_raise ArgumentError, ~r/has no call\/2/, fn ->
         defmodule NoCall do
           use Sake.Server, name: "x", version: "1"
-          middleware(:before_call, [Sake.MiddlewareTest.Whoami])
+          middleware :before_call, [Sake.MiddlewareTest.Whoami]
         end
       end
 
       assert_raise ArgumentError, ~r/must be a module or \{module, opts\}/, fn ->
         defmodule Odd do
           use Sake.Server, name: "x", version: "1"
-          middleware(:before_call, ["audit"])
+          middleware :before_call, ["audit"]
         end
       end
     end
