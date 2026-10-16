@@ -305,6 +305,35 @@ defmodule Sake.Auth.DPoPTest do
       assert conn.status == 400 and body(conn)["error_description"] =~ "already used"
     end
 
+    test "a proof is recorded only once the client is authenticated", %{config: config} do
+      {:ok, client, secret} =
+        Sake.Auth.Clients.create(config, %{
+          name: "Web",
+          redirect_uris: ["https://app.example/cb"],
+          confidential: true
+        })
+
+      basic = fn secret ->
+        {"authorization", "Basic " <> Base.encode64(client.id <> ":" <> secret)}
+      end
+
+      {key, _} = Keys.key()
+      proof = proof_for(key)
+      params = code_params(config, client)
+
+      # Refused for its client: the proof is not spent, nor the code.
+      conn = token(params, [basic.("wrong"), proof])
+      assert conn.status == 401 and body(conn)["error"] == "invalid_client"
+      assert token(params, [basic.(secret), proof]).status == 200
+
+      # Replayed by the authenticated client: refused, and the code it came
+      # with is not spent either.
+      fresh = code_params(config, client)
+      conn = token(fresh, [basic.(secret), proof])
+      assert conn.status == 400 and body(conn)["error_description"] =~ "already used"
+      assert token(fresh, [basic.(secret), proof_for(key)]).status == 200
+    end
+
     test "the client credentials grant binds its token too", %{config: config} do
       {:ok, client, secret} =
         Sake.Auth.Clients.create(config, %{

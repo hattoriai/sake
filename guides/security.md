@@ -148,7 +148,12 @@ external authorization server: give the `Sake` child
 under the Sake secret that every node accepts for five to ten minutes,
 so it limits how far ahead a proof can be made, not how often it is
 used. A proof refused only for its nonce is not recorded, so the
-client's retry goes through.
+client's retry goes through. At the token endpoint a proof is recorded
+only once the client has authenticated (and before a code or refresh
+token is consumed): a request that cannot name a client leaves nothing
+in the replay store, however many proofs it signs with keys of its
+own. Each entry is a digest of a fixed size, whatever the proof's
+`jti`.
 
 A DPoP-bound token sent as a bearer token is refused, and so is an
 unbound one sent with the `DPoP` scheme: the token's binding, not the
