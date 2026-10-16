@@ -38,7 +38,8 @@ defmodule Sake.Server do
   segment after the scheme (`invoice://billing/{id}`, `ui://billing/board`);
   `scope:` (one or many) adds required scopes to every component mounted.
   See `guides/composing.md` for what the mounted server's own middleware,
-  instructions, scopes and settings become.
+  instructions, scopes and settings become. A `Sake.Proxy` mounts as any
+  server does, with the components of its upstream.
   """
 
   require Logger

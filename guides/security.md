@@ -142,6 +142,35 @@ credential, so keep it as secret as the result it unlocks. A
 `tasks/update` answer only counts for a question the task is waiting
 on; anything else is ignored. See `guides/tasks.md`.
 
+## Proxies
+
+A `Sake.Proxy` stands between your clients and another server, so it
+keeps them apart there too:
+
+- **Upstream sessions per principal.** A proxy keeps one upstream
+  session per principal and per credential (a digest of what
+  `credentials/1` returned, never the credential itself as a key): one
+  person's upstream session, token, tasks or requests are never used for
+  another's. Only a stdio upstream is shared, since it is one process,
+  and the proxy sends it one request at a time, so that its questions
+  and log messages reach the caller they belong to.
+- **The upstream's request state, wrapped.** An upstream's
+  `requestState` reaches the client only inside the proxy's own, signed
+  and bound as above; a client cannot send its own in its
+  `inputResponses` (keys under Sake's prefix are dropped), and another
+  principal's is refused.
+- **The upstream's tasks, re-issued.** A client gets a task of the
+  proxy's, owned by its principal, never the upstream's task ID.
+- **Untrusted upstreams.** What an upstream lists is validated: an entry
+  of the wrong shape is left out, a tool's name must be one Sake
+  accepts, no name becomes an atom, and an upstream component never
+  shadows a local one of the same name. Its results and errors reach the
+  client as an upstream's, and a failure to reach it is logged rather
+  than described to the client.
+- **Your scopes on their tools.** `scope:`, `scopes:` and middleware gate
+  proxied components with your authorization server, and a component a
+  plug hides is hidden from calls as well as lists.
+
 ## Loopback redirects
 
 Sake accepts `https://` redirect URIs
