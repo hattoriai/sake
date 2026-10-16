@@ -15,6 +15,7 @@ defmodule Sake.Client.Session do
     :on_notification,
     :log_level,
     :stdio,
+    :local,
     :auth,
     headers: [],
     client_info: %{},

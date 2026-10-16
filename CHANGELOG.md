@@ -115,6 +115,21 @@ First release.
   span `[:sake, :client, :request]`, for the client's operation
   durations. `guides/observability.md` lists the events and spans, and
   how to move from protocol logging to `Logger` and OpenTelemetry.
+- `Sake.Test`: an in-memory client for a server's tests, on both eras.
+  `Sake.Test.connect/2` gives a `Sake.Client` whose transport is the
+  server itself: every request crosses as JSON into the real dispatchers
+  with a real `Sake.Context`, and the calls are `Sake.Client`'s without
+  the session. `scope:` sets the principal and `scopes:` a simulated
+  token (a person's, or with `subject: nil` a machine client's) that the
+  real scope checks gate; `on_input:`, `sampling:` and `roots:` answer
+  the server, with shorter forms for tests; `assert_asked/2`,
+  `assert_notification/2`, and `listen/2` with `assert_list_changed/1`
+  and `assert_resource_updated/1` assert on what the server asked, sent
+  and broadcast, per test, so tests can be `async: true`; tasks run in
+  the background and are followed without sleeping through their poll
+  interval (`await_task/3`); an exception in a component fails the test
+  as it was raised. `Sake.Test.start/0` starts what Sake needs when the
+  application does not. See `guides/testing.md`.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the

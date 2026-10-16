@@ -6,7 +6,8 @@ defmodule Sake.Client.Transport do
   # sampling, roots; see `Sake.Client.Inputs`). A legacy request is keyed
   # by `params["_meta"]["ai.hattori.sake/key"]` when a Sake server sent it,
   # or by the fixed key `"legacy"` for a foreign server that omits it. A
-  # stdio session's messages go to `Sake.Client.Stdio` instead.
+  # stdio session's messages go to `Sake.Client.Stdio` instead, and an
+  # in-memory session's to `Sake.Test.Endpoint`.
 
   alias Sake.Client.{Auth, Challenge, Inputs, Session}
   alias Sake.JSONRPC
@@ -22,6 +23,9 @@ defmodule Sake.Client.Transport do
 
   def post(%Session{stdio: pid} = session, message, opts) when is_pid(pid),
     do: Sake.Client.Stdio.post(session, message, opts)
+
+  def post(%Session{local: endpoint} = session, message, opts) when endpoint != nil,
+    do: Sake.Test.Endpoint.post(session, message, opts)
 
   def post(session, message, opts) do
     headers =
@@ -112,7 +116,16 @@ defmodule Sake.Client.Transport do
     do: put_in(resp.private[:sake_events], (resp.private[:sake_events] || []) ++ [event])
 
   @doc false
-  # The client's response to a legacy server's request, on either transport.
+  # Waits `ms` before a task is polled again. The in-memory endpoint sees
+  # the task itself, and ends the wait as soon as its status changes.
+  @spec wait(Session.t(), map(), non_neg_integer()) :: :ok
+  def wait(%Session{local: endpoint} = session, task, ms) when endpoint != nil,
+    do: Sake.Test.Endpoint.wait(session, task, ms)
+
+  def wait(_session, _task, ms), do: Process.sleep(ms)
+
+  @doc false
+  # The client's response to a legacy server's request, on any transport.
   @spec answer(Session.t(), JSONRPC.id(), String.t(), map()) :: map()
   def answer(session, rid, method, params) do
     # The handler's key travels in `_meta` under our vendor prefix (see

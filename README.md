@@ -74,6 +74,7 @@ See `guides/quickstart.md` for turning on authorization in five steps, or
 | `Sake.Client` authorization | yes | yes | yes (no resource metadata: the server's own) |
 | Client credentials, enterprise-managed authorization (`Sake.Auth`, `Sake.Client`) | yes | yes | yes |
 | OpenTelemetry tracing, client to server to tool (trace context in `_meta`) | yes | yes | yes |
+| `Sake.Test`, an in-memory client for a server's tests | yes | yes | yes |
 
 ## The authorization flow, briefly
 
@@ -111,6 +112,7 @@ Client credentials with a secret work without it.
 - [The client](guides/client.md)
 - [Stdio](guides/stdio.md)
 - [Observability](guides/observability.md)
+- [Testing](guides/testing.md)
 - [Protocol versions](guides/protocol_versions.md)
 - [Security](guides/security.md)
 
@@ -124,8 +126,9 @@ and stdio), which runs the MCP authorization flow itself (discovery,
 CIMD or dynamic registration, PKCE, refresh, step-up, or a grant without
 a person: client credentials, a JWT bearer grant, enterprise-managed
 authorization) and follows tasks; OpenTelemetry traces run from the
-client's call through the server into the tool. Next: DPoP and the
-device authorization grant.
+client's call through the server into the tool; and `Sake.Test`, which
+tests a server through an in-memory client. Next: DPoP and the device
+authorization grant.
 
 ## License
 

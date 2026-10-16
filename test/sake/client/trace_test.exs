@@ -254,6 +254,27 @@ defmodule Sake.Client.TraceTest do
     assert server.attributes["network.transport"] == "pipe"
   end
 
+  test "Sake.Test: the in-memory server continues the client's trace, on both eras" do
+    for era <- [:modern, :legacy] do
+      {_, root} =
+        agent(fn ->
+          client = Sake.Test.connect(SakeTest.TracedServer, era: era)
+
+          {:ok, %{structured: %{"baggage" => %{"user" => "ana"}}}} =
+            Sake.Test.call_tool(client, "traced")
+        end)
+
+      spans = Spans.await(["tools/call traced", "tools/call traced", "inside the tool"])
+      %{client: [client], server: [server]} = by_kind(spans["tools/call traced"])
+
+      assert child_of?(client, root)
+      assert child_of?(server, client)
+      assert child_of?(spans["inside the tool"], server)
+      assert client.attributes["network.transport"] == "inproc"
+      assert server.attributes["network.transport"] == "inproc"
+    end
+  end
+
   defp stdio(name, args) do
     paths =
       Mix.Project.build_path()

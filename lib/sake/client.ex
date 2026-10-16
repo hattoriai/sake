@@ -43,6 +43,10 @@ defmodule Sake.Client do
   `initialize`, default 10 000), `close_timeout:` (ms `close/1` waits for
   the server to exit before killing it, default 5 000).
 
+  `Sake.Test` connects the client to a server in the same VM, with the
+  server itself as the transport, for the server's tests (see
+  `guides/testing.md`).
+
   With `opentelemetry_api` in the host, each request is a CLIENT span and
   carries the current trace context in its `_meta`, so the server's spans
   join the caller's trace; the span of `call_tool/3` covers the whole
@@ -75,7 +79,7 @@ defmodule Sake.Client do
   # a step-up on a 403) before the error goes back to the caller.
   @max_authorizations 2
 
-  @spec connect(String.t() | {:stdio, String.t(), [String.t()]}, keyword()) ::
+  @spec connect(String.t() | {:stdio, String.t(), [String.t()]} | {:local, struct()}, keyword()) ::
           {:ok, Session.t()} | {:error, term()}
   def connect(target, opts \\ [])
 
@@ -91,6 +95,10 @@ defmodule Sake.Client do
       end
     end
   end
+
+  # `Sake.Test`'s in-memory endpoint, in place of a transport.
+  def connect({:local, endpoint}, opts),
+    do: open(%{build_session(nil, opts) | local: endpoint}, opts)
 
   def connect(url, opts), do: open(build_session(url, opts), opts)
 
@@ -494,6 +502,9 @@ defmodule Sake.Client do
   @spec close(Session.t()) :: :ok
   def close(%Session{stdio: pid}) when is_pid(pid), do: Sake.Client.Stdio.close(pid)
 
+  # Like the HTTP endpoint, the in-memory one keeps nothing per session.
+  def close(%Session{local: endpoint}) when endpoint != nil, do: :ok
+
   def close(%Session{era: :legacy, session_id: sid} = session) when is_binary(sid),
     do: Transport.delete(session)
 
@@ -535,7 +546,7 @@ defmodule Sake.Client do
       method: method,
       era: session.era,
       protocol_version: session.revision,
-      transport: if(session.stdio, do: :stdio, else: :http)
+      transport: transport(session)
     }
 
     Trace.client(session, method, params, fn ->
@@ -545,6 +556,10 @@ defmodule Sake.Client do
       end)
     end)
   end
+
+  defp transport(%Session{stdio: pid}) when is_pid(pid), do: :stdio
+  defp transport(%Session{local: nil}), do: :http
+  defp transport(_session), do: :local
 
   defp error_type({:ok, %{"isError" => true}, _session}), do: "tool_error"
   defp error_type({:ok, _result, _session}), do: nil
@@ -728,7 +743,7 @@ defmodule Sake.Client do
       _ = cancel_task(session, task["taskId"])
       {:error, :task_timeout, session}
     else
-      Process.sleep(min(task["pollIntervalMs"] || 1_000, left))
+      :ok = Transport.wait(session, task, min(task["pollIntervalMs"] || 1_000, left))
 
       with {:ok, task, session} <- get_task(session, task["taskId"]),
            do: follow(session, task, deadline, asked)

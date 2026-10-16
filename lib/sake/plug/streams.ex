@@ -53,6 +53,22 @@ defmodule Sake.Plug.Streams do
   def register_legacy(server, session_nonce),
     do: register({server, :legacy, session_nonce}, nil)
 
+  @doc false
+  # Registers the calling process as a test's listener (`Sake.Test`): it
+  # gets `{tag, server, event}` for the broadcasts of `server` made by
+  # `owner` or by a process `owner` started (its `$callers`), so tests
+  # running concurrently do not see each other's. An `owner` of `:any`
+  # gets every broadcast of the server.
+  def register_test(server, owner, tag), do: register({server, :test, owner}, tag)
+
+  @doc false
+  def unregister_test(server, owner, tag) do
+    if Process.whereis(@registry),
+      do: Registry.unregister_match(@registry, {server, :test, owner}, tag)
+
+    :ok
+  end
+
   @doc "Registers the calling process as waiting for the client's answer to request `id`."
   def register_request(id), do: register({:request, id}, nil)
 
@@ -102,6 +118,7 @@ defmodule Sake.Plug.Streams do
     if Process.whereis(@registry) do
       notify_listeners(server, event)
       notify_legacy_streams(server, event)
+      notify_tests(server, event)
     end
 
     :ok
@@ -116,6 +133,15 @@ defmodule Sake.Plug.Streams do
     |> Registry.select([{{{server, :legacy, :_}, :"$1", :_}, [], [:"$1"]}])
     |> Enum.each(&send(&1, {:sake_notify, event}))
   end
+
+  defp notify_tests(server, event) do
+    for owner <- [:any, self() | Process.get(:"$callers", [])] do
+      Registry.dispatch(@registry, {server, :test, owner}, &send_tagged(&1, server, event))
+    end
+  end
+
+  defp send_tagged(entries, server, event),
+    do: for({pid, tag} <- entries, do: send(pid, {tag, server, event}))
 
   defp send_each(entries, event),
     do: for({pid, _} <- entries, do: send(pid, {:sake_notify, event}))
