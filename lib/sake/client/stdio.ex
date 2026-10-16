@@ -104,6 +104,11 @@ defmodule Sake.Client.Stdio do
 
   @impl true
   def init({path, args, opts}) do
+    # A server that exits before it reads its input breaks the pipe, and
+    # the port exits with `:epipe`: trapped, that ends this process like
+    # any other exit of the server, instead of taking the caller with it.
+    Process.flag(:trap_exit, true)
+
     {path, args} =
       if opts[:stderr] == :ignore,
         do: {"/bin/sh", ["-c", ~s(exec "$0" "$@" 2>/dev/null), path | args]},
@@ -116,7 +121,13 @@ defmodule Sake.Client.Stdio do
           env(opts[:env]) ++ cd(opts[:cd])
       )
 
-    {:os_pid, os_pid} = Port.info(port, :os_pid)
+    # A server that exited at once may have closed its port already; its
+    # exit is then waiting in the mailbox, and there is no process to stop.
+    os_pid =
+      case Port.info(port, :os_pid) do
+        {:os_pid, os_pid} -> os_pid
+        nil -> nil
+      end
 
     {:ok,
      %{
@@ -196,6 +207,16 @@ defmodule Sake.Client.Stdio do
     {:stop, :normal, state}
   end
 
+  def handle_info({:EXIT, port, reason}, %{port: port} = state) do
+    Logger.debug("Sake.Client stdio server's port closed: #{inspect(reason)}")
+    {:stop, :normal, state}
+  end
+
+  # Exits are trapped only for the port's sake: the caller's exit still
+  # ends this process (and so the server's input) unless it was normal.
+  def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
+  def handle_info({:EXIT, _pid, _reason}, state), do: {:stop, :normal, state}
+
   def handle_info(_message, state), do: {:noreply, state}
 
   defp dispatch("", state), do: state
@@ -249,7 +270,12 @@ defmodule Sake.Client.Stdio do
 
   defp route(_parsed, _message, state), do: state
 
-  defp write(state, message), do: Port.command(state.port, [JSON.encode!(message), ?\n])
+  # A port that already closed has its exit waiting in the mailbox.
+  defp write(state, message) do
+    Port.command(state.port, [JSON.encode!(message), ?\n])
+  rescue
+    ArgumentError -> true
+  end
 
   # A server that exited on its own has taken its port with it.
   defp close_port(port) do
@@ -272,8 +298,12 @@ defmodule Sake.Client.Stdio do
     end
   end
 
+  defp alive?(nil), do: false
+
   defp alive?(os_pid),
     do: match?({_, 0}, System.cmd("kill", ["-0", to_string(os_pid)], stderr_to_stdout: true))
+
+  defp signal(nil, _name), do: :ok
 
   defp signal(os_pid, name),
     do: System.cmd("kill", ["-" <> name, to_string(os_pid)], stderr_to_stdout: true)

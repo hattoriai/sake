@@ -1,9 +1,30 @@
 defmodule Sake.ElicitTest do
   use ExUnit.Case, async: false
 
+  import Sake.Test
+
   alias SakeTest.{HTTP, ModernClient}
 
   @caps %{"elicitation" => %{}}
+
+  defmodule Secret do
+    use Sake.Resource, uri: "secret://{id}", name: "secret", mime_type: "text/plain"
+
+    def read(%{id: id}, ctx) do
+      case Sake.Elicit.form(ctx, :pin, "PIN?", %{
+             "type" => "object",
+             "properties" => %{"pin" => %{"type" => "string"}}
+           }) do
+        {:ok, %{"pin" => pin}} -> {:ok, "secret #{id} unlocked with #{pin}"}
+        _ -> {:error, "no pin"}
+      end
+    end
+  end
+
+  defmodule SecretServer do
+    use Sake.Server, name: "s", version: "1"
+    resources [Secret]
+  end
 
   describe "modern (multi round-trip)" do
     test "input required, then the retry completes" do
@@ -249,26 +270,19 @@ defmodule Sake.ElicitTest do
       assert {:ok, %{}} == Sake.Server.RequestState.verify(ctx, "confirm", %{}, state)
     end
 
-    test "a resource can elicit and complete on retry" do
-      defmodule Secret do
-        use Sake.Resource, uri: "secret://{id}", name: "secret", mime_type: "text/plain"
+    test "a resource can elicit, on both eras" do
+      for era <- [:modern, :legacy] do
+        client =
+          connect(SecretServer, era: era, on_input: fn _ -> {:accept, %{"pin" => "1234"}} end)
 
-        def read(%{id: id}, ctx) do
-          case Sake.Elicit.form(ctx, :pin, "PIN?", %{
-                 "type" => "object",
-                 "properties" => %{"pin" => %{"type" => "string"}}
-               }) do
-            {:ok, %{"pin" => pin}} -> {:ok, "secret #{id} unlocked with #{pin}"}
-            _ -> {:error, "no pin"}
-          end
-        end
+        assert {:ok, [%{text: "secret 7 unlocked with 1234"}]} =
+                 read_resource(client, "secret://7")
+
+        assert_asked "elicitation/create", %{"message" => "PIN?"}
       end
+    end
 
-      defmodule SecretServer do
-        use Sake.Server, name: "s", version: "1"
-        resources [Secret]
-      end
-
+    test "a resource's request state is bound to its URI" do
       opts = ModernClient.opts(server: SecretServer)
 
       conn =
@@ -281,24 +295,6 @@ defmodule Sake.ElicitTest do
                  "requestState" => state
                }
              } = ModernClient.json(conn)
-
-      conn =
-        ModernClient.post(
-          opts,
-          "resources/read",
-          %{
-            "uri" => "secret://7",
-            "inputResponses" => %{
-              "pin" => %{"action" => "accept", "content" => %{"pin" => "1234"}}
-            },
-            "requestState" => state
-          },
-          capabilities: @caps,
-          id: 2
-        )
-
-      assert %{"result" => %{"contents" => [%{"text" => "secret 7 unlocked with 1234"}]}} =
-               ModernClient.json(conn)
 
       conn =
         ModernClient.post(

@@ -46,6 +46,26 @@ defmodule Sake.Auth.BearerTest do
 
     assert challenge ==
              ~s(Bearer error="insufficient_scope", scope="issues:write", resource_metadata="http://www.example.com/.well-known/oauth-protected-resource/mcp")
+
+    # A call that would stream, because it asks for progress, is refused
+    # the same way rather than on a stream.
+    {none, _, _} = issue(config, %{scopes: []})
+
+    for {token, method, params} <- [
+          {access, "tools/call", %{"name" => "slow", "arguments" => %{"n" => 1}}},
+          {none, "resources/read", %{"uri" => "issue://1"}}
+        ] do
+      conn =
+        ModernClient.post(opts(), method, params,
+          headers: [{"authorization", "Bearer " <> token}],
+          meta: %{"progressToken" => 1}
+        )
+
+      assert conn.status == 403
+
+      assert [~s(Bearer error="insufficient_scope", scope=) <> _] =
+               get_resp_header(conn, "www-authenticate")
+    end
   end
 
   test "the scheme name is case-insensitive; the token follows one space", %{config: config} do

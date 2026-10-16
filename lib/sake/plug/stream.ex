@@ -59,19 +59,19 @@ defmodule Sake.Plug.Stream do
 
   @asks ["elicitation", "sampling", "roots"]
 
-  defp stream?(method, params, ctx) do
+  # A call refused for its scopes is never streamed, whatever asked for a
+  # stream: the refusal is a plain JSON-RPC response with the usual status
+  # (a 403 with its challenge, for a client to step up), instead of a 200
+  # stream carrying the error as its only message.
+  defp stream?(method, params, ctx),
+    do: not refused?(method, params, ctx) and streamed?(method, params, ctx)
+
+  defp streamed?(method, params, ctx) do
     token = get_in(params, ["_meta", "progressToken"])
 
-    # A tool that streams on its own (no progress token asked for) only
-    # opens the SSE response when the call is actually allowed; otherwise
-    # the scope error is a plain JSON-RPC response with the usual status,
-    # instead of a 200 stream carrying the error as its only message.
     tool_streams =
       method == "tools/call" and
-        case Sake.Server.tool(ctx.server, params["name"] || "") do
-          {:ok, %{stream: true} = spec} -> Sake.Server.allowed?(spec, ctx)
-          _ -> false
-        end
+        match?({:ok, %{stream: true}}, Sake.Server.tool(ctx.server, params["name"] || ""))
 
     # A legacy client that can be asked something (elicitation, sampling,
     # roots) gets the stream the question would travel on.
@@ -81,6 +81,24 @@ defmodule Sake.Plug.Stream do
 
     token != nil or tool_streams or legacy_asks
   end
+
+  defp refused?(method, params, ctx) do
+    case component(method, params, ctx.server) do
+      {:ok, spec} -> not Sake.Server.allowed?(spec, ctx)
+      _ -> false
+    end
+  end
+
+  defp component("tools/call", params, server), do: Sake.Server.tool(server, params["name"] || "")
+
+  defp component("prompts/get", params, server),
+    do: Sake.Server.prompt(server, params["name"] || "")
+
+  defp component("resources/read", %{"uri" => uri}, server) when is_binary(uri) do
+    with {:ok, spec, _params} <- Sake.Server.resource(server, uri), do: {:ok, spec}
+  end
+
+  defp component(_method, _params, _server), do: :error
 
   defp stream(conn, opts, {:request, id, _method, params} = parsed, ctx, handler) do
     conn = SSE.start(conn)

@@ -13,7 +13,9 @@ defmodule Sake.Client do
   error} end`), `roots:` to share roots (a list of `%{"uri" => ...,
   "name" => ...}` maps, or a function of the session that returns one),
   `on_notification:` (a function of a method and its params) to see the
-  progress and log notifications of a call, and `auth:` to have the client
+  progress and log notifications of a call, `log_level:` (a level name
+  such as `"info"`) to have the server send log messages at or above it
+  (see `set_log_level/2`), and `auth:` to have the client
   run the MCP authorization flow itself on a 401 (see `Sake.Client.Auth`);
   without it, a 401 comes back as
   `{:error, {:unauthorized, %Sake.Client.Challenge{}}}`.
@@ -40,6 +42,10 @@ defmodule Sake.Client do
   to wait for an answer to the modern probe before falling back to
   `initialize`, default 10 000), `close_timeout:` (ms `close/1` waits for
   the server to exit before killing it, default 5 000).
+
+  `Sake.Test` connects the client to a server in the same VM, with the
+  server itself as the transport, for the server's tests (see
+  `guides/testing.md`).
 
   With `opentelemetry_api` in the host, each request is a CLIENT span and
   carries the current trace context in its `_meta`, so the server's spans
@@ -73,7 +79,7 @@ defmodule Sake.Client do
   # a step-up on a 403) before the error goes back to the caller.
   @max_authorizations 2
 
-  @spec connect(String.t() | {:stdio, String.t(), [String.t()]}, keyword()) ::
+  @spec connect(String.t() | {:stdio, String.t(), [String.t()]} | {:local, struct()}, keyword()) ::
           {:ok, Session.t()} | {:error, term()}
   def connect(target, opts \\ [])
 
@@ -89,6 +95,10 @@ defmodule Sake.Client do
       end
     end
   end
+
+  # `Sake.Test`'s in-memory endpoint, in place of a transport.
+  def connect({:local, endpoint}, opts),
+    do: open(%{build_session(nil, opts) | local: endpoint}, opts)
 
   def connect(url, opts), do: open(build_session(url, opts), opts)
 
@@ -123,6 +133,7 @@ defmodule Sake.Client do
       sampling: opts[:sampling],
       roots: opts[:roots],
       on_notification: opts[:on_notification],
+      log_level: opts[:log_level] && to_string(opts[:log_level]),
       tasks: Keyword.get(opts, :tasks, true),
       task_timeout: opts[:task_timeout] || 300_000,
       # There is no HTTP authorization on stdio: the server takes its
@@ -281,19 +292,30 @@ defmodule Sake.Client do
 
     with {:ok, result, session} <- request(session, "initialize", params),
          {:ok, :accepted, session} <-
-           post(session, JSONRPC.notification("notifications/initialized"), []) do
-      {:ok,
-       %{
-         session
-         | revision: result["protocolVersion"],
-           server_capabilities: result["capabilities"] || %{},
-           server_info: result["serverInfo"],
-           instructions: result["instructions"]
-       }}
+           post(session, JSONRPC.notification("notifications/initialized"), []),
+         session = %{
+           session
+           | revision: result["protocolVersion"],
+             server_capabilities: result["capabilities"] || %{},
+             server_info: result["serverInfo"],
+             instructions: result["instructions"]
+         },
+         {:ok, session} <- initial_log_level(session) do
+      {:ok, session}
     else
       {:error, reason, _} -> {:error, reason}
       {:ok, _other, _} -> {:error, :bad_initialized_ack}
     end
+  end
+
+  # A legacy session's log level belongs to the session: the client sets
+  # it once the handshake is done.
+  defp initial_log_level(%Session{log_level: nil} = session), do: {:ok, session}
+
+  defp initial_log_level(session) do
+    with {:ok, _, session} <-
+           request(session, "logging/setLevel", %{"level" => session.log_level}),
+         do: {:ok, session}
   end
 
   # ---- calls
@@ -309,6 +331,23 @@ defmodule Sake.Client do
   def ping(session) do
     with {:ok, _, session} <- discover(session), do: {:ok, session}
   end
+
+  @doc """
+  Asks the server for log messages at `level` or above (`"debug"` to
+  `"emergency"`), which then reach `on_notification:` during a call. On
+  the modern protocol the level travels in every request's `_meta`; on a
+  legacy session the client sends `logging/setLevel`.
+  """
+  @spec set_log_level(Session.t(), String.t() | atom()) ::
+          {:ok, Session.t()} | {:error, term(), Session.t()}
+  def set_log_level(%Session{era: :legacy} = session, level) do
+    level = to_string(level)
+
+    with {:ok, _, session} <- request(session, "logging/setLevel", %{"level" => level}),
+         do: {:ok, %{session | log_level: level}}
+  end
+
+  def set_log_level(session, level), do: {:ok, %{session | log_level: to_string(level)}}
 
   @spec list_tools(Session.t()) ::
           {:ok, [Sake.Tool.Spec.t()], Session.t()} | {:error, term(), Session.t()}
@@ -463,6 +502,9 @@ defmodule Sake.Client do
   @spec close(Session.t()) :: :ok
   def close(%Session{stdio: pid}) when is_pid(pid), do: Sake.Client.Stdio.close(pid)
 
+  # Like the HTTP endpoint, the in-memory one keeps nothing per session.
+  def close(%Session{local: endpoint}) when endpoint != nil, do: :ok
+
   def close(%Session{era: :legacy, session_id: sid} = session) when is_binary(sid),
     do: Transport.delete(session)
 
@@ -504,7 +546,7 @@ defmodule Sake.Client do
       method: method,
       era: session.era,
       protocol_version: session.revision,
-      transport: if(session.stdio, do: :stdio, else: :http)
+      transport: transport(session)
     }
 
     Trace.client(session, method, params, fn ->
@@ -514,6 +556,10 @@ defmodule Sake.Client do
       end)
     end)
   end
+
+  defp transport(%Session{stdio: pid}) when is_pid(pid), do: :stdio
+  defp transport(%Session{local: nil}), do: :http
+  defp transport(_session), do: :local
 
   defp error_type({:ok, %{"isError" => true}, _session}), do: "tool_error"
   defp error_type({:ok, _result, _session}), do: nil
@@ -622,11 +668,15 @@ defmodule Sake.Client do
     do: Map.update(params, "_meta", %{"progressToken" => id}, &Map.put(&1, "progressToken", id))
 
   defp meta(session) do
-    %{
+    meta = %{
       Protocol.meta(:protocol_version) => session.revision || Protocol.modern(),
       Protocol.meta(:client_info) => session.client_info,
       Protocol.meta(:client_capabilities) => modern_capabilities(session)
     }
+
+    if session.log_level,
+      do: Map.put(meta, Protocol.meta(:log_level), session.log_level),
+      else: meta
   end
 
   # The tasks extension is modern only, so it is declared per request
@@ -693,7 +743,7 @@ defmodule Sake.Client do
       _ = cancel_task(session, task["taskId"])
       {:error, :task_timeout, session}
     else
-      Process.sleep(min(task["pollIntervalMs"] || 1_000, left))
+      :ok = Transport.wait(session, task, min(task["pollIntervalMs"] || 1_000, left))
 
       with {:ok, task, session} <- get_task(session, task["taskId"]),
            do: follow(session, task, deadline, asked)

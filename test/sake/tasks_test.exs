@@ -1,6 +1,8 @@
 defmodule Sake.TasksTest do
   use ExUnit.Case, async: false
 
+  import Sake.Test
+
   alias Sake.Tasks.Record
   alias SakeTest.{HTTP, LegacyClient, ModernClient}
 
@@ -440,34 +442,25 @@ defmodule Sake.TasksTest do
         tools [Asker]
       end
 
-      opts = ModernClient.opts(server: AskerServer)
-      caps = Map.merge(@tasks, %{"sampling" => %{}, "roots" => %{}})
-      id = start(opts, "asker", %{}, caps)
-      task = await(opts, id, &(map_size(&1["inputRequests"] || %{}) == 2), caps)
+      client =
+        connect(AskerServer, sampling: fn _params -> "yo" end, roots: [%{"uri" => "file:///r"}])
 
-      assert %{
-               "sample" => %{"method" => "sampling/createMessage"},
-               "roots" => %{"method" => "roots/list", "params" => %{}}
-             } = task["inputRequests"]
+      # The tool runs as a task, and asks through it.
+      assert {:ok, {:task, %{"taskId" => id}}} = call_tool_async(client, "asker")
 
-      rpc(
-        opts,
-        "tasks/update",
-        %{
-          "taskId" => id,
-          "inputResponses" => %{
-            "sample" => %{"role" => "assistant", "content" => %{"type" => "text", "text" => "yo"}},
-            "roots" => %{"roots" => [%{"uri" => "file:///r"}]}
-          }
-        },
-        caps
-      )
+      assert {:ok, %{"status" => "input_required", "inputRequests" => asked}} =
+               await_task(client, id)
 
-      assert %{
-               "status" => "completed",
-               "result" => %{"content" => [%{"text" => "yo file:///r yo"}]}
-             } =
-               await(opts, id, &terminal?/1, caps)
+      assert asked != %{} and Map.keys(asked) -- ["sample", "roots"] == []
+      :ok = cancel_task(client, id)
+
+      # Followed to the end, the questions are answered through
+      # tasks/update, and the sampling key asked twice reaches the client
+      # once.
+      assert {:ok, %{text: "yo file:///r yo"}} = call_tool(client, "asker")
+      assert_asked "sampling/createMessage", %{"maxTokens" => 5}
+      assert_asked "roots/list"
+      refute_asked "sampling/createMessage"
     end
 
     test "prepare/2 asks on the original request, then the task takes over" do
@@ -502,44 +495,31 @@ defmodule Sake.TasksTest do
 
   describe "security" do
     test "a task belongs to its creator's principal; anyone else is told it does not exist" do
-      scoped = opts(scope: fn conn -> Plug.Conn.get_req_header(conn, "x-who") end)
-      as = fn who -> [headers: [{"x-who", who}]] end
+      ana = connect(SakeDev.ConformanceServer, scope: "ana")
 
-      assert %{"result" => %{"taskId" => id}} =
-               rpc(
-                 scoped,
-                 "tools/call",
-                 %{"name" => "slow_compute", "arguments" => %{"seconds" => 60}},
-                 @tasks,
-                 as.("ana")
-               )
+      assert {:ok, {:task, %{"taskId" => id}}} =
+               call_tool_async(ana, "slow_compute", %{"seconds" => 60})
 
-      assert %{"result" => %{"status" => "working"}} =
-               rpc(scoped, "tasks/get", %{"taskId" => id}, @tasks, as.("ana"))
+      assert {:ok, %{"status" => "working"}} = get_task(ana, id)
 
-      for method <- ["tasks/get", "tasks/update", "tasks/cancel"] do
-        assert %{
-                 "error" => %{
-                   "code" => -32_602,
-                   "message" => "Failed to retrieve task: Task not found"
-                 }
-               } =
-                 rpc(
-                   scoped,
-                   method,
-                   %{"taskId" => id, "inputResponses" => %{}},
-                   @tasks,
-                   as.("bob")
-                 )
+      bob = connect(SakeDev.ConformanceServer, scope: "bob")
+      nobody = connect(SakeDev.ConformanceServer)
+
+      for refused <- [
+            get_task(bob, id),
+            update_task(bob, id, %{}),
+            cancel_task(bob, id),
+            get_task(nobody, id)
+          ] do
+        assert {:error,
+                {:rpc,
+                 %{"code" => -32_602, "message" => "Failed to retrieve task: Task not found"}}} =
+                 refused
       end
 
-      assert %{"error" => %{"code" => -32_602}} =
-               rpc(opts(), "tasks/get", %{"taskId" => id}, @tasks)
-
-      assert %{"result" => %{"status" => "working"}} =
-               rpc(scoped, "tasks/get", %{"taskId" => id}, @tasks, as.("ana"))
-
-      rpc(scoped, "tasks/cancel", %{"taskId" => id}, @tasks, as.("ana"))
+      assert {:ok, %{"status" => "working"}} = get_task(ana, id)
+      assert :ok = cancel_task(ana, id)
+      assert {:ok, %{"status" => "cancelled"}} = get_task(ana, id)
     end
 
     test "the token's subject is the principal when there is one" do

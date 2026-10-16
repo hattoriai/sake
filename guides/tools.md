@@ -300,3 +300,17 @@ endpoint has no token, so every tool is allowed regardless of its
 declared scope, with its description, across the servers an authorization
 configuration lists — that list is what a consent page and the
 `scopes_supported` discovery field show.
+
+## Testing a tool
+
+`Sake.Test` calls a server's tools from a test as a client would, in
+memory, with a principal and scopes of the test's choosing:
+
+```elixir
+import Sake.Test
+
+client = connect(MyApp.MCP, scope: user, scopes: ["issues:read"])
+assert {:ok, %{structured: %{"sum" => 3}}} = call_tool(client, "add", %{"a" => 1, "b" => 2})
+```
+
+See `guides/testing.md`.

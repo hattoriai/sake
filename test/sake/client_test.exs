@@ -358,6 +358,43 @@ defmodule Sake.ClientTest do
     end
   end
 
+  test "log_level: and set_log_level/2 ask for log messages, on both eras" do
+    url = HTTP.start(__MODULE__.ConformanceRouter) <> "/mcp"
+    parent = self()
+    on_notification = fn method, params -> send(parent, {:notified, method, params}) end
+
+    for era <- [:modern, :legacy] do
+      assert {:ok, session} = Client.connect(url, era: era, on_notification: on_notification)
+
+      assert {:ok, %{text: "Done."}, session} =
+               Client.call_tool(session, "test_logging_tool", %{})
+
+      refute_received {:notified, "notifications/message", _}
+
+      assert {:ok, session} = Client.set_log_level(session, :info)
+      assert {:ok, %{text: "Done."}, _} = Client.call_tool(session, "test_logging_tool", %{})
+
+      for data <- ["Tool execution started", "Tool execution completed"],
+          do:
+            assert_received(
+              {:notified, "notifications/message", %{"level" => "info", "data" => ^data}}
+            )
+
+      assert {:ok, session} =
+               Client.connect(url, era: era, on_notification: on_notification, log_level: "error")
+
+      assert {:ok, %{text: "Done."}, session} =
+               Client.call_tool(session, "test_logging_tool", %{})
+
+      refute_received {:notified, "notifications/message", _}
+
+      assert {:ok, session} = Client.set_log_level(session, "debug")
+      assert {:ok, %{text: "Done."}, _} = Client.call_tool(session, "test_logging_tool", %{})
+      assert_received {:notified, "notifications/message", %{"level" => "info"}}
+      assert_received {:notified, "notifications/message", %{"level" => "info"}}
+    end
+  end
+
   test "on a legacy stream, a sampling error goes back as a JSON-RPC error", %{url: url} do
     sampling = fn _params, _session -> {:error, %{"code" => -1, "message" => "Declined"}} end
     assert {:ok, session} = Client.connect(url, era: :legacy, sampling: sampling)

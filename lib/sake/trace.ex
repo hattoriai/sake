@@ -39,7 +39,8 @@ defmodule Sake.Trace do
   # resource-not-found. On a CLIENT span every error code is an error.
   @not_errors [-32_700, -32_600, -32_601, -32_602, -32_002]
 
-  @type transport :: {:http, Plug.Conn.t()} | {:stdio, String.t() | nil}
+  @type transport ::
+          {:http, Plug.Conn.t()} | {:stdio, String.t() | nil} | {:local, String.t() | nil}
 
   @doc "Whether Sake makes spans: `opentelemetry_api` is there, and the host has not turned them off."
   @spec enabled?() :: boolean()
@@ -57,7 +58,8 @@ defmodule Sake.Trace do
   context in the request's `_meta`, linked to the transport's; without
   one in `_meta`, the child of the transport's (see
   `Sake.Trace.OpenTelemetry.server_span/4`). `transport` is `{:http,
-  conn}` or `{:stdio, session}`, `session` the legacy session's identity.
+  conn}`, `{:stdio, session}` or `{:local, session}` (`Sake.Test`),
+  `session` the legacy session's identity.
   """
   @spec server(Sake.JSONRPC.parsed(), Context.t(), transport(), (-> result)) :: result
         when result: var
@@ -90,10 +92,10 @@ defmodule Sake.Trace do
   defp carrier(_meta), do: []
 
   defp headers({:http, conn}), do: conn.req_headers
-  defp headers({:stdio, _session}), do: []
+  defp headers(_transport), do: []
 
   defp session({:http, conn}), do: conn.assigns[:sake_session_nonce]
-  defp session({:stdio, session}), do: session
+  defp session({_transport, session}), do: session
 
   defp transport_attributes({:http, conn}) do
     %{
@@ -105,6 +107,7 @@ defmodule Sake.Trace do
   end
 
   defp transport_attributes({:stdio, _session}), do: %{"network.transport" => "pipe"}
+  defp transport_attributes({:local, _session}), do: %{"network.transport" => "inproc"}
 
   defp http_version(conn),
     do: conn |> Plug.Conn.get_http_protocol() |> to_string() |> String.replace_prefix("HTTP/", "")
@@ -140,6 +143,7 @@ defmodule Sake.Trace do
   end
 
   defp server_attributes(%{stdio: pid}) when is_pid(pid), do: %{"network.transport" => "pipe"}
+  defp server_attributes(%{local: %{}}), do: %{"network.transport" => "inproc"}
 
   defp server_attributes(%{url: url}) do
     uri = URI.parse(url)

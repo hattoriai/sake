@@ -1,6 +1,8 @@
 defmodule Sake.Server.UITest do
   use ExUnit.Case, async: true
 
+  import Sake.Test
+
   alias SakeTest.{LegacyClient, ModernClient}
 
   @ui "io.modelcontextprotocol/ui"
@@ -78,11 +80,6 @@ defmodule Sake.Server.UITest do
     opts |> ModernClient.post(method, params, capabilities: caps) |> ModernClient.json()
   end
 
-  defp legacy(caps, revision \\ "2025-11-25") do
-    session = LegacyClient.initialize(opts(), revision, caps)
-    {session, &(opts() |> LegacyClient.post(session, &1, &2) |> LegacyClient.json())}
-  end
-
   defp names(tools), do: Enum.map(tools, & &1["name"])
 
   describe "capabilities" do
@@ -102,7 +99,7 @@ defmodule Sake.Server.UITest do
       refute Map.has_key?(caps, "extensions")
 
       for revision <- ["2025-11-25", "2025-06-18", "2025-03-26"] do
-        {session, _} = legacy(%{}, revision)
+        session = LegacyClient.initialize(opts(), revision)
         assert session.result["capabilities"]["extensions"] == %{@ui => %{}}
       end
 
@@ -257,36 +254,26 @@ defmodule Sake.Server.UITest do
 
   describe "legacy" do
     test "a session that declared the extension in initialize is a host" do
-      {_session, call} = legacy(@host)
-      assert %{"result" => %{"tools" => tools} = r} = call.("tools/list", %{})
-      assert "move_card" in names(tools)
+      client = connect(Server, era: :legacy, ui: true)
+      assert {:ok, tools} = list_tools(client)
 
-      assert Enum.find(tools, &(&1["name"] == "move_card"))["_meta"]["ui"]["visibility"] == [
-               "app"
-             ]
+      assert %Sake.Tool.Spec{ui: "ui://test/board", visibility: [:app]} =
+               Enum.find(tools, &(&1.name == "move_card"))
 
-      refute Map.has_key?(r, "cacheScope")
-
-      assert %{"result" => %{"resources" => [_, %{"uri" => "ui://test/board", "_meta" => _}]}} =
-               call.("resources/list", %{})
-
-      assert %{"result" => %{"contents" => [%{"_meta" => %{"ui" => _}}]}} =
-               call.("resources/read", %{"uri" => "ui://test/board"})
-
-      assert %{"result" => %{"content" => [%{"text" => "moved 2"}]}} =
-               call.("tools/call", %{"name" => "move_card", "arguments" => %{"card" => 2}})
+      assert {:ok, [_, %{"uri" => "ui://test/board", "_meta" => _}]} = list_resources(client)
+      assert {:ok, [%Sake.Content{meta: %{"ui" => _}}]} = read_resource(client, "ui://test/board")
+      assert {:ok, %{text: "moved 2"}} = call_tool(client, "move_card", %{"card" => 2})
     end
 
     test "a session without it gets plain tools" do
-      {_session, call} = legacy(%{})
-      assert %{"result" => %{"tools" => tools}} = call.("tools/list", %{})
-      assert names(tools) == ["echo", "show_board", "summary", "export_board"]
+      client = connect(Server, era: :legacy)
+      assert {:ok, tools} = list_tools(client)
+      assert Enum.map(tools, & &1.name) == ["echo", "show_board", "summary", "export_board"]
+      assert Enum.all?(tools, &(&1.ui == nil))
+      assert {:ok, [%{"uri" => "dev://readme"}]} = list_resources(client)
 
-      assert %{"result" => %{"resources" => [%{"uri" => "dev://readme"}]}} =
-               call.("resources/list", %{})
-
-      assert %{"error" => %{"code" => -32_602}} =
-               call.("tools/call", %{"name" => "move_card", "arguments" => %{"card" => 2}})
+      assert {:error, {:rpc, %{"code" => -32_602}}} =
+               call_tool(client, "move_card", %{"card" => 2})
     end
   end
 
