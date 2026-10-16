@@ -222,9 +222,15 @@ handler that is already mid-flow.
 
 A task ID carries 144 random bits, and every task is bound to the
 principal that created it — the token's subject, otherwise a SHA-256
-digest of the host's scope. `tasks/get`, `tasks/update`, `tasks/cancel`
-and a `subscriptions/listen` asking for `taskIds` treat another
-principal's task exactly like one that does not exist. On an endpoint
+digest of the host's scope — and to what it was created through: the
+server, the token's OAuth client and its resource. `tasks/get`,
+`tasks/update`, `tasks/cancel` and a `subscriptions/listen` asking for
+`taskIds` treat any other caller's task exactly like one that does not
+exist, the same person's token for another client, another resource or
+another server sharing the task store included: a narrower integration
+cannot reach what a privileged one started. They also need the scopes
+the tool required when the task started: a token that lost them is
+refused with `insufficient_scope`, as the call itself would be. On an endpoint
 with neither authorization nor a scope, the task ID is the only
 credential, so keep it as secret as the result it unlocks. A
 `tasks/update` answer only counts for a question the task is waiting

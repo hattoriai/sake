@@ -186,10 +186,14 @@ afterwards; expired tasks are deleted from the store every minute.
 
 Task IDs carry 144 random bits. A task belongs to the principal that
 created it — the token's subject when the endpoint has authorization,
-otherwise the host's scope (`Sake.Plug`'s `scope:`) — and every other
-caller is told it does not exist, on `tasks/get`, `tasks/update`,
-`tasks/cancel` and `subscriptions/listen` alike. On an endpoint with
-neither, the task ID itself is the only credential.
+otherwise the host's scope (`Sake.Plug`'s `scope:`) — through the server,
+OAuth client and resource it was created with, and every other caller
+(the same person through another client, resource or server included)
+is told it does not exist, on `tasks/get`, `tasks/update`,
+`tasks/cancel` and `subscriptions/listen` alike. Each of them also needs
+the scopes the tool required when the task started; a token without
+them gets `insufficient_scope`. On an endpoint with neither
+authorization nor a scope, the task ID itself is the only credential.
 
 Input requests surfaced through a task are the same elicitation,
 sampling and roots requests as anywhere else; a client applies the same

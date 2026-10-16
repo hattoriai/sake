@@ -7,6 +7,7 @@ if Code.ensure_loaded?(Ecto.Schema) do
     schema "sake_tasks" do
       field(:principal, :string)
       field(:tool, :string)
+      field(:scopes, {:array, :string}, default: [])
       field(:status, :string)
       field(:status_message, :string)
       field(:input_requests, :map, default: %{})

@@ -34,7 +34,7 @@ defmodule Sake.Server.Tasks do
   # worker starts, and before the client hears of it. `follow` runs a
   # proxied upstream task instead of the tool (see `Sake.Tasks.Worker`).
   def start(spec, args, ctx, follow \\ nil) do
-    record = Tasks.create(ctx, spec.name)
+    record = Tasks.create(ctx, spec.name, spec.scopes)
     :ok = Worker.start(spec, args, ctx, record, follow)
     {:ok, record |> Record.to_wire() |> Map.put("resultType", "task")}
   end
@@ -96,14 +96,16 @@ defmodule Sake.Server.Tasks do
     end
   end
 
-  # A task of another principal is as unknown as a task that never existed.
+  # A task of another owner (another principal, or the same one through
+  # another client, resource or server) is as unknown as a task that never
+  # existed. The owner's token must still carry the scopes the tool
+  # required, as for calling it.
   defp find(%{"taskId" => id}, ctx) when is_binary(id) do
-    case Tasks.fetch(id) do
-      {:ok, %Record{principal: principal} = record} ->
-        if principal == Tasks.principal(ctx), do: {:ok, record}, else: not_found()
-
-      :error ->
-        not_found()
+    with {:ok, %Record{principal: owner} = record} <- Tasks.fetch(id),
+         true <- owner == Tasks.owner(ctx) do
+      if Sake.Server.allowed?(record, ctx), do: {:ok, record}, else: {:forbidden, record.scopes}
+    else
+      _ -> not_found()
     end
   end
 

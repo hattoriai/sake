@@ -20,6 +20,31 @@ defmodule Sake.TasksTest do
     tools [SakeDev.Conformance.Tools.SlowCompute]
   end
 
+  defmodule AdminExport do
+    use Sake.Tool, name: "admin_export", task: :optional, scope: "admin"
+
+    @impl true
+    def execute(_args, ctx) do
+      if wait(ctx, 600), do: {:ok, "acme export"}, else: {:ok, "stopped"}
+    end
+
+    defp wait(_ctx, 0), do: true
+
+    defp wait(ctx, n) do
+      if Sake.Tasks.cancelled?(ctx), do: false, else: Process.sleep(100) && wait(ctx, n - 1)
+    end
+  end
+
+  defmodule Acme do
+    use Sake.Server, name: "acme", version: "1"
+    tools [AdminExport, SakeDev.Conformance.Tools.SlowCompute]
+  end
+
+  defmodule Beta do
+    use Sake.Server, name: "beta", version: "1"
+    tools [AdminExport, SakeDev.Conformance.Tools.SlowCompute]
+  end
+
   defp opts(overrides \\ []),
     do: ModernClient.opts(Keyword.merge([server: SakeDev.ConformanceServer], overrides))
 
@@ -520,6 +545,102 @@ defmodule Sake.TasksTest do
       assert {:ok, %{"status" => "working"}} = get_task(ana, id)
       assert :ok = cancel_task(ana, id)
       assert {:ok, %{"status" => "cancelled"}} = get_task(ana, id)
+    end
+
+    test "the same subject through another client, server or with fewer scopes is refused" do
+      admin = [scopes: ["admin"], subject: "alice", client_id: "client-a"]
+      alice = connect(Acme, admin)
+
+      assert {:ok, {:task, %{"taskId" => id}}} = call_tool_async(alice, "admin_export", %{})
+      assert {:ok, %{"status" => "working"}} = get_task(alice, id)
+
+      for other <- [
+            connect(Acme, Keyword.put(admin, :client_id, "client-b")),
+            connect(Beta, admin),
+            connect(Beta, scopes: [], subject: "alice", client_id: "client-b"),
+            connect(Acme, Keyword.put(admin, :subject, "mallory")),
+            connect(Acme, scope: "alice")
+          ],
+          refused <- [get_task(other, id), update_task(other, id, %{}), cancel_task(other, id)] do
+        assert {:error,
+                {:rpc,
+                 %{"code" => -32_602, "message" => "Failed to retrieve task: Task not found"}}} =
+                 refused
+      end
+
+      # The same token's owner, after its scopes were narrowed: refused as
+      # the call would be, so a step-up gets the task back.
+      narrowed = connect(Acme, Keyword.put(admin, :scopes, []))
+
+      for refused <- [
+            get_task(narrowed, id),
+            update_task(narrowed, id, %{}),
+            cancel_task(narrowed, id)
+          ] do
+        assert {:error, {:insufficient_scope, %{scope: ["admin"]}}} = refused
+      end
+
+      assert {:ok, %{"status" => "working"}} = get_task(alice, id)
+      assert :ok = cancel_task(alice, id)
+      assert {:ok, %{"status" => "cancelled"}} = get_task(alice, id)
+    end
+
+    test "a task without a scope stays its owner's whatever the token's scopes" do
+      alice = connect(Acme, scopes: ["admin"], subject: "alice", client_id: "client-a")
+
+      assert {:ok, {:task, %{"taskId" => id}}} =
+               call_tool_async(alice, "slow_compute", %{"seconds" => 60})
+
+      fewer = connect(Acme, scopes: [], subject: "alice", client_id: "client-a")
+      assert {:ok, %{"status" => "working"}} = get_task(fewer, id)
+      assert :ok = cancel_task(fewer, id)
+    end
+
+    test "the owner binds the principal, server, client and resource" do
+      token = %Sake.Auth.TokenRecord{
+        subject_id: "alice",
+        client_id: "client-a",
+        resource: "https://audit.example/acme/mcp",
+        scopes: ["admin"]
+      }
+
+      ctx = %Sake.Context{server: Acme, token: token, scopes: token.scopes}
+      assert "owner:" <> digest = owner = Sake.Tasks.owner(ctx)
+      assert byte_size(digest) == 43
+      assert Sake.Tasks.owner(%{ctx | scopes: []}) == owner
+
+      for other <- [
+            %{ctx | server: Beta},
+            %{ctx | token: %{token | client_id: "client-b"}},
+            %{ctx | token: %{token | resource: "https://audit.example/beta/mcp"}},
+            %{ctx | token: %{token | subject_id: "bob"}},
+            %{ctx | token: %{token | issuer: "https://idp.example"}},
+            %{ctx | token: nil, scope: "alice"}
+          ] do
+        refute Sake.Tasks.owner(other) == owner
+      end
+    end
+
+    test "subscriptions follow only the tasks their caller may read" do
+      alice = connect(Acme, scopes: ["admin"], subject: "alice", client_id: "client-a")
+      assert {:ok, {:task, %{"taskId" => id}}} = call_tool_async(alice, "admin_export", %{})
+
+      token = %Sake.Auth.TokenRecord{
+        subject_id: "alice",
+        client_id: "client-a",
+        scopes: ["admin"]
+      }
+
+      ctx = %Sake.Context{server: Acme, token: token, scopes: ["admin"]}
+
+      assert Sake.Server.Tasks.visible([id, "nope"], ctx) == [id]
+      assert Sake.Server.Tasks.visible([id], %{ctx | scopes: []}) == []
+      assert Sake.Server.Tasks.visible([id], %{ctx | server: Beta}) == []
+
+      assert Sake.Server.Tasks.visible([id], %{ctx | token: %{token | client_id: "client-b"}}) ==
+               []
+
+      assert :ok = cancel_task(alice, id)
     end
 
     test "the token's subject is the principal when there is one" do

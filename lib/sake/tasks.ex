@@ -46,10 +46,15 @@ defmodule Sake.Tasks do
   elicitation, `{:error, :cancelled}` from sampling and roots) or calls
   `cancelled?/1`.
 
-  A task belongs to whoever created it: the token's subject when the
-  endpoint has authorization, otherwise the host's scope (see `Sake.Plug`'s
-  `scope:`). Any other caller is told the task does not exist. Task IDs
-  carry 144 random bits.
+  A task belongs to whoever created it, and to what they created it
+  through: the token's subject when the endpoint has authorization
+  (otherwise the host's scope, see `Sake.Plug`'s `scope:`), together with
+  the server, the token's OAuth client and its resource. Any other caller,
+  the same person through another client, resource or server included, is
+  told the task does not exist. Reading, answering, cancelling and
+  following a task also need the scopes its tool required when it started:
+  a token without them is refused with `insufficient_scope`, as the call
+  itself would be. Task IDs carry 144 random bits.
 
   Tasks are configured on the `Sake` child:
 
@@ -135,15 +140,16 @@ defmodule Sake.Tasks do
   # ---- the store, as the rest of Sake uses it: expired tasks are gone.
 
   @doc false
-  @spec create(Context.t(), String.t()) :: Record.t()
-  def create(ctx, tool) do
+  @spec create(Context.t(), String.t(), [String.t()]) :: Record.t()
+  def create(ctx, tool, scopes \\ []) do
     %{store: {module, state}, ttl: ttl, poll_interval: poll} = config()
     now = now()
 
     record = %Record{
       id: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false),
-      principal: principal(ctx),
+      principal: owner(ctx),
       tool: tool,
+      scopes: scopes,
       ttl_ms: ttl,
       poll_interval_ms: poll,
       created_at: now,
@@ -197,10 +203,33 @@ defmodule Sake.Tasks do
   defp touch(_before, updated, now), do: %{updated | updated_at: now}
 
   @doc false
-  # The principal a task is bound to: the token's subject (or its client),
-  # else the host's
-  # scope (as `Sake.Server.RequestState` binds a request state). The scope
-  # is kept as a digest, since the store may be a database.
+  # Whom a task is bound to, and through what: the principal, the server,
+  # and the token's client and resource. The same person's token for
+  # another client (a narrower integration) or another resource (another
+  # tenant's endpoint), or a request to another server sharing the store,
+  # is not the task's owner. Kept as a digest, since the store may be a
+  # database and a principal can be long.
+  @spec owner(Context.t()) :: String.t()
+  def owner(%Context{} = ctx) do
+    token = ctx.token || %{}
+
+    binding = [
+      principal(ctx) || "",
+      inspect(ctx.server),
+      to_string(Map.get(token, :client_id) || ""),
+      to_string(Map.get(token, :resource) || "")
+    ]
+
+    # Each part length-prefixed, so no two bindings hash the same input.
+    digest = :crypto.hash(:sha256, Enum.map(binding, &[Integer.to_string(byte_size(&1)), ?:, &1]))
+    "owner:" <> Base.url_encode64(digest, padding: false)
+  end
+
+  @doc false
+  # The principal a task's owner names (see `owner/1`): the token's
+  # subject (or its client), else the host's scope (as
+  # `Sake.Server.RequestState` binds a request state). The scope is kept as
+  # a digest, since the store may be a database.
   #
   # A token from an external authorization server is that issuer's: the
   # same `sub` from another issuer, or from `Sake.Auth`, is someone else.
