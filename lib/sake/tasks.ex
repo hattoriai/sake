@@ -201,7 +201,20 @@ defmodule Sake.Tasks do
   # else the host's
   # scope (as `Sake.Server.RequestState` binds a request state). The scope
   # is kept as a digest, since the store may be a database.
+  #
+  # A token from an external authorization server is that issuer's: the
+  # same `sub` from another issuer, or from `Sake.Auth`, is someone else.
   @spec principal(Context.t()) :: String.t() | nil
+  def principal(%Context{token: %{issuer: iss} = token} = ctx) when is_binary(iss) do
+    issuer =
+      :sha256 |> :crypto.hash(iss) |> binary_part(0, 16) |> Base.url_encode64(padding: false)
+
+    case principal(%{ctx | token: %{token | issuer: nil}}) do
+      nil -> nil
+      local -> "issuer:" <> issuer <> ":" <> local
+    end
+  end
+
   def principal(%Context{token: %{subject_id: id}}) when is_binary(id), do: "subject:" <> id
 
   # A machine client's token (client credentials) has no subject: the

@@ -18,9 +18,11 @@ defmodule Sake do
 
       {Sake, secret_key_base: {MyAppWeb.Endpoint, :config, [:secret_key_base]}, pubsub: MyApp.PubSub, auth: [...]}
 
-  `auth:` takes the `Sake.Auth.Config` options; without it only the stream
-  registry and tasks run. `tasks:` takes the `Sake.Tasks` options
-  (`false` turns tasks off).
+  `auth:` takes the `Sake.Auth.Config` options, for Sake's own
+  authorization server; `external_auth:` names other authorization
+  servers whose tokens endpoints take (see `Sake.Auth.External`); without
+  either only the stream registry and tasks run. `tasks:` takes the
+  `Sake.Tasks` options (`false` turns tasks off).
   """
   def child_spec(opts) do
     %{id: __MODULE__, type: :supervisor, start: {__MODULE__, :start_link, [opts]}}
@@ -37,7 +39,10 @@ defmodule Sake do
         auth_opts -> Sake.Auth.Config.new(auth_opts)
       end
 
+    external = Sake.Auth.External.new_all(opts[:external_auth] || [], auth)
+
     :persistent_term.put({Sake, :auth}, auth)
+    :persistent_term.put({Sake, :external_auth}, external)
 
     children =
       if(Keyword.get(opts, :streams, true),
@@ -45,7 +50,8 @@ defmodule Sake do
         else: []
       ) ++
         store_children(auth) ++
-        if(auth, do: [Sake.Auth.CIMD.Cache, Sake.Auth.Replay], else: []) ++
+        if(auth || external != %{}, do: [Sake.Auth.CIMD.Cache, Sake.Auth.Replay], else: []) ++
+        if(external != %{}, do: [Sake.Auth.External.Cache], else: []) ++
         tasks_children(Keyword.get(opts, :tasks, []))
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Sake.Supervisor)

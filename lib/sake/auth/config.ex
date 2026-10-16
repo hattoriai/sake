@@ -40,7 +40,7 @@ defmodule Sake.Auth.Config do
       config
       | issuer: String.trim_trailing(config.issuer, "/"),
         trusted_issuers: trusted_issuers(config),
-        dpop: dpop(config.dpop),
+        dpop: dpop_option(config.dpop),
         store_state: module.init(store_opts),
         name: config.name || uri.host
     }
@@ -66,16 +66,18 @@ defmodule Sake.Auth.Config do
     Enum.map(issuers, &Sake.Auth.TrustedIssuer.new/1)
   end
 
+  @doc false
   # DPoP needs jose to check proofs. By default it is on when jose is
   # there, and quietly off when not (the metadata then does not offer it);
   # a host that asks for it by name, nonces or `required:` and all, is
-  # told at start.
-  defp dpop(false), do: false
+  # told at start. `Sake.Auth.External` takes the same option.
+  @spec dpop_option(term()) :: false | %{nonce: boolean(), required: boolean()}
+  def dpop_option(false), do: false
 
-  defp dpop(true),
+  def dpop_option(true),
     do: if(Sake.Auth.JWT.available?(), do: %{nonce: false, required: false}, else: false)
 
-  defp dpop(opts) when is_list(opts) do
+  def dpop_option(opts) when is_list(opts) do
     Sake.Auth.JWT.require!("dpop:")
     nonce = Keyword.get(opts, :nonce, false)
     required = Keyword.get(opts, :required, false)
@@ -98,7 +100,7 @@ defmodule Sake.Auth.Config do
     %{nonce: nonce, required: required}
   end
 
-  defp dpop(other),
+  def dpop_option(other),
     do:
       raise(
         ArgumentError,
@@ -106,13 +108,13 @@ defmodule Sake.Auth.Config do
       )
 
   @doc "Whether every access token must be DPoP-bound (`dpop: [required: true]`)."
-  @spec dpop_required?(t()) :: boolean()
-  def dpop_required?(%__MODULE__{dpop: %{required: true}}), do: true
+  @spec dpop_required?(t() | Sake.Auth.External.t()) :: boolean()
+  def dpop_required?(%{dpop: %{required: true}}), do: true
   def dpop_required?(_config), do: false
 
   @doc "All scopes the configured servers declare, with descriptions."
-  @spec scopes(t()) :: [{String.t(), String.t()}]
-  def scopes(%__MODULE__{servers: servers}),
+  @spec scopes(t() | Sake.Auth.External.t()) :: [{String.t(), String.t()}]
+  def scopes(%{servers: servers}),
     do: servers |> Enum.flat_map(& &1.__sake__(:scopes)) |> Enum.uniq_by(&elem(&1, 0))
 
   def authorize_url(c), do: c.issuer <> c.oauth_path <> "/authorize"

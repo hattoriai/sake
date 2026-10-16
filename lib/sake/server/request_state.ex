@@ -31,6 +31,11 @@ defmodule Sake.Server.RequestState do
 
   def verify(_ctx, _name, _args, _state), do: :error
 
+  # A token from an external authorization server is that issuer's: the
+  # same `sub` from another issuer is someone else.
+  defp principal(%{token: %{issuer: iss} = token} = ctx) when is_binary(iss),
+    do: {:issuer, iss, principal(%{ctx | token: %{token | issuer: nil}})}
+
   defp principal(%{token: %{subject_id: id}}) when is_binary(id), do: id
 
   defp principal(%{token: %{subject_id: nil, client_id: id}}) when is_binary(id),

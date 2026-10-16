@@ -26,7 +26,7 @@ defmodule Sake.Auth.Authorize do
   import Plug.Conn
 
   alias Sake.Auth
-  alias Sake.Auth.{Clients, Config, Redirect, Tokens}
+  alias Sake.Auth.{Clients, Config, Redirect, Resource, Tokens}
 
   @salt "sake.authorize"
   @request_ttl 600
@@ -216,7 +216,7 @@ defmodule Sake.Auth.Authorize do
     cond do
       not same_origin?(uri, URI.parse(config.issuer)) -> :error
       config.resources == nil -> {:ok, config.issuer <> path}
-      Enum.any?(config.resources, &pattern_match?(&1, path)) -> {:ok, config.issuer <> path}
+      Enum.any?(config.resources, &Resource.path_match?(&1, path)) -> {:ok, config.issuer <> path}
       true -> :error
     end
   end
@@ -226,14 +226,6 @@ defmodule Sake.Auth.Authorize do
   defp same_origin?(uri, issuer) do
     uri.scheme == issuer.scheme and uri.host == issuer.host and uri.port == issuer.port and
       uri.fragment == nil and uri.query == nil
-  end
-
-  defp pattern_match?(pattern, path) do
-    ps = String.split(pattern, "/", trim: true)
-    xs = String.split(path, "/", trim: true)
-
-    length(ps) == length(xs) and
-      Enum.zip(ps, xs) |> Enum.all?(fn {p, x} -> String.starts_with?(p, ":") or p == x end)
   end
 
   defp consent_or_issue(conn, config, client, request, principal) do

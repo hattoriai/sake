@@ -240,7 +240,7 @@ defmodule Sake.Auth.DPoP do
   # round in nonce challenges.
 
   @doc "The secret of the server's nonces when the configuration requires them, else nil."
-  @spec nonce_secret(Sake.Auth.Config.t()) :: binary() | nil
+  @spec nonce_secret(Sake.Auth.Config.t() | Sake.Auth.External.t()) :: binary() | nil
   def nonce_secret(%{dpop: %{nonce: true}}), do: Sake.Secret.fetch!()
   def nonce_secret(_config), do: nil
 
@@ -249,7 +249,7 @@ defmodule Sake.Auth.DPoP do
   to a challenge, and to every other answer too, so a client always
   holds the latest one (RFC 9449 §8.2 and §9).
   """
-  @spec put_nonce(Plug.Conn.t(), Sake.Auth.Config.t()) :: Plug.Conn.t()
+  @spec put_nonce(Plug.Conn.t(), Sake.Auth.Config.t() | Sake.Auth.External.t()) :: Plug.Conn.t()
   def put_nonce(conn, config) do
     case nonce_secret(config) do
       nil -> conn
