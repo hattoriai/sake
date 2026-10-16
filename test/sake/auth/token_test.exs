@@ -27,6 +27,7 @@ defmodule Sake.Auth.TokenTest.RaceStore do
   end
 
   def put_token(s, token), do: ETS.put_token(s, token)
+  def put_code_tokens(s, hash, tokens), do: ETS.put_code_tokens(s, hash, tokens)
 
   def get_token(s, kind, hash), do: ETS.get_token(s, kind, hash)
   def consume_refresh(s, hash), do: ETS.consume_refresh(s, hash)

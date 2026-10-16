@@ -48,7 +48,8 @@ First release.
   bearer token validation, `/.well-known` discovery, Client ID Metadata
   Document support, dynamic client registration (RFC 7591), the
   authorize/consent flow, the token endpoint (authorization code + PKCE,
-  refresh token rotation with reuse detection and family revocation), and
+  refresh token rotation with reuse detection and family revocation, and
+  a replayed code revoking its family atomically with its issuance), and
   revocation (RFC 7009). Consent is remembered per person, client and
   resource; a subject module's optional `authorize_resource?/2` refuses a
   tenant the person does not belong to. Works under a generated Phoenix

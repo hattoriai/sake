@@ -18,6 +18,16 @@ defmodule Sake.Auth.Tokens do
           {String.t(), String.t(), %{access: TokenRecord.t(), refresh: TokenRecord.t()}}
   def issue_pair(config, attrs) do
     {module, state} = Sake.Auth.store(config)
+    {_access, _refresh, %{access: a, refresh: r}} = pair = new_pair(config, attrs)
+    :ok = module.put_token(state, a)
+    :ok = module.put_token(state, r)
+    pair
+  end
+
+  @doc "An access/refresh pair as `issue_pair/2` makes it, not stored yet."
+  @spec new_pair(Config.t(), map()) ::
+          {String.t(), String.t(), %{access: TokenRecord.t(), refresh: TokenRecord.t()}}
+  def new_pair(config, attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     access = generate()
     refresh = generate()
@@ -49,8 +59,6 @@ defmodule Sake.Auth.Tokens do
         expires_at: DateTime.add(now, config.refresh_token_ttl)
     }
 
-    :ok = module.put_token(state, a)
-    :ok = module.put_token(state, r)
     {access, refresh, %{access: a, refresh: r}}
   end
 

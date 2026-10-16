@@ -92,9 +92,14 @@ if Code.ensure_loaded?(Ecto.Query) do
       :ok
     end
 
+    # A consumed code is marked used rather than deleted: its row is the
+    # fence that `put_code_tokens/3` and `revoke_family/2` meet on, until
+    # it expires and `prune/3` deletes it.
     @impl true
     def consume_code(%{repo: repo} = s, hash) do
-      case repo.delete_all(from(c in S.Code, where: c.hash == ^hash, select: c), prefix: s.prefix) do
+      query = from(c in S.Code, where: c.hash == ^hash and is_nil(c.used_at), select: c)
+
+      case repo.update_all(query, [set: [used_at: now()]], prefix: s.prefix) do
         {1, [r]} ->
           {:ok,
            %Code{
@@ -111,6 +116,30 @@ if Code.ensure_loaded?(Ecto.Query) do
         _ ->
           :error
       end
+    end
+
+    # The code's row, locked: a concurrent `revoke_family/2` of its family
+    # waits for this transaction, and its sweep then sees the tokens; one
+    # that ran first left the row revoked, and nothing is inserted. A row
+    # gone (the code expired and was pruned) counts as revoked.
+    @impl true
+    def put_code_tokens(%{repo: repo} = s, code_hash, tokens) do
+      fence =
+        from(c in S.Code,
+          where: c.hash == ^code_hash and not is_nil(c.used_at) and is_nil(c.revoked_at),
+          lock: "FOR UPDATE",
+          select: c.hash
+        )
+
+      {:ok, result} =
+        repo.transaction(fn ->
+          case repo.one(fence, prefix: s.prefix) do
+            nil -> :revoked
+            _ -> Enum.each(tokens, &(:ok = put_token(s, &1)))
+          end
+        end)
+
+      result
     end
 
     @impl true
@@ -186,13 +215,28 @@ if Code.ensure_loaded?(Ecto.Query) do
       :ok
     end
 
+    # A family born of a code also revokes the code's row, under its lock
+    # (see `put_code_tokens/3`), before sweeping the family's tokens: a
+    # pair being inserted for the code either is refused, or is committed
+    # before the sweep runs.
     @impl true
     def revoke_family(%{repo: repo} = s, family_id) do
-      repo.update_all(
-        from(t in S.Token, where: t.family_id == ^family_id and is_nil(t.revoked_at)),
-        [set: [revoked_at: now()]],
-        prefix: s.prefix
-      )
+      {:ok, :ok} =
+        repo.transaction(fn ->
+          repo.update_all(
+            from(c in S.Code, where: c.hash == ^family_id and is_nil(c.revoked_at)),
+            [set: [revoked_at: now()]],
+            prefix: s.prefix
+          )
+
+          repo.update_all(
+            from(t in S.Token, where: t.family_id == ^family_id and is_nil(t.revoked_at)),
+            [set: [revoked_at: now()]],
+            prefix: s.prefix
+          )
+
+          :ok
+        end)
 
       :ok
     end

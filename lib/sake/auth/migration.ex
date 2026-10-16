@@ -45,6 +45,10 @@ if Code.ensure_loaded?(Ecto.Migration) do
         add(:resource, :text, null: false)
         add(:subject_id, :string, null: false)
         add(:expires_at, :utc_datetime, null: false)
+        # A consumed code is kept until it expires, as the fence between
+        # issuing its tokens and revoking its family on a replay.
+        add(:used_at, :utc_datetime)
+        add(:revoked_at, :utc_datetime)
         timestamps(type: :utc_datetime, updated_at: false)
       end
 

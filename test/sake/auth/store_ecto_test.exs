@@ -9,6 +9,23 @@ defmodule Sake.Auth.StoreEctoTest do
     Ecto.Migrator.run(SakeTest.Repo, [{0, SakeTest.Migration}], :up, opts)
   end
 
+  test "a code never consumed, or pruned, gets no tokens", %{config: config} do
+    {mod, state} = store(config)
+    hash = Tokens.hash("unknown")
+
+    {_, _, %{access: a}} =
+      Tokens.new_pair(config, %{
+        family_id: hash,
+        client_id: "c",
+        subject_id: "u",
+        scopes: [],
+        resource: "r"
+      })
+
+    assert :revoked = mod.put_code_tokens(state, hash, [a])
+    assert :error = mod.get_token(state, :access, a.hash)
+  end
+
   test "put_token never resurrects a revoked or consumed token", %{config: config} do
     {mod, state} = store(config)
 

@@ -69,6 +69,20 @@ defmodule Sake.Auth.Store.ETS do
     end)
   end
 
+  # Serialized with `revoke_family/2` like `put_token/2`; a family already
+  # revoked gets none of its tokens.
+  @impl Sake.Auth.Store
+  def put_code_tokens(_s, code_hash, tokens) do
+    Agent.get_and_update(__MODULE__, fn revoked ->
+      if Map.has_key?(revoked, code_hash) do
+        {:revoked, revoked}
+      else
+        Enum.each(tokens, &insert(:tokens, &1.id, &1))
+        {:ok, revoked}
+      end
+    end)
+  end
+
   defp born_revoked(token, revoked) do
     case Map.get(revoked, token.family_id) do
       nil -> token

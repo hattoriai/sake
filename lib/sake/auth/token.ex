@@ -190,16 +190,15 @@ defmodule Sake.Auth.Token do
 
       {:ok, record} ->
         with :ok <- check_code(record, client, uri, verifier, p["resource"]) do
-          {:ok,
-           issue(config, %{
-             client_id: client.id,
-             subject_id: record.subject_id,
-             scopes: record.scopes,
-             resource: record.resource,
-             family_id: hash,
-             jkt: jkt,
-             refresh_jkt: refresh_binding(client, jkt)
-           })}
+          issue_for_code(config, {module, state}, hash, %{
+            client_id: client.id,
+            subject_id: record.subject_id,
+            scopes: record.scopes,
+            resource: record.resource,
+            family_id: hash,
+            jkt: jkt,
+            refresh_jkt: refresh_binding(client, jkt)
+          })
         end
     end
   end
@@ -385,6 +384,20 @@ defmodule Sake.Auth.Token do
     end
   end
 
+  # RFC 6749 §4.1.2: a code used twice revokes every token issued for it.
+  # A replay racing the request that consumed the code may revoke the
+  # family before this request stores its pair; the store refuses the pair
+  # then, atomically with that revocation (`put_code_tokens/3`), so the
+  # replay never leaves a live pair behind.
+  defp issue_for_code(config, {module, state}, hash, attrs) do
+    {access, refresh, %{access: a, refresh: r}} = Tokens.new_pair(config, attrs)
+
+    case module.put_code_tokens(state, hash, [a, r]) do
+      :ok -> {:ok, response(config, attrs, access, refresh)}
+      :revoked -> {:error, "invalid_grant", "The code is invalid, expired or already used"}
+    end
+  end
+
   # RFC 9449 §5: a public client's refresh token is bound to its DPoP key,
   # the only thing that tells its holder from a thief; a confidential
   # client's is bound to the client's credentials already.
@@ -444,7 +457,10 @@ defmodule Sake.Auth.Token do
 
   defp issue(config, attrs) do
     {access, refresh, _} = Tokens.issue_pair(config, attrs)
+    response(config, attrs, access, refresh)
+  end
 
+  defp response(config, attrs, access, refresh) do
     %{
       "access_token" => access,
       "token_type" => token_type(attrs),
