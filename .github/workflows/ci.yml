@@ -50,11 +50,6 @@ jobs:
       # dialyxir in :dev.
       - run: mix deps.get
 
-      # TEMPORARY: prints the mix.lock entries hex.pm wrote for the new
-      # dependencies, to copy into the committed mix.lock. Removed in the
-      # next commit.
-      - run: grep -E '"(opentelemetry|opentelemetry_api)":' mix.lock || true
-
       - run: mix format --check-formatted
 
       - run: mix compile --warnings-as-errors
