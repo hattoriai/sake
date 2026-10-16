@@ -72,6 +72,7 @@ if Code.ensure_loaded?(Ecto.Query) do
       [
         principal: r.principal,
         tool: r.tool,
+        scopes: r.scopes,
         status: Atom.to_string(r.status),
         status_message: r.status_message,
         input_requests: r.input_requests,
@@ -91,6 +92,7 @@ if Code.ensure_loaded?(Ecto.Query) do
         id: row.id,
         principal: row.principal,
         tool: row.tool,
+        scopes: row.scopes || [],
         status: String.to_existing_atom(row.status),
         status_message: row.status_message,
         input_requests: row.input_requests || %{},

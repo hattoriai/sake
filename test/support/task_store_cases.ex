@@ -13,6 +13,7 @@ defmodule SakeTest.TaskStoreCases do
             id: id,
             principal: "subject:u1",
             tool: "t",
+            scopes: ["admin"],
             ttl_ms: 60_000,
             poll_interval_ms: 1_000,
             created_at: now,

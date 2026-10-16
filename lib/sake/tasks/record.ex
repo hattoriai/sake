@@ -2,7 +2,9 @@ defmodule Sake.Tasks.Record do
   @moduledoc """
   A task as a `Sake.Tasks.Store` keeps it.
 
-  `principal` binds the task to whoever created it (see `Sake.Tasks`);
+  `principal` binds the task to whoever created it, and through which
+  server, client and resource (a digest, see `Sake.Tasks`); `scopes` are
+  the scopes its tool required, which every later access needs too;
   `input_requests` are the requests still waiting for the client's answer,
   and `answers` every answer delivered so far, by key; `result` is the
   tool's result once `completed`, and `error` the JSON-RPC error once
@@ -15,6 +17,7 @@ defmodule Sake.Tasks.Record do
           id: String.t(),
           principal: String.t() | nil,
           tool: String.t(),
+          scopes: [String.t()],
           status: status(),
           status_message: String.t() | nil,
           input_requests: map(),
@@ -41,6 +44,7 @@ defmodule Sake.Tasks.Record do
     :updated_at,
     :expires_at,
     status: :working,
+    scopes: [],
     input_requests: %{},
     answers: %{}
   ]

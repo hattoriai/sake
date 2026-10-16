@@ -22,7 +22,9 @@ First release.
   runs in the background for a modern client that takes tasks, with
   `tasks/get`, `tasks/update` and `tasks/cancel`, input and progress
   through the task, cooperative cancellation (`Sake.Tasks.cancelled?/1`),
-  `notifications/tasks` on `subscriptions/listen`, principal binding, and
+  `notifications/tasks` on `subscriptions/listen`, binding to the
+  principal, server, OAuth client and resource that created the task (and
+  to the tool's scopes on every access), and
   telemetry. `Sake.Tasks.Store.ETS` (default) and `Sake.Tasks.Store.Ecto`
   with `Sake.Tasks.Migration` for several nodes. A tool's optional
   `prepare/2` runs in the request before `execute/2`.

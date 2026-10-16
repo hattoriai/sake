@@ -21,6 +21,7 @@ if Code.ensure_loaded?(Ecto.Migration) do
         add(:id, :string, primary_key: true)
         add(:principal, :string)
         add(:tool, :string, null: false)
+        add(:scopes, {:array, :string}, null: false, default: [])
         add(:status, :string, null: false)
         add(:status_message, :text)
         add(:input_requests, :map, null: false, default: %{})
