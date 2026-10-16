@@ -241,6 +241,18 @@ defmodule Sake.Client.AuthE2ETest do
       assert_received {:http, "DELETE", "/acme/mcp", 405, "DPoP", false}
     end
 
+    @tag dpop: [required: true]
+    test "a server that requires DPoP: bound tokens, and a clear error without DPoP", ctx do
+      assert {:error, {:auth, {:dpop_required, :dpop_off}}} =
+               Client.connect(ctx.url, auth: [authorize: person(ctx), dpop: false])
+
+      refute_received {:authorized, _}
+
+      assert {:ok, session} = Client.connect(ctx.url, auth: [authorize: person(ctx)])
+      assert session.auth.token["token_type"] == "DPoP"
+      assert {:ok, %{text: "x"}, _session} = Client.call_tool(session, "echo", %{"text" => "x"})
+    end
+
     test "dpop: false gets a bearer token", ctx do
       assert {:ok, session} = Client.connect(ctx.url, auth: [authorize: person(ctx), dpop: false])
       assert session.auth.token["token_type"] == "Bearer"

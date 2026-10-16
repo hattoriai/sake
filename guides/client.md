@@ -407,6 +407,13 @@ the nonce, and keeps the latest one each server sends for its next
 proofs. A nonce retry is not an authorization: it does not count
 towards the two a request may run, and nobody is asked anything.
 
+A resource whose metadata says `dpop_bound_access_tokens_required` (RFC
+9728) gets DPoP with `:auto` even when its authorization server's
+metadata lists no algorithms. A client that cannot use DPoP there
+(`dpop: false`, or no `jose`) stops before the flow runs, with
+`{:error, {:auth, {:dpop_required, :dpop_off | :no_jose}}}`, rather than
+fetching tokens the server would refuse.
+
 The key is kept with the token, as PEM under `"dpop_key"`, in the session
 and in the `store:` when there is one.
 

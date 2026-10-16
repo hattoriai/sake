@@ -94,7 +94,9 @@ defmodule Sake.Test do
   the endpoint's path (default `"/mcp"`) and `headers:` go with every
   request. The stack computes the principal from the request, so `scope:`
   does not apply; `scopes:` issues a real access token for `subject:`
-  (see `access_token/1`) and sends it as a bearer token. A legacy server's
+  (see `access_token/1`) and sends it as a bearer token, or, to a server
+  that takes DPoP-bound tokens only (`dpop: [required: true]`), bound to a
+  key the client signs a DPoP proof with for each request. A legacy server's
   questions need the in-memory client, and a task is polled at the
   interval the server suggests, as over the network.
 
@@ -214,14 +216,35 @@ defmodule Sake.Test do
     end
 
     url = @origin <> (opts[:path] || "/mcp")
-    headers = (opts[:headers] || []) ++ bearer(opts, url)
-    {url, Keyword.merge(client_opts, headers: headers, req: [plug: plug])}
+    {url, Keyword.merge(client_opts, [req: [plug: plug]] ++ credentials(opts, url))}
   end
 
-  defp bearer(opts, url) do
-    if opts[:scopes],
-      do: [{"authorization", "Bearer " <> access_token(Keyword.put_new(opts, :resource, url))}],
-      else: []
+  defp credentials(opts, url) do
+    headers = opts[:headers] || []
+    opts = Keyword.put_new(opts, :resource, url)
+
+    cond do
+      !opts[:scopes] ->
+        [headers: headers]
+
+      Sake.Auth.Config.dpop_required?(Sake.Auth.config()) ->
+        [
+          headers: headers,
+          auth: [store: {Sake.Test.TokenStore, bound_token(opts)}, static: true]
+        ]
+
+      true ->
+        [headers: [{"authorization", "Bearer " <> access_token(opts)} | headers]]
+    end
+  end
+
+  # A token bound to a new key, as `Sake.Client.Auth` keeps one.
+  defp bound_token(opts) do
+    pem = Sake.Auth.DPoP.generate_key()
+    {:ok, key} = Sake.Auth.JWT.private_key(pem)
+    jkt = key |> Sake.Auth.JWT.public_jwk() |> Sake.Auth.JWT.thumbprint()
+
+    %{"access_token" => issue(opts, jkt), "token_type" => "DPoP", "dpop_key" => pem}
   end
 
   @doc """
@@ -240,7 +263,9 @@ defmodule Sake.Test do
   `/mcp`).
   """
   @spec access_token(keyword()) :: String.t()
-  def access_token(opts) do
+  def access_token(opts), do: issue(opts, nil)
+
+  defp issue(opts, jkt) do
     unless Keyword.has_key?(opts, :subject) do
       raise ArgumentError,
             "Sake.Test.access_token/1 needs subject: (the ID your subject module fetches), or subject: nil for a machine client"
@@ -251,7 +276,8 @@ defmodule Sake.Test do
         client_id: opts[:client_id] || "sake-test",
         subject_id: opts[:subject] && to_string(opts[:subject]),
         scopes: opts[:scopes] || [],
-        resource: opts[:resource] || @origin <> "/mcp"
+        resource: opts[:resource] || @origin <> "/mcp",
+        jkt: jkt
       })
 
     token

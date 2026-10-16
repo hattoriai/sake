@@ -68,13 +68,25 @@ defmodule Sake.Auth.Config do
 
   # DPoP needs jose to check proofs. By default it is on when jose is
   # there, and quietly off when not (the metadata then does not offer it);
-  # a host that asks for it by name, nonces and all, is told at start.
+  # a host that asks for it by name, nonces or `required:` and all, is
+  # told at start.
   defp dpop(false), do: false
-  defp dpop(true), do: if(Sake.Auth.JWT.available?(), do: %{nonce: false}, else: false)
+
+  defp dpop(true),
+    do: if(Sake.Auth.JWT.available?(), do: %{nonce: false, required: false}, else: false)
 
   defp dpop(opts) when is_list(opts) do
     Sake.Auth.JWT.require!("dpop:")
     nonce = Keyword.get(opts, :nonce, false)
+    required = Keyword.get(opts, :required, false)
+
+    unless is_boolean(nonce) and is_boolean(required) and
+             Keyword.keys(opts) -- [:nonce, :required] == [],
+           do:
+             raise(
+               ArgumentError,
+               "dpop: takes [nonce: boolean, required: boolean], got #{inspect(opts)}"
+             )
 
     if nonce and Sake.Secret.configured() == nil,
       do:
@@ -83,12 +95,20 @@ defmodule Sake.Auth.Config do
           "dpop: [nonce: true] needs the Sake secret: start {Sake, secret_key_base: ...}"
         )
 
-    %{nonce: nonce}
+    %{nonce: nonce, required: required}
   end
 
   defp dpop(other),
     do:
-      raise(ArgumentError, "dpop: must be true, false or [nonce: boolean], got #{inspect(other)}")
+      raise(
+        ArgumentError,
+        "dpop: must be true, false or [nonce: boolean, required: boolean], got #{inspect(other)}"
+      )
+
+  @doc "Whether every access token must be DPoP-bound (`dpop: [required: true]`)."
+  @spec dpop_required?(t()) :: boolean()
+  def dpop_required?(%__MODULE__{dpop: %{required: true}}), do: true
+  def dpop_required?(_config), do: false
 
   @doc "All scopes the configured servers declare, with descriptions."
   @spec scopes(t()) :: [{String.t(), String.t()}]

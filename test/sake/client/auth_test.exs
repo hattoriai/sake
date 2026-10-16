@@ -98,6 +98,27 @@ defmodule Sake.Client.AuthTest do
                for({k, _} = h <- sent, k in ~w(authorization dpop), do: h)
     end
 
+    test "a resource that requires DPoP gets it, whatever the authorization server lists", ctx do
+      {_base, url} =
+        serve(ctx, resource_metadata: %{"dpop_bound_access_tokens_required" => true})
+
+      assert {:ok, _session} = Client.connect(url, auth: @auth)
+      assert {_params, %{"dpop" => _proof}} = find(requests(), "POST", "/token")
+    end
+
+    test "a resource that requires DPoP stops a client without it before anyone is asked", ctx do
+      {_base, url} =
+        serve(ctx, resource_metadata: %{"dpop_bound_access_tokens_required" => true})
+
+      assert {:error, {:auth, {:dpop_required, :dpop_off}}} =
+               Client.connect(url, auth: [{:dpop, false} | @auth])
+
+      requests = requests()
+      refute find(requests, "GET", "/authorize")
+      refute find(requests, "POST", "/token")
+      assert count(requests, "POST", "/mcp") == 1
+    end
+
     test "a DPoP token in answer to no proof is refused", ctx do
       {_base, url} = serve(ctx, token_type: "DPoP")
 

@@ -609,6 +609,57 @@ defmodule Sake.TestPlugTest do
     end
   end
 
+  test "through a Phoenix endpoint that requires DPoP: a bound token, a proof per request" do
+    start_supervised!(SakeTest.PhoenixEndpoint)
+
+    start_supervised!(
+      {Sake,
+       auth: [
+         subject: SakeDev.Subject,
+         issuer: "http://www.example.com",
+         allow_insecure: true,
+         servers: [SakeDev.Server],
+         resources: ["/:org/mcp"],
+         dpop: [required: true]
+       ],
+       secret_key_base: @secret,
+       streams: false,
+       tasks: false}
+    )
+
+    client =
+      connect(SakeDev.Server,
+        plug: SakeTest.PhoenixEndpoint,
+        path: "/acme/mcp",
+        scopes: ["issues:read"],
+        subject: "u1"
+      )
+
+    assert session(client).auth.token["token_type"] == "DPoP"
+    assert {:ok, _tools} = list_tools(client)
+    assert {:ok, %{text: "hi"}} = call_tool(client, "echo", %{"text" => "hi"})
+
+    # A 403 comes back as it does with a bearer token: no flow runs.
+    assert {:error, {:insufficient_scope, %Challenge{scheme: "DPoP", scope: ["issues:write"]}}} =
+             call_tool(client, "slow", %{"n" => 1})
+
+    # In memory there is no HTTP and no token to bind: the simulated one
+    # goes straight to the scope checks, as before.
+    client = connect(SakeDev.Server, scopes: ["issues:read"], subject: "u1")
+    assert {:ok, %{text: "hi"}} = call_tool(client, "echo", %{"text" => "hi"})
+
+    # A bearer token, even one the server issued, is refused.
+    token = access_token(subject: "u1", resource: "http://www.example.com/acme/mcp")
+
+    assert_raise RuntimeError, ~r/unauthorized/, fn ->
+      connect(SakeDev.Server,
+        plug: SakeTest.PhoenixEndpoint,
+        path: "/acme/mcp",
+        headers: [{"authorization", "Bearer " <> token}]
+      )
+    end
+  end
+
   test "what a plug cannot take is refused up front" do
     assert_raise ArgumentError, ~r/principal/, fn ->
       connect(Server, plug: {Sake.Plug, server: Server}, scope: :ana)

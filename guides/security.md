@@ -137,6 +137,13 @@ session and in its token store (as PEM). A proxy's `credentials/1`
 returns a bearer token or headers: a DPoP-bound token cannot be passed
 through it, only obtained by the proxy's own `auth:`.
 
+DPoP is opt-in for a client by default: a bearer token still works for a
+client that asked for one. `dpop: [required: true]` closes that door for
+the whole server (the MCP endpoint refuses `Bearer` outright, so a
+leaked token of any kind is useless without its key), and a client
+registered with `dpop_bound_access_tokens` closes it for itself, so that
+no one holding its credentials can obtain an unbound token in its name.
+
 ## The CIMD fetch guard, and what it does not cover
 
 `Sake.Auth.CIMD.fetch/2` resolves the client-supplied HTTPS host's

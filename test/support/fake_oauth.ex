@@ -12,6 +12,7 @@ defmodule SakeTest.FakeOAuth do
   #   * `:in_header` — whether the 401 names the metadata URL (default true).
   #   * `:challenge_scope` — the 401's `scope`, if any.
   #   * `:scopes_supported` — the resource metadata's, if any.
+  #   * `:resource_metadata` — fields merged into the resource metadata.
   #   * `:issuer_path` — the authorization server's path ("" by default).
   #   * `:metadata_at` — where its metadata is served, by default the RFC 8414
   #     path-inserted URL.
@@ -176,6 +177,7 @@ defmodule SakeTest.FakeOAuth do
     doc =
       %{"resource" => resource, "authorization_servers" => [base(conn) <> issuer_path(opts)]}
       |> put_present("scopes_supported", opts[:scopes_supported])
+      |> Map.merge(opts[:resource_metadata] || %{})
 
     json(conn, 200, doc)
   end

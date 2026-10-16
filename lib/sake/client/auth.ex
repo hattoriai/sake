@@ -84,7 +84,11 @@ defmodule Sake.Client.Auth do
   token (as PEM, in the `:store` too: a bound token is useless without
   it). Every token request carries a proof made with it, and every
   request to the MCP server sends the token with the `DPoP` scheme and a
-  fresh proof bound to it. A server that asks for a nonce
+  fresh proof bound to it. A resource whose metadata says
+  `dpop_bound_access_tokens_required` gets DPoP with `:auto` whatever the
+  authorization server's metadata lists; when the client cannot use it
+  (`dpop: false`, or no `jose`), the flow stops at once with
+  `{:dpop_required, :dpop_off | :no_jose}`. A server that asks for a nonce
   (`use_dpop_nonce`) gets the request again with its nonce, which the
   client then keeps sending; that retry does not count as an
   authorization.
@@ -131,6 +135,7 @@ defmodule Sake.Client.Auth do
     :client_name,
     :store,
     :token,
+    :static,
     :proof_key,
     grant: :authorization_code,
     dpop: :auto,
@@ -164,7 +169,10 @@ defmodule Sake.Client.Auth do
       client_name: opts[:client_name] || defaults[:client_name] || "Sake",
       store: opts[:store],
       dpop: dpop(Keyword.get(opts, :dpop, :auto)),
-      req: defaults[:req] || []
+      req: defaults[:req] || [],
+      # `Sake.Test`'s: the stored token is used as it is, and a 401 or a
+      # 403 comes back to the caller instead of running the flow.
+      static: opts[:static] == true
     }
 
     check_grant!(auth)
@@ -342,7 +350,10 @@ defmodule Sake.Client.Auth do
   def fresh(auth), do: auth
 
   @doc false
-  @spec unauthorized(t(), Challenge.t(), boolean()) :: {:ok, t()} | {:error, term(), t()}
+  @spec unauthorized(t(), Challenge.t(), boolean()) ::
+          {:ok, t()} | {:error, term(), t()} | :exhausted
+  def unauthorized(%__MODULE__{static: true}, _challenge, _refresh?), do: :exhausted
+
   def unauthorized(auth, challenge, refresh?) do
     case discover(auth, challenge) do
       {:ok, server} ->
@@ -358,6 +369,8 @@ defmodule Sake.Client.Auth do
 
   @doc false
   @spec insufficient_scope(t(), Challenge.t()) :: {:ok, t()} | {:error, term(), t()} | :exhausted
+  def insufficient_scope(%__MODULE__{static: true}, _challenge), do: :exhausted
+
   def insufficient_scope(auth, %Challenge{scope: challenged} = challenge) do
     # Asking again for scopes the token already has would only end in the
     # same 403: the server wants something the authorization server will
@@ -429,11 +442,25 @@ defmodule Sake.Client.Auth do
 
   # ---- the flow
 
-  defp authorize(%__MODULE__{grant: :authorization_code} = auth, server, scopes),
+  # A resource that takes DPoP-bound tokens only refuses every token a
+  # client without DPoP could get: the flow stops before anyone is asked.
+  defp authorize(auth, %{dpop_required: true}, _scopes)
+       when auth.dpop == false,
+       do: {:error, {:dpop_required, :dpop_off}, auth}
+
+  defp authorize(auth, %{dpop_required: true} = server, scopes) do
+    if DPoP.available?(),
+      do: authorize_granted(auth, server, scopes),
+      else: {:error, {:dpop_required, :no_jose}, auth}
+  end
+
+  defp authorize(auth, server, scopes), do: authorize_granted(auth, server, scopes)
+
+  defp authorize_granted(%__MODULE__{grant: :authorization_code} = auth, server, scopes),
     do: authorize_code(auth, server, scopes)
 
   # `offline_access` asks for a refresh token, which no machine grant gets.
-  defp authorize(auth, server, scopes) do
+  defp authorize_granted(auth, server, scopes) do
     scopes = scopes -- ["offline_access"]
 
     case machine_client(auth, server) do
@@ -591,7 +618,10 @@ defmodule Sake.Client.Auth do
   # ---- DPoP keys
 
   # A new authorization gets a new key, when the client uses DPoP with
-  # this server at all.
+  # this server at all: when asked to, when the resource requires it (its
+  # authorization server must then bind tokens whatever its metadata
+  # says, and ES256 is the algorithm every DPoP server takes), or when
+  # the authorization server offers ES256.
   defp new_key(%__MODULE__{dpop: false}, _server), do: nil
 
   defp new_key(auth, server) do
@@ -599,7 +629,7 @@ defmodule Sake.Client.Auth do
       not DPoP.available?() ->
         nil
 
-      auth.dpop == true ->
+      auth.dpop == true or Map.get(server, :dpop_required) == true ->
         DPoP.generate_key()
 
       "ES256" in List.wrap(server.metadata["dpop_signing_alg_values_supported"]) ->

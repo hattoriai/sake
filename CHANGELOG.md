@@ -112,7 +112,12 @@ First release.
   (as PEM, in the store too), sends a proof with every token request and
   every MCP request (POST, the legacy GET stream and DELETE), keeps a
   refresh on the same key, and answers nonce challenges from both servers
-  without counting them as authorizations. A `Sake.Proxy` gets it through
+  without counting them as authorizations. `dpop: [required: true]` takes
+  bound tokens only (proof-less token requests and the Bearer scheme are
+  refused, the resource metadata says `dpop_bound_access_tokens_required`,
+  and a client that cannot use DPoP stops with `{:dpop_required, reason}`);
+  a client registered with `dpop_bound_access_tokens` (RFC 9449 §5.2, a new
+  client column) gets the same for itself. A `Sake.Proxy` gets it through
   `connect: [auth: ...]`. DPoP needs the optional `jose` dependency; without
   it the server neither offers nor accepts it and the client never uses it.
 - `Sake.Stdio` and `mix sake.stdio`: the same server over standard input

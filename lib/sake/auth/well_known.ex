@@ -44,13 +44,16 @@ defmodule Sake.Auth.WellKnown do
 
     json(
       conn,
-      dpop_algs(config, %{
-        "resource" => Resource.origin(conn) <> suffix,
-        "authorization_servers" => [config.issuer],
-        "scopes_supported" => config |> Config.scopes() |> Enum.map(&elem(&1, 0)),
-        "bearer_methods_supported" => ["header"],
-        "resource_name" => config.name
-      })
+      dpop_required(
+        config,
+        dpop_algs(config, %{
+          "resource" => Resource.origin(conn) <> suffix,
+          "authorization_servers" => [config.issuer],
+          "scopes_supported" => config |> Config.scopes() |> Enum.map(&elem(&1, 0)),
+          "bearer_methods_supported" => ["header"],
+          "resource_name" => config.name
+        })
+      )
     )
   end
 
@@ -61,6 +64,13 @@ defmodule Sake.Auth.WellKnown do
 
   defp dpop_algs(_config, body),
     do: Map.put(body, "dpop_signing_alg_values_supported", DPoP.algs())
+
+  # RFC 9728 §2: the resource takes DPoP-bound tokens only.
+  defp dpop_required(config, body) do
+    if Config.dpop_required?(config),
+      do: Map.put(body, "dpop_bound_access_tokens_required", true),
+      else: body
+  end
 
   defp authorization_server(conn) do
     config = Sake.Auth.config()

@@ -28,7 +28,8 @@ if Code.ensure_loaded?(Ecto.Query) do
         scopes: c.scopes,
         jwks: c.jwks,
         jwks_uri: c.jwks_uri,
-        application_type: c.application_type
+        application_type: c.application_type,
+        dpop_bound_access_tokens: c.dpop_bound_access_tokens
       }
 
       {:ok, _} =
@@ -69,7 +70,8 @@ if Code.ensure_loaded?(Ecto.Query) do
         scopes: r.scopes,
         jwks: r.jwks,
         jwks_uri: r.jwks_uri,
-        application_type: r.application_type
+        application_type: r.application_type,
+        dpop_bound_access_tokens: r.dpop_bound_access_tokens
       }
     end
 

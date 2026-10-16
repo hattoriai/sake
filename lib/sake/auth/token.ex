@@ -126,11 +126,38 @@ defmodule Sake.Auth.Token do
 
       {:ok, client} ->
         with :ok <- client_grant(client, p["grant_type"]),
+             :ok <- proof_required(config, client, jkt),
              {:ok, response} <- grant(config, client, p, jkt) do
           json(conn, 200, response)
         else
           {:error, code, description} -> error(conn, 400, code, description)
         end
+    end
+  end
+
+  # A server with `dpop: [required: true]`, and a client registered with
+  # `dpop_bound_access_tokens` (RFC 9449 §5.2: "the authorization server
+  # MUST reject token requests from this client that do not contain the
+  # DPoP header"), get bound tokens or none, on every grant. Neither RFC
+  # 9449 nor RFC 6749 names the error for a proof that is missing; it is
+  # `invalid_dpop_proof`, the code §5 gives a token request whose proof
+  # does not do, so that a client sees it is about DPoP. The check runs
+  # before the grant, so a code or refresh token is not spent on it.
+  defp proof_required(_config, _client, jkt) when is_binary(jkt), do: :ok
+
+  defp proof_required(config, client, nil) do
+    cond do
+      Config.dpop_required?(config) ->
+        {:error, "invalid_dpop_proof", "This server issues DPoP-bound tokens only: send a proof"}
+
+      client.dpop_bound_access_tokens and config.dpop == false ->
+        {:error, "invalid_client", "The client requires DPoP, which this server does not offer"}
+
+      client.dpop_bound_access_tokens ->
+        {:error, "invalid_dpop_proof", "The client's tokens must be DPoP-bound: send a proof"}
+
+      true ->
+        :ok
     end
   end
 

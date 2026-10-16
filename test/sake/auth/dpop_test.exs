@@ -534,4 +534,210 @@ defmodule Sake.Auth.DPoPTest do
       assert mcp([{"authorization", "Bearer " <> access}]).status == 401
     end
   end
+
+  # ---- DPoP required
+
+  defp confidential(config, attrs \\ %{}) do
+    {:ok, client, secret} =
+      Sake.Auth.Clients.create(
+        config,
+        Map.merge(
+          %{
+            name: "Web",
+            redirect_uris: ["https://app.example/cb"],
+            grant_types: ["authorization_code", "refresh_token", "client_credentials"],
+            confidential: true
+          },
+          attrs
+        )
+      )
+
+    {client, {"authorization", "Basic " <> Base.encode64(client.id <> ":" <> secret)}}
+  end
+
+  describe "dpop: [required: true]" do
+    @describetag auth: [dpop: [required: true]]
+
+    test "every grant refuses a request without a proof, before it spends anything", %{
+      config: config
+    } do
+      {client, basic} = confidential(config)
+      {key, _} = Keys.key()
+      params = code_params(config, client)
+
+      conn = token(params, [basic])
+      assert conn.status == 400
+      assert %{"error" => "invalid_dpop_proof", "error_description" => description} = body(conn)
+      assert description =~ "DPoP-bound tokens only"
+
+      # The code was not spent: with a proof it works.
+      conn = token(params, [basic, proof_for(key)])
+      assert %{"token_type" => "DPoP", "refresh_token" => refresh} = body(conn)
+
+      refresh = %{"grant_type" => "refresh_token", "refresh_token" => refresh}
+      assert body(token(refresh, [basic]))["error"] == "invalid_dpop_proof"
+      assert %{"token_type" => "DPoP"} = body(token(refresh, [basic, proof_for(key)]))
+
+      machine = %{"grant_type" => "client_credentials", "resource" => @mcp}
+      assert body(token(machine, [basic]))["error"] == "invalid_dpop_proof"
+      assert %{"token_type" => "DPoP"} = body(token(machine, [basic, proof_for(key)]))
+    end
+
+    test "the JWT bearer grant too" do
+      {key, jwk} = Keys.key()
+      stop_supervised!(Sake)
+
+      start_supervised!(
+        {Sake,
+         auth: [
+           subject: SakeDev.Subject,
+           issuer: "http://www.example.com",
+           allow_insecure: true,
+           servers: [SakeDev.Server],
+           resources: ["/mcp"],
+           dpop: [required: true],
+           trusted_issuers: [
+             [
+               issuer: "https://ci.example",
+               profile: :workload,
+               jwks: %{"keys" => [jwk]},
+               audiences: ["https://mcp.example.com"],
+               clients: :any
+             ]
+           ]
+         ],
+         secret_key_base: ModernClient.secret(),
+         streams: false,
+         tasks: false}
+      )
+
+      {:ok, client, nil} =
+        Sake.Auth.Clients.create(Sake.Auth.config(), %{
+          name: "Workload",
+          grant_types: ["urn:ietf:params:oauth:grant-type:jwt-bearer"]
+        })
+
+      grant = fn ->
+        assertion =
+          Keys.sign(
+            %{
+              "iss" => "https://ci.example",
+              "sub" => "repo:acme/app",
+              "email" => "bo@example.com",
+              "aud" => "https://mcp.example.com",
+              "exp" => Keys.now(300)
+            },
+            key
+          )
+
+        %{
+          "grant_type" => "urn:ietf:params:oauth:grant-type:jwt-bearer",
+          "assertion" => assertion,
+          "client_id" => client.id,
+          "resource" => @mcp
+        }
+      end
+
+      {proof_key, _} = Keys.key()
+      assert body(token(grant.(), []))["error"] == "invalid_dpop_proof"
+      assert %{"token_type" => "DPoP"} = body(token(grant.(), [proof_for(proof_key)]))
+    end
+
+    test "the MCP endpoint refuses Bearer, even an unbound token, and challenges DPoP only", %{
+      config: config
+    } do
+      {unbound, _, _} = issue(config, %{scopes: ["issues:read"]})
+
+      conn = mcp([{"authorization", "Bearer " <> unbound}])
+      assert conn.status == 401
+
+      assert [
+               ~s(DPoP error="invalid_token", error_description="This server takes DPoP-bound tokens only", resource_metadata=) <>
+                 _
+             ] = challenges(conn)
+
+      {key, _} = Keys.key()
+      conn = mcp(dpop(unbound, key))
+
+      assert [
+               ~s(DPoP error="invalid_token", error_description="The access token is not DPoP-bound") <>
+                 _
+             ] =
+               challenges(conn)
+
+      conn = mcp([])
+      assert [~s(DPoP resource_metadata=) <> _] = challenges(conn)
+
+      {access, key} = bound(config)
+      assert mcp(dpop(access, key)).status == 200
+    end
+
+    test "the resource metadata says so" do
+      conn =
+        conn(:get, "/.well-known/oauth-protected-resource/mcp")
+        |> Sake.Auth.WellKnown.call(Sake.Auth.WellKnown.init([]))
+
+      assert JSON.decode!(conn.resp_body)["dpop_bound_access_tokens_required"] == true
+    end
+
+    test "the option is checked when Sake starts" do
+      for bad <- [[required: "yes"], [nonce: true, other: 1]] do
+        assert_raise ArgumentError, ~r/dpop:/, fn ->
+          Sake.Auth.Config.new(
+            subject: SakeDev.Subject,
+            issuer: "http://www.example.com",
+            allow_insecure: true,
+            dpop: bad
+          )
+        end
+      end
+    end
+  end
+
+  describe "a client registered with dpop_bound_access_tokens" do
+    defp register(doc) do
+      conn(:post, "/oauth/register", JSON.encode!(doc))
+      |> put_req_header("content-type", "application/json")
+      |> Sake.Auth.DCR.call(Sake.Auth.DCR.init([]))
+    end
+
+    test "dynamic registration keeps it, and the client's requests need a proof", %{
+      config: config
+    } do
+      doc = %{"redirect_uris" => ["http://127.0.0.1:9000/callback"], "client_name" => "CLI"}
+
+      assert register(Map.put(doc, "dpop_bound_access_tokens", "yes")).status == 400
+
+      conn = register(Map.put(doc, "dpop_bound_access_tokens", true))
+      assert %{"client_id" => id, "dpop_bound_access_tokens" => true} = body(conn)
+      {:ok, client} = Sake.Auth.Clients.get(config, id)
+      assert client.dpop_bound_access_tokens
+
+      {key, _} = Keys.key()
+      params = code_params(config, client)
+      conn = token(params, [])
+      assert %{"error" => "invalid_dpop_proof", "error_description" => description} = body(conn)
+      assert description =~ "client's tokens must be DPoP-bound"
+      assert %{"token_type" => "DPoP"} = body(token(params, [proof_for(key)]))
+
+      # Another client of the same server still gets bearer tokens.
+      assert %{"token_type" => "Bearer"} =
+               body(token(code_params(config, public_client(config)), []))
+    end
+
+    test "a host-registered client may say so too", %{config: config} do
+      {_client, basic} = confidential(config, %{dpop_bound_access_tokens: true})
+      machine = %{"grant_type" => "client_credentials", "resource" => @mcp}
+      assert body(token(machine, [basic]))["error"] == "invalid_dpop_proof"
+    end
+
+    @tag auth: [dpop: false]
+    test "a server without DPoP cannot serve such a client", %{config: config} do
+      {client, basic} = confidential(config, %{dpop_bound_access_tokens: true})
+      {key, _} = Keys.key()
+      conn = token(code_params(config, client), [basic, proof_for(key)])
+      assert conn.status == 400
+      assert body(conn)["error"] == "invalid_client"
+    end
+  end
 end

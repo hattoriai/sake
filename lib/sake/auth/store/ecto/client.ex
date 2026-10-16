@@ -17,6 +17,7 @@ if Code.ensure_loaded?(Ecto.Schema) do
       field(:jwks, :map)
       field(:jwks_uri, :string)
       field(:application_type, :string)
+      field(:dpop_bound_access_tokens, :boolean, default: false)
       timestamps(type: :utc_datetime)
     end
   end

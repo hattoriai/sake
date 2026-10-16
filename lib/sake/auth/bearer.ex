@@ -14,6 +14,12 @@ defmodule Sake.Auth.Bearer do
   # with the algorithms proofs may use when the server takes DPoP. The
   # one for the scheme the request used comes first and carries the
   # error, so a client that reads only the first sees what went wrong.
+  #
+  # With `dpop: [required: true]` only bound tokens are taken: the Bearer
+  # scheme is refused even for an unbound token (so tokens issued before
+  # the switch stop working), and a 401 offers the DPoP challenge alone,
+  # since a challenge names a scheme the server would accept (RFC 9110
+  # §11.6.1, RFC 9449 §7.1).
 
   import Plug.Conn
 
@@ -91,10 +97,16 @@ defmodule Sake.Auth.Bearer do
     end
   end
 
+  defp possession(_conn, %{dpop: %{required: true}}, :bearer, _token, _record, _resource),
+    do: {:error, :dpop, "invalid_token", "This server takes DPoP-bound tokens only"}
+
   defp possession(_conn, _config, :bearer, _token, %{jkt: nil}, _resource), do: :ok
 
   defp possession(_conn, _config, :bearer, _token, _record, _resource),
     do: {:error, :dpop, "invalid_token", "The access token is DPoP-bound: send it with a proof"}
+
+  defp possession(_conn, %{dpop: %{required: true}}, :dpop, _token, %{jkt: nil}, _resource),
+    do: {:error, :dpop, "invalid_token", "The access token is not DPoP-bound"}
 
   defp possession(_conn, _config, :dpop, _token, %{jkt: nil}, _resource),
     do:
@@ -162,11 +174,17 @@ defmodule Sake.Auth.Bearer do
 
   defp challenges(%{dpop: false}, params, error), do: [challenge(:bearer, params, error)]
 
+  defp challenges(%{dpop: %{required: true}}, params, error),
+    do: [challenge(:dpop, params, dpop_error(error))]
+
   defp challenges(_config, params, {:dpop, _code, _description} = error),
     do: [challenge(:dpop, params, error), challenge(:bearer, params, nil)]
 
   defp challenges(_config, params, error),
     do: [challenge(:bearer, params, error), challenge(:dpop, params, nil)]
+
+  defp dpop_error({_scheme, code, description}), do: {:dpop, code, description}
+  defp dpop_error(nil), do: nil
 
   defp challenge(scheme, params, {scheme, code, description}),
     do:

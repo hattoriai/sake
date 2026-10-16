@@ -51,7 +51,8 @@ defmodule Sake.Auth.DCR do
           "grant_types" => client.grant_types,
           "response_types" => ["code"],
           "token_endpoint_auth_method" => "none",
-          "application_type" => client.application_type
+          "application_type" => client.application_type,
+          "dpop_bound_access_tokens" => client.dpop_bound_access_tokens
         }
 
         conn
@@ -125,7 +126,8 @@ defmodule Sake.Auth.DCR do
       client_uri: doc["client_uri"],
       logo_uri: doc["logo_uri"],
       scopes: if(is_binary(doc["scope"]), do: String.split(doc["scope"]), else: nil),
-      application_type: doc["application_type"] || "native"
+      application_type: doc["application_type"] || "native",
+      dpop_bound_access_tokens: doc["dpop_bound_access_tokens"] == true
     }
   end
 

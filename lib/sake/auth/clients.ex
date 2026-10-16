@@ -27,6 +27,10 @@ defmodule Sake.Auth.Clients do
   `c:Sake.Auth.Subject.client_principal/1`) and
   `"urn:ietf:params:oauth:grant-type:jwt-bearer"`, for grants from a
   `Sake.Auth.TrustedIssuer`.
+
+  `dpop_bound_access_tokens: true` (RFC 9449 §5.2) refuses the client's
+  token requests that carry no DPoP proof, so all its tokens are bound
+  to a key it holds.
   """
 
   alias Sake.Auth.{Client, Config, Redirect, Tokens}
@@ -174,7 +178,8 @@ defmodule Sake.Auth.Clients do
       logo_uri: attrs[:logo_uri],
       jwks: attrs[:jwks],
       jwks_uri: attrs[:jwks_uri],
-      application_type: attrs[:application_type] || "native"
+      application_type: attrs[:application_type] || "native",
+      dpop_bound_access_tokens: attrs[:dpop_bound_access_tokens] == true
     }
 
     {module, state} = Sake.Auth.store(config)
@@ -228,7 +233,8 @@ defmodule Sake.Auth.Clients do
   @spec metadata_types_valid?(map()) :: boolean()
   def metadata_types_valid?(doc) do
     Enum.all?(~w(client_uri logo_uri application_type scope), &optional_string?(doc[&1])) and
-      optional_strings?(doc["grant_types"])
+      optional_strings?(doc["grant_types"]) and
+      doc["dpop_bound_access_tokens"] in [nil, true, false]
   end
 
   defp optional_string?(value), do: is_nil(value) or is_binary(value)

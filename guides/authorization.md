@@ -231,9 +231,33 @@ auth: [
   ...,
   dpop: true,                # the default: DPoP when jose is loaded
   dpop: [nonce: true],       # require a server nonce in every proof
+  dpop: [required: true],    # DPoP-bound tokens only (combines with nonce:)
   dpop: false                # bearer tokens only; the DPoP scheme is refused
 ]
 ```
+
+**DPoP required.** With `required: true` the server deals in bound
+tokens only:
+
+- the token endpoint refuses a request without a proof, on every grant,
+  with `invalid_dpop_proof` (before a code or a refresh token is spent);
+- the MCP endpoint refuses the `Bearer` scheme, even for an unbound token
+  it issued itself, and its 401 carries the `DPoP` challenge alone: a
+  challenge names a scheme the server would accept;
+- the protected resource metadata says `dpop_bound_access_tokens_required:
+  true` (RFC 9728 §2), so a client knows before it asks for a token.
+
+Turning it on is a cut-over: every bearer token issued before stops
+working at once, and their clients must authorize again (with DPoP).
+Clients that cannot use DPoP cannot use the server at all; Sake's own
+client stops with `{:dpop_required, reason}` instead of trying.
+
+A single client can ask for the same (RFC 9449 §5.2): one registered
+with `dpop_bound_access_tokens: true` — in its dynamic registration, its
+Client ID Metadata Document, or `Sake.Auth.Clients.create/2` — gets its
+token requests without a proof refused, whatever the server's setting.
+A server with `dpop: false` refuses such a client's token requests with
+`invalid_client`, since it cannot bind them.
 
 **Nonces.** A proof's time comes from the client's clock, and a stolen
 proof can be replayed to another node of a cluster within its five
@@ -248,7 +272,7 @@ It costs a client one extra round trip now and then.
 Without `jose`, the metadata does not offer DPoP, the token endpoint
 ignores proofs and issues bearer tokens, and the MCP endpoint refuses the
 `DPoP` scheme with `invalid_request`. Asking for it by name (`dpop:
-[...]`) without `jose` fails when Sake starts.
+[...]`, `required:` included) without `jose` fails when Sake starts.
 
 ## What the metadata says
 
@@ -261,7 +285,9 @@ in `token_endpoint_auth_methods_supported`, with
 `token_endpoint_auth_signing_alg_values_supported` (RS256, PS256,
 ES256, ES384), when `jose` is there. With DPoP on, both documents (the
 authorization server's and the protected resource's) list
-`dpop_signing_alg_values_supported`, the same four algorithms.
+`dpop_signing_alg_values_supported`, the same four algorithms, and with
+`required: true` the protected resource's says
+`dpop_bound_access_tokens_required`.
 
 ## CIMD trust policies
 

@@ -31,6 +31,8 @@ if Code.ensure_loaded?(Ecto.Migration) do
         add(:jwks, :map)
         add(:jwks_uri, :text)
         add(:application_type, :string)
+        # RFC 9449 §5.2: the client's token requests must carry a DPoP proof.
+        add(:dpop_bound_access_tokens, :boolean, null: false, default: false)
         timestamps(type: :utc_datetime)
       end
 
