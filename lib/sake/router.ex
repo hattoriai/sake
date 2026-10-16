@@ -27,6 +27,15 @@ if Code.ensure_loaded?(Phoenix.Router) do
     person; the API routes need no session; the well-known routes need no
     pipeline at all; the endpoint needs no pipeline either (Sake checks the
     bearer token itself).
+
+    An endpoint whose tokens come from another authorization server names
+    its `external_auth:` configuration (see `Sake.Auth.External`), and
+    needs only the well-known routes, for its protected resource metadata:
+
+        scope "/" do
+          sake_well_known()
+          sake_endpoint "/partners/mcp", server: MyApp.MCP, auth: :keycloak
+        end
     """
 
     defmacro sake_well_known do

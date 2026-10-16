@@ -74,6 +74,7 @@ See `guides/quickstart.md` for turning on authorization in five steps, or
 | `Sake.Client` authorization | yes | yes | yes (no resource metadata: the server's own) |
 | Client credentials, enterprise-managed authorization (`Sake.Auth`, `Sake.Client`) | yes | yes | yes |
 | DPoP, tokens bound to the client's key (`Sake.Auth`, `Sake.Client`) | yes | yes | yes |
+| Your own authorization server (`Sake.Auth.External`: JWT, introspection or a callback) | yes | yes | yes |
 | OpenTelemetry tracing, client to server to tool (trace context in `_meta`) | yes | yes | yes |
 | `Sake.Test`, an in-memory client for a server's tests | yes | yes | yes |
 | Middleware around calls (`Sake.Middleware`: audit, rate limits, plans, rewriting, redaction) | yes | yes | yes |
@@ -92,6 +93,12 @@ bound to a key the client holds when the client uses DPoP (RFC 9449),
 with a fresh proof of that key on every request, or else as a bearer
 credential. See `guides/authorization.md`; `Sake.Client`
 runs the same flow from the client's side (`guides/client.md`).
+
+An app that already runs OAuth, inside it (ExOauth2Provider, Boruta) or
+at an identity provider (Keycloak, Auth0, Okta, Entra ID), keeps it:
+Sake then only checks that server's tokens, as JWTs, by introspection or
+with your own callback, and enforces the scopes (see
+`guides/external_auth.md`).
 
 Without a person at a browser, both sides also speak the official
 authorization extensions: the client credentials grant for a service
@@ -117,6 +124,7 @@ work without it.
 - [MCP Apps](guides/apps.md)
 - [Resources and prompts](guides/resources_and_prompts.md)
 - [Authorization](guides/authorization.md)
+- [Bring your own authorization server](guides/external_auth.md)
 - [Multi-tenant endpoints](guides/tenants.md)
 - [Middleware](guides/middleware.md)
 - [Composing and proxying servers](guides/composing.md)
@@ -132,7 +140,9 @@ work without it.
 0.1: the server (both eras, one endpoint, and stdio; with elicitation,
 sampling, roots, the tasks extension and MCP Apps), the authorization server
 (bearer and DPoP-bound tokens, CIMD, dynamic registration, consent, token
-rotation, machine clients, trusted identity providers and workloads), and
+rotation, machine clients, trusted identity providers and workloads), or
+the host's own authorization server instead (JWT access tokens,
+introspection, or a callback, with scopes, step-up and DPoP), and
 the client (HTTP and stdio), which runs the MCP authorization flow itself
 (discovery, CIMD or dynamic registration, PKCE, refresh, step-up, DPoP
 with its nonces, or a grant without a person: client credentials, a JWT

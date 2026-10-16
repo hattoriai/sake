@@ -68,6 +68,30 @@ First release.
   `auth: true` advertises the extensions of the grants offered in the
   `extensions` of its capabilities (`server/discover` and the legacy
   `initialize` result). Signed JWTs need the optional `jose` dependency.
+- `Sake.Auth.External`: an endpoint whose tokens come from an
+  authorization server Sake does not run, an in-app provider
+  (ExOauth2Provider, Boruta) or an identity provider (Keycloak, Auth0,
+  Okta, Entra ID, ...), named in `external_auth:` of the `Sake` child and
+  on the endpoint (`auth: :keycloak`); `Sake.Auth` is then not needed, or
+  runs side by side for other endpoints (`resources:` says which path is
+  whose). Tokens are verified as JWT access tokens (RFC 9068: signature
+  with the issuer's keys from `jwks:`, `jwks_uri:` or its metadata, with
+  one refetch for an unknown key ID; `iss`, `aud`, `exp`, `nbf`, a
+  configurable `typ`), by token introspection (RFC 7662, the resource's
+  credentials, a short cache keyed by a token digest that honours
+  `exp`), or by the host's `verify_token/2` callback. A token must carry
+  the endpoint's URL (or a configured audience) in `aud` unless
+  `audiences: :any` says otherwise. It becomes the same
+  `Sake.Auth.TokenRecord` (now with `issuer` and `claims`), with its
+  scopes (`scope` or `scp`), its client, its subject (none for a machine
+  client) and its DPoP binding (`cnf.jkt`, checked with a proof, nonces
+  included); the principal is `principal:`'s, the callback's, or the
+  claims. The protected resource metadata names the external issuer,
+  scope checks and step-up challenges are unchanged, tasks and request
+  states are bound to the issuer, and the capabilities declare only the
+  extensions configured. Refusals are the telemetry event `[:sake, :auth,
+  :external, :refused]` with their reason. Without `Sake.Auth`,
+  `/.well-known/oauth-authorization-server` answers 404.
 - `Sake.Auth.Store.ETS` (development) and `Sake.Auth.Store.Ecto`
   (production) token/client/code/consent stores, plus a grants API for a
   settings page and `Sake.Auth.prune/1` for expired rows.

@@ -20,21 +20,26 @@ defmodule Sake.Auth.Bearer do
   # the switch stop working), and a 401 offers the DPoP challenge alone,
   # since a challenge names a scheme the server would accept (RFC 9110
   # §11.6.1, RFC 9449 §7.1).
+  #
+  # The token is Sake's own (`auth: true`), looked up by its hash in the
+  # store, or an external authorization server's (`auth: name`), which
+  # `Sake.Auth.External` verifies. Everything else here is the same for
+  # both: the schemes, the DPoP binding, the challenges.
 
   import Plug.Conn
 
   alias Sake.Auth
-  alias Sake.Auth.{DPoP, Resource, Tokens}
+  alias Sake.Auth.{Config, DPoP, External, Resource, Tokens}
 
   @spec check(Plug.Conn.t(), map()) :: {:ok, Plug.Conn.t()} | {:error, Plug.Conn.t()}
   def check(conn, plug_opts) do
-    config = Auth.config()
+    config = config(plug_opts.auth)
     resource = Resource.canonical(conn, plug_opts)
 
     with {:ok, scheme, token} <- credentials(conn, config),
-         {:ok, record} <- record(config, scheme, token, resource),
+         {:ok, record, found} <- record(conn, config, scheme, token, resource),
          :ok <- possession(conn, config, scheme, token, record, resource),
-         {:ok, principal} <- principal(config, record) do
+         {:ok, principal} <- principal(config, record, found) do
       {:ok,
        conn
        |> nonce(config, scheme)
@@ -84,18 +89,30 @@ defmodule Sake.Auth.Bearer do
 
   defp dpop(_header, _config), do: :error
 
-  defp record(config, scheme, token, resource) do
+  defp config(true), do: Auth.config()
+  defp config(name), do: External.fetch!(name)
+
+  defp record(_conn, %Config{} = config, scheme, token, resource) do
     {module, state} = Auth.store(config)
 
     with {:ok, record} <- module.get_token(state, :access, Tokens.hash(token)),
          true <- Tokens.valid?(record, DateTime.utc_now()),
          true <- record.resource == resource do
-      {:ok, record}
+      {:ok, record, nil}
     else
-      _ when scheme == :dpop -> {:error, :dpop, "invalid_token", "The access token is not valid"}
-      _ -> :error
+      _ -> invalid(scheme)
     end
   end
+
+  defp record(conn, %External{} = config, scheme, token, resource) do
+    case External.verify(config, token, resource, conn) do
+      {:ok, record, found} -> {:ok, record, found}
+      :error -> invalid(scheme)
+    end
+  end
+
+  defp invalid(:dpop), do: {:error, :dpop, "invalid_token", "The access token is not valid"}
+  defp invalid(:bearer), do: :error
 
   defp possession(_conn, %{dpop: %{required: true}}, :bearer, _token, _record, _resource),
     do: {:error, :dpop, "invalid_token", "This server takes DPoP-bound tokens only"}
@@ -143,12 +160,17 @@ defmodule Sake.Auth.Bearer do
   # A person's token loads its subject; a machine client's (it has none)
   # asks the subject module for the client's principal on every request,
   # so a client the host cuts off stops at once.
-  defp principal(config, %{subject_id: nil, client_id: client_id}) do
+  #
+  # An external server's token stands for what `Sake.Auth.External` says.
+  defp principal(%External{} = config, record, found),
+    do: External.principal(config, record, found)
+
+  defp principal(config, %{subject_id: nil, client_id: client_id}, nil) do
     with {:ok, client} <- Sake.Auth.Clients.get(config, client_id),
          do: Sake.Auth.Subject.client_principal(config.subject, client)
   end
 
-  defp principal(config, record), do: config.subject.fetch(record.subject_id)
+  defp principal(config, record, nil), do: config.subject.fetch(record.subject_id)
 
   defp nonce(conn, config, :dpop), do: DPoP.put_nonce(conn, config)
   defp nonce(conn, _config, :bearer), do: conn

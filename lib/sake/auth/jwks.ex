@@ -1,18 +1,19 @@
 defmodule Sake.Auth.JWKS do
   @moduledoc false
-  # The public keys a JWT is verified with: a client's (`private_key_jwt`)
-  # or a trusted issuer's. Keys given inline are used as they are. Keys at
-  # a `jwks_uri` are fetched with the guards of a Client ID Metadata
-  # Document (HTTPS unless `allow_insecure`, no redirects, 64 KB, five
-  # seconds) and cached for their `max-age`. A trusted issuer with neither
-  # has its `jwks_uri` read from its metadata.
+  # The public keys a JWT is verified with: a client's (`private_key_jwt`),
+  # a trusted issuer's, or an external authorization server's (its JWT
+  # access tokens, see `Sake.Auth.External`). Keys given inline are used
+  # as they are. Keys at a `jwks_uri` are fetched with the guards of a
+  # Client ID Metadata Document (HTTPS unless `allow_insecure`, no
+  # redirects, 64 KB, five seconds) and cached for their `max-age`. An
+  # issuer with neither has its `jwks_uri` read from its metadata.
   #
   # A token signed with a key the cached set does not have (a `kid` it
   # does not list) refetches the set once, so a key the issuer rotated in
   # is picked up; at most once a minute per URL, so nobody can make the
   # server fetch on every request by inventing key IDs.
 
-  alias Sake.Auth.{CIMD, Client, Config, JWT, TrustedIssuer}
+  alias Sake.Auth.{CIMD, Client, Config, External, JWT, TrustedIssuer}
 
   @refetch_after 60
 
@@ -26,7 +27,7 @@ defmodule Sake.Auth.JWKS do
   def source(_client), do: nil
 
   @doc "Verifies `token` with the keys at `source` (see `Sake.Auth.JWT.verify/3`)."
-  @spec verify(Config.t(), String.t(), source() | nil, keyword()) ::
+  @spec verify(Config.t() | External.t(), String.t(), source() | nil, keyword()) ::
           {:ok, map()} | {:error, term()}
   def verify(_config, _token, nil, _opts), do: {:error, :no_key}
 

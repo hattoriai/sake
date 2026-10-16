@@ -5,7 +5,9 @@ defmodule Sake.Plug do
       forward "/mcp", Sake.Plug, server: MyApp.MCP
 
   Options: `server:` (required), `auth:` (`true` protects the endpoint with
-  `Sake.Auth`), `scope:` (a function of the conn that returns the host's
+  `Sake.Auth`; the name of an `external_auth:` configuration of the `Sake`
+  child, such as `:keycloak`, with the tokens of that authorization server,
+  see `Sake.Auth.External`), `scope:` (a function of the conn that returns the host's
   principal; default `conn.assigns[:sake_scope]`), `origins:` (allowed
   `Origin` values for a request that sends one — a request with no `Origin`
   header, which is how every non-browser MCP client connects, is always
@@ -29,10 +31,18 @@ defmodule Sake.Plug do
   @impl true
   def init(opts) do
     server = opts[:server] || raise(ArgumentError, "Sake.Plug needs a server: option")
+    auth = opts[:auth] || false
+
+    unless is_atom(auth),
+      do:
+        raise(
+          ArgumentError,
+          "Sake.Plug auth: is true, false or the name of an external_auth: configuration, got #{inspect(auth)}"
+        )
 
     %{
       server: server,
-      auth: opts[:auth] || false,
+      auth: auth,
       scope: opts[:scope] || (&Sake.Plug.default_scope/1),
       origins: opts[:origins],
       json_limit: opts[:json_limit] || 4_000_000,

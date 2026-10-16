@@ -19,6 +19,12 @@ defmodule Sake.Auth.TokenRecord do
   tokens born from one authorization code. `jkt` is the RFC 7638
   thumbprint of the DPoP key the token is bound to (its `cnf.jkt`), or nil
   for a bearer token.
+
+  A token from an external authorization server (see
+  `Sake.Auth.External`) is never stored: its record is made for each
+  request, with that server's `issuer` and the verified `claims` (the
+  JWT's, the introspection answer, or what your callback returned). Both
+  are nil for a token of `Sake.Auth`.
   """
   @type t :: %__MODULE__{}
   defstruct [
@@ -34,6 +40,8 @@ defmodule Sake.Auth.TokenRecord do
     :used_at,
     :inserted_at,
     :jkt,
+    :issuer,
+    :claims,
     scopes: []
   ]
 end

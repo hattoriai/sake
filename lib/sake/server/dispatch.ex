@@ -113,9 +113,13 @@ defmodule Sake.Server.Dispatch do
   # The authorization extensions an endpoint with `auth:` advertises. A
   # mounted server is served by its parent's endpoint, so the parent's
   # authorization decides; a proxy's upstream authorizes its own clients,
-  # which is not this endpoint's to advertise.
-  def auth_extensions(%Context{conn_assigns: %{sake_auth: auth}}) when auth not in [nil, false],
+  # which is not this endpoint's to advertise. An endpoint on an external
+  # authorization server declares what its configuration says.
+  def auth_extensions(%Context{conn_assigns: %{sake_auth: true}}),
     do: Sake.Auth.extensions(Sake.Auth.config())
+
+  def auth_extensions(%Context{conn_assigns: %{sake_auth: name}}) when name not in [nil, false],
+    do: Sake.Auth.External.extensions(Sake.Auth.External.fetch!(name))
 
   def auth_extensions(_ctx), do: %{}
 
@@ -743,7 +747,10 @@ defmodule Sake.Server.Dispatch do
   def cacheable(result, server, %Context{era: :modern} = ctx, component_ttls) do
     scope =
       server.__sake__(:cache_scope) ||
-        if(ctx.token == nil and ctx.conn_assigns[:sake_auth] != true, do: :public, else: :private)
+        if(ctx.token == nil and ctx.conn_assigns[:sake_auth] in [nil, false],
+          do: :public,
+          else: :private
+        )
 
     ttl = Enum.min([server.__sake__(:ttl) | Enum.reject(component_ttls, &is_nil/1)])
     result |> Map.put("ttlMs", ttl) |> Map.put("cacheScope", to_string(scope))

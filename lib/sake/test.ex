@@ -96,7 +96,12 @@ defmodule Sake.Test do
   does not apply; `scopes:` issues a real access token for `subject:`
   (see `access_token/1`) and sends it as a bearer token, or, to a server
   that takes DPoP-bound tokens only (`dpop: [required: true]`), bound to a
-  key the client signs a DPoP proof with for each request. A legacy server's
+  key the client signs a DPoP proof with for each request. That token is
+  `Sake.Auth`'s: an endpoint whose tokens come from another authorization
+  server (`Sake.Auth.External`) does not take it, so send one that server
+  accepts in `headers:` (in the test environment, a `verify:` callback
+  that knows your test tokens), or test the server through the in-memory
+  client, whose `scopes:` token stands for any issuer's. A legacy server's
   questions need the in-memory client, and a task is polled at the
   interval the server suggests, as over the network.
 
@@ -226,6 +231,10 @@ defmodule Sake.Test do
     cond do
       !opts[:scopes] ->
         [headers: headers]
+
+      Sake.Auth.configured() == nil ->
+        raise ArgumentError,
+              "Sake.Test: scopes: with plug: issues a Sake.Auth token, and Sake.Auth is not configured; for an endpoint on an external authorization server, send a token it accepts in headers:"
 
       Sake.Auth.Config.dpop_required?(Sake.Auth.config()) ->
         [

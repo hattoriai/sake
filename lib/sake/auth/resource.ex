@@ -19,7 +19,17 @@ defmodule Sake.Auth.Resource do
       origin(conn) <>
         "/.well-known/oauth-protected-resource" <> String.trim_trailing(conn.request_path, "/")
 
-  @spec scopes_string(Sake.Auth.Config.t()) :: String.t()
+  @spec scopes_string(Sake.Auth.Config.t() | Sake.Auth.External.t()) :: String.t()
   def scopes_string(config),
     do: config |> Sake.Auth.Config.scopes() |> Enum.map_join(" ", &elem(&1, 0))
+
+  @doc "Whether an endpoint path matches a pattern of `resources:` (`:param` segments match any one segment)."
+  @spec path_match?(String.t(), String.t()) :: boolean()
+  def path_match?(pattern, path) do
+    ps = String.split(pattern, "/", trim: true)
+    xs = String.split(path, "/", trim: true)
+
+    length(ps) == length(xs) and
+      Enum.zip(ps, xs) |> Enum.all?(fn {p, x} -> String.starts_with?(p, ":") or p == x end)
+  end
 end

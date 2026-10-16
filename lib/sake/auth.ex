@@ -5,15 +5,22 @@ defmodule Sake.Auth do
 
   Configure it on the `Sake` child (see `Sake.child_spec/1`) and mount the
   routes with `Sake.Router` (Phoenix) or `Sake.Auth.RouterPlug` (Plug).
+  An endpoint whose tokens come from another authorization server is
+  `Sake.Auth.External`'s instead.
   """
 
   alias Sake.Auth.Config
 
   @spec config() :: Config.t()
   def config do
-    :persistent_term.get({Sake, :auth}, nil) ||
-      raise "Sake authorization is not configured: start {Sake, auth: [...]}"
+    configured() || raise "Sake authorization is not configured: start {Sake, auth: [...]}"
   end
+
+  @doc false
+  # The configuration, or nil when Sake runs without its own
+  # authorization server (no auth at all, or external ones only).
+  @spec configured() :: Config.t() | nil
+  def configured, do: :persistent_term.get({Sake, :auth}, nil)
 
   @doc """
   The identifier of an authorization extension: `:client_credentials`

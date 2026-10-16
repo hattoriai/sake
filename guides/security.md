@@ -157,6 +157,31 @@ leaked token of any kind is useless without its key), and a client
 registered with `dpop_bound_access_tokens` closes it for itself, so that
 no one holding its credentials can obtain an unbound token in its name.
 
+## Tokens from an external authorization server
+
+An endpoint on another authorization server (`Sake.Auth.External`, see
+`guides/external_auth.md`) checks its JWT access tokens with the same
+code and rules as the JWTs above: asymmetric algorithms only, a key of
+the algorithm's own type, the issuer's key set fetched with the same
+guards and refetched at most once a minute, `iss` compared exactly, and
+`typ` `at+jwt` unless configured otherwise. Every way of verifying (JWT,
+introspection, the host's callback) then requires an audience: the
+endpoint's URL, or the configured `audiences:`. A token for another
+resource of the same authorization server is not accepted here, which
+is what keeps a token issued to one service, or obtained by a malicious
+MCP server the person also uses, from being replayed against this one.
+Only `audiences: :any` turns the check off, and Sake never chooses it.
+
+The introspection cache is keyed by the token's SHA-256 digest, never
+the token, holds active answers only, and keeps none past the token's
+`exp`; it is bounded, and when full it stops caching rather than grow.
+A JWT or a cached introspection answer outlives a revocation at the
+authorization server, by up to the token's lifetime or the cache's.
+
+Tasks and request states are bound to the token's issuer as well as its
+subject, so the same `sub` from two issuers (or one issuer and
+`Sake.Auth`) never shares a task or a request state.
+
 ## The CIMD fetch guard, and what it does not cover
 
 `Sake.Auth.CIMD.fetch/2` resolves the client-supplied HTTPS host's

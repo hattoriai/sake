@@ -4,7 +4,8 @@ Sake's authorization server makes your Phoenix (or Plug) app itself the
 OAuth 2.1 authorization server for its own MCP endpoint: your login, your
 users, no third-party identity provider. See `guides/quickstart.md` for the
 five-step setup; this guide is the flow end to end, and the pieces you can
-replace or extend.
+replace or extend. An app that already has an authorization server keeps
+it, and Sake only checks its tokens: see `guides/external_auth.md`.
 
 ## The flow, as a person sees it
 

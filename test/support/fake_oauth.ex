@@ -45,6 +45,20 @@ defmodule SakeTest.FakeOAuth do
   #     is checked against, at both token endpoints: HS256, the client as
   #     `iss` and `sub`, the issuer or the endpoint (or the literal
   #     `urn:test:audience`) as `aud`, a `jti`, and an unexpired `exp`. Any other assertion is `invalid_client`.
+  #   * `:jwt` — a private key: access tokens are then JWTs (RFC 9068)
+  #     signed with it (`kid` "fake-1"), for the resource the client named,
+  #     with the client as `client_id` and as `sub` for a grant without a
+  #     person (`fake-user` otherwise), and its JWK Set is served at
+  #     `<issuer>/jwks` (the metadata's `jwks_uri`), from the state's
+  #     `:jwks` when a test puts one there. `:jwt_typ` is their `typ`
+  #     (default "at+jwt"), `:jwt_claims` merged into their claims.
+  #   * `:introspection` — `{client_id, secret}`: an introspection
+  #     endpoint (RFC 7662) at `<issuer>/introspect`, for that client with
+  #     HTTP Basic, answers with the claims of the tokens it issued, and
+  #     `active: false` for any other or one in the state's `:revoked`.
+  #   * `:dpop` — the metadata offers DPoP, and a token request with a
+  #     DPoP proof gets a DPoP-bound token (`cnf.jkt`). Without it a proof
+  #     is ignored.
   #   * `:state` — the Agent with the issued codes and tokens (required).
 
   @behaviour Plug
@@ -91,6 +105,9 @@ defmodule SakeTest.FakeOAuth do
       path == "/.well-known/oauth-authorization-server/idp" ->
         json(conn, 200, idp_metadata(conn, opts))
 
+      opts[:jwt] && path == issuer_path(opts) <> "/jwks" ->
+        json(conn, 200, jwks(opts))
+
       resource_metadata?(path, opts) ->
         resource_metadata(conn, opts)
 
@@ -108,6 +125,7 @@ defmodule SakeTest.FakeOAuth do
   defp route(conn, "POST", path, params, opts) do
     cond do
       path == "/idp/token" -> token_exchange(conn, params, opts)
+      path == issuer_path(opts) <> "/introspect" -> introspect(conn, params, opts)
       path == issuer_path(opts) <> "/token" -> token(conn, params, opts)
       path == issuer_path(opts) <> "/register" -> register(conn, params, opts)
       true -> send_resp(conn, 404, "")
@@ -221,6 +239,12 @@ defmodule SakeTest.FakeOAuth do
       "code_challenge_methods_supported" => ["S256"],
       "token_endpoint_auth_methods_supported" => ["none"]
     }
+    |> put_present("jwks_uri", if(opts[:jwt], do: issuer <> "/jwks"))
+    |> put_present(
+      "introspection_endpoint",
+      if(opts[:introspection], do: issuer <> "/introspect")
+    )
+    |> put_present("dpop_signing_alg_values_supported", if(opts[:dpop], do: ["ES256"]))
     |> Map.merge(opts[:metadata] || %{})
     |> Map.reject(fn {_, v} -> is_nil(v) end)
   end
@@ -264,7 +288,7 @@ defmodule SakeTest.FakeOAuth do
 
     if request &&
          Grant.challenge(p["code_verifier"] || "") == request["code_challenge"],
-       do: issue(conn, opts[:grant] || String.split(request["scope"] || ""), opts),
+       do: issue(conn, opts[:grant] || String.split(request["scope"] || ""), opts, p),
        else: json(conn, 400, %{"error" => "invalid_grant"})
   end
 
@@ -282,7 +306,8 @@ defmodule SakeTest.FakeOAuth do
         issue(
           conn,
           opts[:grant] || String.split(p["scope"] || ""),
-          Map.put(opts, :refresh, false)
+          Map.put(opts, :refresh, false),
+          Map.put(p, "machine", true)
         )
 
       error ->
@@ -376,13 +401,18 @@ defmodule SakeTest.FakeOAuth do
     end
   end
 
-  defp issue(conn, scopes, opts) do
+  defp issue(conn, scopes, opts, p \\ %{}) do
     n = Integer.to_string(System.unique_integer([:positive]))
-    access = "access-" <> n
+    jkt = bound_key(conn, opts)
+    claims = claims(conn, scopes, opts, p, jkt)
+    access = if opts[:jwt], do: signed(claims, opts), else: "access-" <> n
     refresh = "refresh-" <> n
 
     Agent.update(opts.state, fn s ->
-      s |> put_in([:tokens, access], scopes) |> put_in([:refresh, refresh], scopes)
+      s
+      |> put_in([:tokens, access], scopes)
+      |> put_in([:refresh, refresh], scopes)
+      |> put_in([:claims, access], claims)
     end)
 
     json(
@@ -390,13 +420,90 @@ defmodule SakeTest.FakeOAuth do
       200,
       %{
         "access_token" => access,
-        "token_type" => opts[:token_type] || "Bearer",
+        "token_type" => if(jkt, do: "DPoP", else: opts[:token_type] || "Bearer"),
         "scope" => Enum.join(scopes, " ")
       }
       |> put_present("expires_in", opts[:expires_in])
       |> put_present("refresh_token", if(Map.get(opts, :refresh, true), do: refresh))
     )
   end
+
+  # ---- the external authorization server: JWTs, keys, introspection
+
+  # A token request with a DPoP proof gets a token bound to its key.
+  defp bound_key(conn, opts) do
+    case {opts[:dpop], get_req_header(conn, "dpop")} do
+      {true, [proof]} ->
+        url = base(conn) <> issuer_path(opts) <> "/token"
+        {:ok, jkt} = Sake.Auth.DPoP.verify(proof, htm: "POST", htu: [url])
+        jkt
+
+      _ ->
+        nil
+    end
+  end
+
+  defp claims(conn, scopes, opts, p, jkt) do
+    client_id = p["client_id"] || basic_client(conn) || "fake-client"
+    now = System.system_time(:second)
+
+    %{
+      "iss" => base(conn) <> issuer_path(opts),
+      "sub" => if(p["machine"], do: client_id, else: "fake-user"),
+      "aud" => p["resource"],
+      "client_id" => client_id,
+      "scope" => Enum.join(scopes, " "),
+      "jti" => Integer.to_string(System.unique_integer([:positive])),
+      "iat" => now,
+      "exp" => now + (opts[:expires_in] || 300)
+    }
+    |> put_present("cnf", jkt && %{"jkt" => jkt})
+    |> Map.merge(opts[:jwt_claims] || %{})
+    |> Map.reject(fn {_, v} -> is_nil(v) end)
+  end
+
+  defp basic_client(conn) do
+    with ["Basic " <> encoded] <- get_req_header(conn, "authorization"),
+         {:ok, decoded} <- Base.decode64(encoded),
+         [id, _secret] <- String.split(decoded, ":", parts: 2) do
+      URI.decode_www_form(id)
+    else
+      _ -> nil
+    end
+  end
+
+  defp signed(claims, opts) do
+    Sake.Auth.JWT.sign(claims, opts.jwt, Sake.Auth.JWT.default_alg(opts.jwt), %{
+      "typ" => opts[:jwt_typ] || "at+jwt",
+      "kid" => "fake-1"
+    })
+  end
+
+  defp jwks(opts) do
+    Agent.get(opts.state, & &1[:jwks]) ||
+      %{"keys" => [Map.put(Sake.Auth.JWT.public_jwk(opts.jwt), "kid", "fake-1")]}
+  end
+
+  defp introspect(conn, params, %{introspection: {id, secret}} = opts) do
+    expected = "Basic " <> Base.encode64(id <> ":" <> secret)
+
+    if get_req_header(conn, "authorization") == [expected] do
+      state = Agent.get(opts.state, & &1)
+      token = params["token"]
+
+      case state.claims[token] do
+        claims when is_map(claims) and not is_map_key(state.revoked, token) ->
+          json(conn, 200, Map.put(claims, "active", true))
+
+        _ ->
+          json(conn, 200, %{"active" => false})
+      end
+    else
+      json(conn, 401, %{"error" => "invalid_client"})
+    end
+  end
+
+  defp introspect(conn, _params, _opts), do: send_resp(conn, 404, "")
 
   defp register(conn, params, opts) do
     json(
@@ -414,7 +521,9 @@ defmodule SakeTest.FakeOAuth do
   @doc "A fresh state Agent for the issued codes and tokens."
   def state do
     {:ok, agent} =
-      Agent.start_link(fn -> %{codes: %{}, tokens: %{}, refresh: %{}, idp_refresh: %{}} end)
+      Agent.start_link(fn ->
+        %{codes: %{}, tokens: %{}, refresh: %{}, idp_refresh: %{}, claims: %{}, revoked: %{}}
+      end)
 
     agent
   end

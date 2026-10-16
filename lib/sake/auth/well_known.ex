@@ -1,7 +1,10 @@
 defmodule Sake.Auth.WellKnown do
   @moduledoc """
   Serves `/.well-known/oauth-protected-resource` (also under the endpoint's
-  path) and `/.well-known/oauth-authorization-server`. Mount at the root:
+  path) and `/.well-known/oauth-authorization-server`. The protected
+  resource metadata of an endpoint on an external authorization server
+  (`Sake.Auth.External`) names that server; the authorization server
+  metadata is only `Sake.Auth`'s. Mount at the root:
 
       forward "/.well-known", Sake.Auth.WellKnown
 
@@ -10,7 +13,7 @@ defmodule Sake.Auth.WellKnown do
   @behaviour Plug
   import Plug.Conn
 
-  alias Sake.Auth.{Config, DPoP, JWT, Resource}
+  alias Sake.Auth.{Config, DPoP, External, JWT, Resource}
 
   @id_jag_profile "urn:ietf:params:oauth:grant-profile:id-jag"
 
@@ -38,29 +41,39 @@ defmodule Sake.Auth.WellKnown do
 
   def call(conn, _opts), do: send_resp(conn, 404, "")
 
+  # The endpoint at the path names its authorization server: the
+  # external one whose `resources:` cover it, else Sake's own. With
+  # neither, there is no protected resource there.
   defp protected_resource(conn, rest) do
-    config = Sake.Auth.config()
     suffix = if rest == [], do: "", else: "/" <> Enum.join(rest, "/")
 
-    json(
-      conn,
-      dpop_required(
-        config,
-        dpop_algs(config, %{
-          "resource" => Resource.origin(conn) <> suffix,
-          "authorization_servers" => [config.issuer],
-          "scopes_supported" => config |> Config.scopes() |> Enum.map(&elem(&1, 0)),
-          "bearer_methods_supported" => ["header"],
-          "resource_name" => config.name
-        })
-      )
-    )
+    case External.for_path(suffix) || Sake.Auth.configured() do
+      nil -> send_resp(conn, 404, "")
+      config -> json(conn, resource_metadata(conn, config, suffix))
+    end
   end
+
+  defp resource_metadata(conn, config, suffix) do
+    body =
+      %{
+        "resource" => Resource.origin(conn) <> suffix,
+        "authorization_servers" => [config.issuer],
+        "scopes_supported" => config |> Config.scopes() |> Enum.map(&elem(&1, 0)),
+        "bearer_methods_supported" => ["header"],
+        "resource_name" => resource_name(config)
+      }
+      |> Map.reject(fn {_k, v} -> v == nil end)
+
+    dpop_required(config, dpop_algs(config, body))
+  end
+
+  defp resource_name(%Config{name: name}), do: name
+  defp resource_name(%External{resource_name: name}), do: name
 
   # RFC 9449 §5.1 (the authorization server) and RFC 9728 §2 (the
   # resource): the algorithms DPoP proofs may use, which is how a client
   # learns that DPoP is on offer at all.
-  defp dpop_algs(%Config{dpop: false}, body), do: body
+  defp dpop_algs(%{dpop: false}, body), do: body
 
   defp dpop_algs(_config, body),
     do: Map.put(body, "dpop_signing_alg_values_supported", DPoP.algs())
@@ -72,9 +85,16 @@ defmodule Sake.Auth.WellKnown do
       else: body
   end
 
+  # Only Sake's own authorization server has metadata here; an external
+  # one serves its own.
   defp authorization_server(conn) do
-    config = Sake.Auth.config()
+    case Sake.Auth.configured() do
+      nil -> send_resp(conn, 404, "")
+      config -> authorization_server(conn, config)
+    end
+  end
 
+  defp authorization_server(conn, config) do
     body = %{
       "issuer" => config.issuer,
       "authorization_endpoint" => Config.authorize_url(config),
