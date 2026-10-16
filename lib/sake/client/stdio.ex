@@ -121,7 +121,13 @@ defmodule Sake.Client.Stdio do
           env(opts[:env]) ++ cd(opts[:cd])
       )
 
-    {:os_pid, os_pid} = Port.info(port, :os_pid)
+    # A server that exited at once may have closed its port already; its
+    # exit is then waiting in the mailbox, and there is no process to stop.
+    os_pid =
+      case Port.info(port, :os_pid) do
+        {:os_pid, os_pid} -> os_pid
+        nil -> nil
+      end
 
     {:ok,
      %{
@@ -292,8 +298,12 @@ defmodule Sake.Client.Stdio do
     end
   end
 
+  defp alive?(nil), do: false
+
   defp alive?(os_pid),
     do: match?({_, 0}, System.cmd("kill", ["-0", to_string(os_pid)], stderr_to_stdout: true))
+
+  defp signal(nil, _name), do: :ok
 
   defp signal(os_pid, name),
     do: System.cmd("kill", ["-" <> name, to_string(os_pid)], stderr_to_stdout: true)
