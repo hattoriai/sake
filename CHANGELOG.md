@@ -101,6 +101,19 @@ First release.
   `Sake.Client.connect/2` launches a stdio server with
   `{:stdio, command, args}`, probing the era as the stdio transport asks;
   `on_notification:` sees a call's notifications on either transport.
+- OpenTelemetry tracing, with the optional `opentelemetry_api`, after the
+  semantic conventions for MCP: a `SERVER` span for every request a
+  server serves (HTTP on both eras, stdio), the child of the trace
+  context in the request's `_meta` and linked to the transport's, and
+  current where the component runs, so a tool's own spans and the
+  client's baggage follow; an `execute_tool` span for a task's run, the
+  child of the `tools/call` that started it; and a `CLIENT` span for
+  every request `Sake.Client` sends, which carries the trace context in
+  `_meta`. Tool arguments and results are recorded only with
+  `config :sake, :opentelemetry, record_content: true`. The telemetry
+  span `[:sake, :client, :request]`, for the client's operation
+  durations. `guides/observability.md` lists the events and spans, and
+  how to move from protocol logging to `Logger` and OpenTelemetry.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the

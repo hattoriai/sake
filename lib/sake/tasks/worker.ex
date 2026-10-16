@@ -10,7 +10,7 @@ defmodule Sake.Tasks.Worker do
   require Logger
 
   alias Sake.Server.Results
-  alias Sake.Tasks
+  alias Sake.{Tasks, Trace}
   alias Sake.Tasks.Record
 
   @failure %{"code" => -32_603, "message" => "The tool failed."}
@@ -24,8 +24,10 @@ defmodule Sake.Tasks.Worker do
         progress: &progress(ctx.server, record.id, &1, &2)
     }
 
+    # Bound here, in the `tools/call` request, so the run's span is the
+    # child of the request's (see `Sake.Trace.task/3`).
     {:ok, pid} =
-      Task.Supervisor.start_child(Tasks.Supervisor, fn -> run(spec, args, ctx) end,
+      Task.Supervisor.start_child(Tasks.Supervisor, Trace.bind(fn -> run(spec, args, ctx) end),
         restart: :temporary
       )
 
@@ -42,14 +44,19 @@ defmodule Sake.Tasks.Worker do
     {:ok, _} = Registry.register(Tasks.Registry, ctx.task, :worker)
     meta = %{task_id: ctx.task, tool: spec.name, server: ctx.server}
 
-    :telemetry.span([:sake, :task], meta, fn ->
-      status = if Tasks.cancelled?(ctx), do: :cancelled, else: execute_and_finish(spec, args, ctx)
-      {status, Map.put(meta, :status, status)}
+    Trace.task(spec.name, ctx.task, fn ->
+      :telemetry.span([:sake, :task], meta, fn -> status(spec, args, ctx, meta) end)
     end)
+  end
+
+  defp status(spec, args, ctx, meta) do
+    status = if Tasks.cancelled?(ctx), do: :cancelled, else: execute_and_finish(spec, args, ctx)
+    {status, Map.put(meta, :status, status)}
   end
 
   defp execute_and_finish(spec, args, ctx) do
     outcome = execute(spec, args, ctx)
+    _ = Trace.outcome(trace_outcome(outcome))
 
     case Tasks.update(ctx.server, ctx.task, &finish(&1, outcome)) do
       {:ok, record} -> record.status
@@ -83,6 +90,9 @@ defmodule Sake.Tasks.Worker do
 
       {:failed, @failure}
   end
+
+  defp trace_outcome({:completed, result}), do: {:reply, result}
+  defp trace_outcome({:failed, error}), do: {:error, error}
 
   # A task that already ended (a cancellation won the race) stays as it is.
   defp finish(record, outcome),

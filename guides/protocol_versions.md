@@ -93,7 +93,15 @@ working until it expires.
   optional task tools synchronously and is refused required ones.
 
 Sampling and roots are supported on every revision, deprecated as they are
-in 2026-07-28 (SEP-2577); see `guides/tools.md`.
+in 2026-07-28 (SEP-2577); see `guides/tools.md`. So is logging
+(`notifications/message`), which 2026-07-28 deprecates in favour of
+standard error and OpenTelemetry.
+
+The OpenTelemetry trace context keys of `_meta` (`traceparent`,
+`tracestate`, `baggage`), which 2026-07-28 reserves, are read by the
+server and written by `Sake.Client` on every revision: `_meta` is
+allowed on every request of the legacy revisions too. See
+`guides/observability.md`.
 
 MCP Apps (the `io.modelcontextprotocol/ui` extension) work on every
 revision: a host declares the extension in each request's capabilities on

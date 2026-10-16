@@ -40,12 +40,21 @@ defmodule Sake.Client do
   to wait for an answer to the modern probe before falling back to
   `initialize`, default 10 000), `close_timeout:` (ms `close/1` waits for
   the server to exit before killing it, default 5 000).
+
+  With `opentelemetry_api` in the host, each request is a CLIENT span and
+  carries the current trace context in its `_meta`, so the server's spans
+  join the caller's trace; the span of `call_tool/3` covers the whole
+  call, its retries with the client's input and a task's polls included.
+  Each request is also the telemetry span `[:sake, :client, :request]`,
+  with `method`, `era`, `protocol_version` and `transport` in the
+  metadata and `error_type` (`nil` on success) on `:stop`. See
+  `guides/observability.md`.
   """
 
   require Logger
 
   alias Sake.Client.{Auth, Inputs, Session, ToolResult, Transport}
-  alias Sake.{Content, JSONRPC, Protocol, Schema}
+  alias Sake.{Content, JSONRPC, Protocol, Schema, Trace}
 
   # The errors only a modern server sends; a legacy server answers the
   # `server/discover` probe with "method not found" (-32601) or "invalid
@@ -321,10 +330,18 @@ defmodule Sake.Client do
   @spec call_tool(Session.t(), String.t(), map()) ::
           {:ok, ToolResult.t(), Session.t()} | {:error, term(), Session.t()}
   def call_tool(session, name, arguments) do
-    with {:ok, result, session} <- tools_call(session, name, arguments),
-         {:ok, result, session} <- await_task(session, result) do
-      {:ok, tool_result(result), session}
+    params = %{"name" => name, "arguments" => arguments}
+
+    # One span for the whole call: the requests that follow the first
+    # (retries with the client's input, a task's polls) are its children.
+    call = fn ->
+      with {:ok, result, session} <-
+             exchange(session, "tools/call", params, tool: session.tools[name]),
+           do: await_task(session, result)
     end
+
+    with {:ok, result, session} <- traced(session, "tools/call", params, call),
+         do: {:ok, tool_result(result), session}
   end
 
   @doc """
@@ -476,7 +493,33 @@ defmodule Sake.Client do
   defp next_page(next, _cursor, page, session, method, key, items),
     do: paged(session, method, key, next, items, page + 1)
 
-  defp request(session, method, params, opts \\ [], attempt \\ 0) do
+  defp request(session, method, params, opts \\ []),
+    do: traced(session, method, params, fn -> exchange(session, method, params, opts) end)
+
+  # Each request has its span (`Sake.Trace.client/4`) and its telemetry
+  # span, `[:sake, :client, :request]`; a retry with the client's input
+  # is a request of its own, under the span of the one it answers.
+  defp traced(session, method, params, fun) do
+    meta = %{
+      method: method,
+      era: session.era,
+      protocol_version: session.revision,
+      transport: if(session.stdio, do: :stdio, else: :http)
+    }
+
+    Trace.client(session, method, params, fn ->
+      :telemetry.span([:sake, :client, :request], meta, fn ->
+        result = fun.()
+        {result, Map.put(meta, :error_type, error_type(result))}
+      end)
+    end)
+  end
+
+  defp error_type({:ok, %{"isError" => true}, _session}), do: "tool_error"
+  defp error_type({:ok, _result, _session}), do: nil
+  defp error_type({:error, reason, _session}), do: Trace.error_type(reason)
+
+  defp exchange(session, method, params, opts, attempt \\ 0) do
     id = session.next_id
     session = %{session | next_id: id + 1}
 
@@ -485,7 +528,7 @@ defmodule Sake.Client do
         do: Map.put(params, "_meta", meta(session)),
         else: params
 
-    params = progress_token(params, session, id)
+    params = params |> progress_token(session, id) |> Trace.inject()
 
     case post(session, JSONRPC.request(id, method, params), opts) do
       {:ok, %{"result" => %{"resultType" => "input_required"} = result}, session}
@@ -565,7 +608,7 @@ defmodule Sake.Client do
       |> Map.put("inputResponses", responses)
       |> put_request_state(result["requestState"])
 
-    request(session, method, retry, opts, attempt + 1)
+    traced(session, method, retry, fn -> exchange(session, method, retry, opts, attempt + 1) end)
   end
 
   defp put_request_state(params, nil), do: params

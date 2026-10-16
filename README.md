@@ -62,7 +62,7 @@ See `guides/quickstart.md` for turning on authorization in five steps, or
 | | 2026-07-28 (modern) | 2025-11-25 / 2025-06-18 | 2025-03-26 |
 |---|---|---|---|
 | Tools, resources, prompts | yes | yes | yes |
-| Progress, logging | yes | yes | yes |
+| Progress, logging | yes (logging deprecated) | yes | yes |
 | Elicitation (form, url) | yes | yes (url from 2025-11-25) | form only |
 | Sampling, roots | yes (deprecated) | yes (sampling tools from 2025-11-25) | yes |
 | Tasks (`io.modelcontextprotocol/tasks`) | yes | — (task tools run synchronously) | — |
@@ -73,6 +73,7 @@ See `guides/quickstart.md` for turning on authorization in five steps, or
 | `Sake.Client` (HTTP, stdio) | yes | yes | connects, no batching |
 | `Sake.Client` authorization | yes | yes | yes (no resource metadata: the server's own) |
 | Client credentials, enterprise-managed authorization (`Sake.Auth`, `Sake.Client`) | yes | yes | yes |
+| OpenTelemetry tracing, client to server to tool (trace context in `_meta`) | yes | yes | yes |
 
 ## The authorization flow, briefly
 
@@ -109,6 +110,7 @@ Client credentials with a secret work without it.
 - [Multi-tenant endpoints](guides/tenants.md)
 - [The client](guides/client.md)
 - [Stdio](guides/stdio.md)
+- [Observability](guides/observability.md)
 - [Protocol versions](guides/protocol_versions.md)
 - [Security](guides/security.md)
 
@@ -121,8 +123,9 @@ clients, trusted identity providers and workloads), and the client (HTTP
 and stdio), which runs the MCP authorization flow itself (discovery,
 CIMD or dynamic registration, PKCE, refresh, step-up, or a grant without
 a person: client credentials, a JWT bearer grant, enterprise-managed
-authorization) and follows tasks. Next: DPoP and the device
-authorization grant.
+authorization) and follows tasks; OpenTelemetry traces run from the
+client's call through the server into the tool. Next: DPoP and the
+device authorization grant.
 
 ## License
 

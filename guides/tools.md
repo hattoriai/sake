@@ -152,7 +152,9 @@ even without `stream: true`. `Sake.Progress.log(ctx, level, data)` sends a
 `notifications/message`, but only once the client has set a log level at
 or below `level` (via `logging/setLevel` on a legacy session, or a
 per-request `_meta` log level on a modern one) — before that, log calls
-are silently dropped.
+are silently dropped. Protocol logging is deprecated as of 2026-07-28:
+for new code, `Logger` and OpenTelemetry are the better home for logs
+(see `guides/observability.md`).
 
 A `stream: true` tool only actually streams when the call is allowed: a
 forbidden call (see Scopes) never opens the SSE response — it comes back

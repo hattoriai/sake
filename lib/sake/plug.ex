@@ -22,7 +22,7 @@ defmodule Sake.Plug do
   @behaviour Plug
   import Plug.Conn
 
-  alias Sake.{Context, JSONRPC, Protocol}
+  alias Sake.{Context, JSONRPC, Protocol, Trace}
   alias Sake.Plug.{Headers, Origin, ProtocolVersion}
   alias Sake.Server.{Dispatch, Legacy, Session}
 
@@ -319,7 +319,12 @@ defmodule Sake.Plug do
         scope: opts.scope.(conn)
       )
 
-    case Legacy.handle(opts.server, parsed, ctx) do
+    outcome =
+      Trace.server(parsed, ctx, {:http, conn}, fn ->
+        opts.server |> Legacy.handle(parsed, ctx) |> Trace.outcome()
+      end)
+
+    case outcome do
       {:initialize, revision, caps, result} ->
         conn
         |> put_resp_header("mcp-session-id", Session.mint(secret(opts), revision, caps))
@@ -437,9 +442,11 @@ defmodule Sake.Plug do
       client_name: ctx.client_info["name"]
     }
 
-    :telemetry.span([:sake, :server, :request], meta, fn ->
-      conn = Sake.Plug.Stream.respond(conn, opts, parsed, ctx, handler)
-      {conn, Map.put(meta, :cancelled, Process.get(:sake_cancelled, false))}
+    Trace.server(parsed, ctx, {:http, conn}, fn ->
+      :telemetry.span([:sake, :server, :request], meta, fn ->
+        conn = Sake.Plug.Stream.respond(conn, opts, parsed, ctx, handler)
+        {conn, Map.put(meta, :cancelled, Process.get(:sake_cancelled, false))}
+      end)
     end)
   end
 

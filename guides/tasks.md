@@ -201,7 +201,9 @@ trust to them.
 `[:sake, :task, :exception]` surround the tool's run in the background,
 with `task_id`, `tool` and `server` in the metadata and the final
 `status` on `:stop` — next to the `[:sake, :server, :request]` span of
-the call that created the task.
+the call that created the task. With OpenTelemetry, the run is an
+`execute_tool` span, the child of that call's span (see
+`guides/observability.md`).
 
 ## Not supported
 

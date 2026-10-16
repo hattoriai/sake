@@ -51,6 +51,8 @@ defmodule Sake.MixProject do
       {:ecto_sql, "~> 3.13", optional: true},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:jose, "~> 1.11", optional: true},
+      {:opentelemetry, "~> 1.7", only: :test},
+      {:opentelemetry_api, "~> 1.5", optional: true},
       {:phoenix, "~> 1.8", optional: true},
       {:phoenix_html, "~> 4.1", optional: true},
       {:phoenix_pubsub, "~> 2.1", optional: true},
@@ -94,13 +96,14 @@ defmodule Sake.MixProject do
         "guides/tenants.md",
         "guides/client.md",
         "guides/stdio.md",
+        "guides/observability.md",
         "guides/protocol_versions.md",
         "guides/security.md",
         "CHANGELOG.md"
       ],
       groups_for_extras: [
         Guides:
-          ~w(guides/quickstart.md guides/tools.md guides/tasks.md guides/apps.md guides/resources_and_prompts.md guides/authorization.md guides/tenants.md guides/client.md guides/stdio.md),
+          ~w(guides/quickstart.md guides/tools.md guides/tasks.md guides/apps.md guides/resources_and_prompts.md guides/authorization.md guides/tenants.md guides/client.md guides/stdio.md guides/observability.md),
         Reference: ~w(guides/protocol_versions.md guides/security.md)
       ],
       groups_for_modules: [

@@ -22,7 +22,7 @@ defmodule Sake.Input do
   @spec all(Context.t(), [(Context.t() -> term())]) :: [term()]
   def all(%Context{task: id} = ctx, funs) when is_binary(id) do
     funs
-    |> Enum.map(fn fun -> Task.async(fn -> fun.(ctx) end) end)
+    |> Enum.map(fn fun -> Task.async(Sake.Trace.bind(fn -> fun.(ctx) end)) end)
     |> Task.await_many(:infinity)
   end
 
