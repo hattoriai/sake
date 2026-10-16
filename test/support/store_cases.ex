@@ -325,8 +325,24 @@ defmodule SakeTest.StoreCases do
         })
 
         {_, _, %{access: live}} = issue(config, %{subject_id: "u9"})
+
+        # A consumed code's row, kept as the fence for its tokens, goes too.
+        mod.put_code(state, %Code{
+          hash: "used",
+          client_id: "c",
+          redirect_uri: "http://127.0.0.1:1/cb",
+          code_challenge: "x",
+          scopes: [],
+          resource: "r",
+          subject_id: "u9",
+          expires_at: past
+        })
+
+        assert {:ok, _} = mod.consume_code(state, "used")
+
         assert :ok = mod.prune(state, DateTime.utc_now(), DateTime.add(DateTime.utc_now(), -60))
         assert :error = mod.consume_code(state, "old")
+        assert :revoked = mod.put_code_tokens(state, "used", [])
         assert :error = mod.get_token(state, :access, "h-old")
         assert {:ok, _} = mod.get_token(state, :access, live.hash)
       end
