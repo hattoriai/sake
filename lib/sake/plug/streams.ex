@@ -2,8 +2,12 @@ defmodule Sake.Plug.Streams do
   @moduledoc """
   The registry of open streams on this node: `subscriptions/listen`
   streams, legacy GET streams, and handlers waiting for a legacy client's
-  answer to a server request (elicitation, sampling, roots). Started by the `Sake` supervisor. With a `pubsub:`
-  option (a `Phoenix.PubSub` name) notifications reach every node.
+  answer to a server request (elicitation, sampling, roots). Started by
+  the `Sake` supervisor. With a `pubsub:` option (a `Phoenix.PubSub`
+  name) every node takes part: notifications reach the streams on every
+  node, and a legacy session's subscriptions and answers reach its GET
+  stream and its waiting handler on whichever node holds them, wherever
+  the client's POST landed.
 
   A stream of a server that mounts others (`Sake.Server.mount/2`) also
   follows their broadcasts, with resource URIs under the mount's prefix.
@@ -121,18 +125,22 @@ defmodule Sake.Plug.Streams do
         ) :: :ok
   def broadcast(server, event) do
     local(server, event)
+    _ = to_other_nodes({:sake_broadcast, node(), server, event})
+    :ok
+  end
 
+  # Sends `message` to the relay of every other node; `:none` without a
+  # pubsub.
+  defp to_other_nodes(message) do
     case :persistent_term.get({__MODULE__, :pubsub}, nil) do
-      nil ->
-        :ok
-
-      pubsub ->
-        relay_broadcast(pubsub, {:sake_broadcast, node(), server, event})
+      nil -> :none
+      pubsub -> relay_broadcast(pubsub, message)
     end
   end
 
   # Compiled only when the host has Phoenix.PubSub: a host without it never
   # sets a pubsub, and must not see a warning for a module it does not have.
+  # Without it this clause never runs; it answers as the real one would.
   if Code.ensure_loaded?(Phoenix.PubSub) do
     defp relay_broadcast(pubsub, message) do
       Phoenix.PubSub.broadcast_from(pubsub, self(), topic(), message)
@@ -190,11 +198,28 @@ defmodule Sake.Plug.Streams do
     end
   end
 
-  @doc "Routes a legacy client's JSON-RPC response to the handler waiting for it."
+  @doc """
+  Routes a legacy client's JSON-RPC response to the handler waiting for
+  it: on this node, else (with a pubsub) on whichever node it waits on.
+  `:error` when no node can have it.
+  """
   @spec deliver_response(term(), {:ok, map()} | {:error, map()}) :: :ok | :error
   def deliver_response(id, response) do
     ensure_started!()
 
+    case deliver_local(id, response) do
+      :ok ->
+        :ok
+
+      :error ->
+        if to_other_nodes({:sake_response, node(), id, response}) == :ok,
+          do: :ok,
+          else: :error
+    end
+  end
+
+  @doc false
+  def deliver_local(id, response) do
     case Registry.lookup(@registry, {:request, id}) do
       [{pid, _} | _] ->
         send(pid, {:sake_response, id, response})
@@ -213,9 +238,17 @@ defmodule Sake.Plug.Streams do
   def session_unsubscribe(server, session_nonce, uri),
     do: send_session(server, session_nonce, {:sake_unsubscribe, uri})
 
+  # The session's GET stream may be open on another node: the message goes
+  # there too.
   defp send_session(server, session_nonce, message) do
     ensure_started!()
+    session_local(server, session_nonce, message)
+    _ = to_other_nodes({:sake_session, node(), server, session_nonce, message})
+    :ok
+  end
 
+  @doc false
+  def session_local(server, session_nonce, message) do
     Registry.dispatch(@registry, {server, :legacy, session_nonce}, fn entries ->
       for {pid, _} <- entries, do: send(pid, message)
     end)
@@ -284,6 +317,18 @@ defmodule Sake.Plug.Streams do
       @impl true
       def handle_info({:sake_broadcast, from_node, server, event}, pubsub) do
         if from_node != node(), do: Sake.Plug.Streams.local(server, event)
+        {:noreply, pubsub}
+      end
+
+      def handle_info({:sake_response, from_node, id, response}, pubsub) do
+        if from_node != node(), do: Sake.Plug.Streams.deliver_local(id, response)
+        {:noreply, pubsub}
+      end
+
+      def handle_info({:sake_session, from_node, server, session_nonce, message}, pubsub) do
+        if from_node != node(),
+          do: Sake.Plug.Streams.session_local(server, session_nonce, message)
+
         {:noreply, pubsub}
       end
     end
