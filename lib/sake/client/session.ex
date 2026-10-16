@@ -24,6 +24,7 @@ defmodule Sake.Client.Session do
     tools: %{},
     tasks: true,
     task_timeout: 300_000,
+    max_response_size: 16_777_216,
     req: []
   ]
 end

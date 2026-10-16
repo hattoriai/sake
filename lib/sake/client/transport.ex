@@ -61,6 +61,9 @@ defmodule Sake.Client.Transport do
       {:ok, %Req.Response{private: %{sake_throw: {:throw, value}}}} ->
         throw(value)
 
+      {:ok, %Req.Response{private: %{sake_too_large: true}}} ->
+        {:error, :response_too_large}
+
       {:ok, %Req.Response{status: 401} = resp} ->
         {:error, {:unauthorized, challenge(resp)}}
 
@@ -83,6 +86,8 @@ defmodule Sake.Client.Transport do
 
   # ---- body handling: JSON bodies arrive as one chunk; SSE bodies as many
 
+  # Neither a JSON body nor an event still being received may grow past
+  # the session's `max_response_size`: the request stops there.
   defp stream(data, {req, resp}, session, id) do
     case content_type(resp) do
       :sse ->
@@ -90,12 +95,23 @@ defmodule Sake.Client.Transport do
         resp = put_in(resp.private[:sake_buffer], buffer)
 
         {resp, done?} = handle_events(events, resp, session, id)
-        if done?, do: {:halt, {req, resp}}, else: {:cont, {req, resp}}
+
+        cond do
+          done? -> {:halt, {req, resp}}
+          byte_size(buffer) > session.max_response_size -> too_large(req, resp)
+          true -> {:cont, {req, resp}}
+        end
 
       :json ->
-        {:cont, {req, %{resp | body: (resp.body || "") <> data}}}
+        body = (resp.body || "") <> data
+
+        if byte_size(body) > session.max_response_size,
+          do: too_large(req, resp),
+          else: {:cont, {req, %{resp | body: body}}}
     end
   end
+
+  defp too_large(req, resp), do: {:halt, {req, put_in(resp.private[:sake_too_large], true)}}
 
   # An abandoned call reads no further.
   defp handle_events(events, resp, session, id) do
@@ -300,14 +316,24 @@ defmodule Sake.Client.Transport do
   defp param_headers(_, _), do: []
 
   @doc false
+  # Events end at a blank line, lines at CRLF, LF or CR (the SSE spec):
+  # line ends become LF first. A CR at the very end of the buffer may be
+  # the first half of a CRLF split across chunks, so it waits for the next.
   def parse_sse(buffer) do
+    {buffer, cr} =
+      if String.ends_with?(buffer, "\r"),
+        do: {binary_part(buffer, 0, byte_size(buffer) - 1), "\r"},
+        else: {buffer, ""}
+
+    buffer = buffer |> String.replace("\r\n", "\n") |> String.replace("\r", "\n")
+
     case String.split(buffer, "\n\n") do
       [rest] ->
-        {[], rest}
+        {[], rest <> cr}
 
       blocks ->
         {complete, [rest]} = Enum.split(blocks, -1)
-        {Enum.flat_map(complete, &decode_event_block/1), rest}
+        {Enum.flat_map(complete, &decode_event_block/1), rest <> cr}
     end
   end
 
@@ -349,10 +375,12 @@ defmodule Sake.Client.Transport do
       Req.get(
         session.url,
         [headers: headers, retry: false, decode_body: false, receive_timeout: 60_000] ++
-          session.req ++ [into: &listened(&1, &2, fun, opened)]
+          session.req ++
+          [into: &listened(&1, &2, fun, opened, session.max_response_size)]
       )
 
     case result do
+      {:ok, %Req.Response{private: %{sake_too_large: true}}} -> {:error, :response_too_large}
       {:ok, %Req.Response{status: 200}} -> :ok
       {:ok, %Req.Response{status: 401} = resp} -> {:error, {:unauthorized, challenge(resp)}}
       {:ok, %Req.Response{status: status, body: body}} -> {:error, {:http, status, body}}
@@ -360,7 +388,7 @@ defmodule Sake.Client.Transport do
     end
   end
 
-  defp listened({:data, data}, {req, resp}, fun, opened) do
+  defp listened({:data, data}, {req, resp}, fun, opened, max) do
     if resp.status == 200 do
       if !resp.private[:sake_opened], do: opened.()
       resp = put_in(resp.private[:sake_opened], true)
@@ -370,9 +398,14 @@ defmodule Sake.Client.Transport do
           {:notification, method, params} <- [JSONRPC.parse(event)],
           do: fun.(method, params)
 
-      {:cont, {req, put_in(resp.private[:sake_buffer], buffer)}}
+      resp = put_in(resp.private[:sake_buffer], buffer)
+      if byte_size(buffer) > max, do: too_large(req, resp), else: {:cont, {req, resp}}
     else
-      {:cont, {req, %{resp | body: (resp.body || "") <> data}}}
+      body = (resp.body || "") <> data
+
+      if byte_size(body) > max,
+        do: too_large(req, resp),
+        else: {:cont, {req, %{resp | body: body}}}
     end
   end
 

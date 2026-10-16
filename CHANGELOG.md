@@ -112,6 +112,9 @@ First release.
   tool calls followed through tasks (and
   `call_tool_async/3`, `get_task/2`, `update_task/3`, `cancel_task/2`),
   MCP Apps via `ui: true`, and a parsed `WWW-Authenticate` challenge on a 401.
+  Server-Sent Events are read with any line end the SSE spec allows, and
+  `max_response_size:` (16 MiB by default) bounds a JSON body, an event
+  still being received, and a stdio line.
 - `Sake.Client.Auth`: with `auth:`, the client runs the MCP authorization
   flow itself on a 401: protected resource metadata (RFC 9728, from the
   challenge or the well-known URIs) checked against the endpoint,

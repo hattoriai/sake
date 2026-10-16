@@ -188,4 +188,20 @@ defmodule Sake.Client.StdioTest do
       assert message == "x:" <> dir
     end
   end
+
+  test "a line over max_response_size is dropped, and what follows it read" do
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, session} =
+                 Client.connect(script("foreign", ["flood"]),
+                   era: :legacy,
+                   max_response_size: 100_000
+                 )
+
+        assert {:ok, [%{name: "t"}], session} = Client.list_tools(session)
+        Client.close(session)
+      end)
+
+    assert log =~ "over max_response_size"
+  end
 end

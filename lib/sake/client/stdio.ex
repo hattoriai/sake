@@ -185,6 +185,8 @@ defmodule Sake.Client.Stdio do
        os_pid: os_pid,
        close_timeout: opts[:close_timeout] || @close_timeout,
        line: [],
+       line_size: 0,
+       max_line: opts[:max_response_size] || 16_777_216,
        waiters: [],
        listeners: [],
        wire_id: 0
@@ -252,12 +254,21 @@ defmodule Sake.Client.Stdio do
   end
 
   @impl true
+  # A line longer than `max_response_size` is dropped up to its end, not
+  # kept growing: nothing in it can be read, so the request it answered
+  # ends at its timeout.
   def handle_info({port, {:data, {:noeol, chunk}}}, %{port: port} = state),
-    do: {:noreply, %{state | line: [state.line | chunk]}}
+    do: {:noreply, append(state, chunk)}
 
   def handle_info({port, {:data, {:eol, chunk}}}, %{port: port} = state) do
-    line = IO.iodata_to_binary([state.line | chunk])
-    {:noreply, dispatch(line, %{state | line: []})}
+    case append(state, chunk) do
+      %{line: :dropped} = state ->
+        {:noreply, %{state | line: [], line_size: 0}}
+
+      state ->
+        line = IO.iodata_to_binary(state.line)
+        {:noreply, dispatch(line, %{state | line: [], line_size: 0})}
+    end
   end
 
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
@@ -279,6 +290,22 @@ defmodule Sake.Client.Stdio do
   def handle_info({:EXIT, _pid, _reason}, state), do: {:stop, :normal, state}
 
   def handle_info(_message, state), do: {:noreply, state}
+
+  defp append(%{line: :dropped} = state, _chunk), do: state
+
+  defp append(state, chunk) do
+    size = state.line_size + byte_size(chunk)
+
+    if size > state.max_line do
+      Logger.warning(
+        "Sake.Client stdio server sent a line over max_response_size (#{state.max_line} bytes): dropped"
+      )
+
+      %{state | line: :dropped, line_size: 0}
+    else
+      %{state | line: [state.line, chunk], line_size: size}
+    end
+  end
 
   defp dispatch("", state), do: state
 
