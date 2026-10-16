@@ -165,7 +165,7 @@ end
 {Sake,
  secret_key_base: ...,
  pubsub: MyApp.PubSub,
- tasks: [store: {Sake.Tasks.Store.Ecto, repo: MyApp.Repo}, ttl: :timer.hours(1), poll_interval: 1_000]}
+ tasks: [store: {Sake.Tasks.Store.Ecto, repo: MyApp.Repo}, ttl: :timer.hours(1), poll_interval: 1_000, max_per_principal: 100]}
 ```
 
 The tool runs on the node that received the call; `tasks/get`,
@@ -181,6 +181,13 @@ the extension.
 A task is kept for `ttl` after it was created (default one hour) — its
 process is stopped then if it is still running — and is "not found"
 afterwards; expired tasks are deleted from the store every minute.
+
+Each owner (see Security below) may have `max_per_principal` live tasks
+at once — neither ended nor expired — default 100 (`:infinity` lifts the
+limit). Beyond it, a `task: :optional` tool runs in the request like any
+other tool; a `task: :required` tool is refused with `-32600`, as is a
+proxied call the upstream made a task of (the upstream's task is
+cancelled). A task that ends frees its slot.
 
 ## Security
 

@@ -27,8 +27,8 @@ First release.
   through the task, cooperative cancellation (`Sake.Tasks.cancelled?/1`),
   `notifications/tasks` on `subscriptions/listen`, binding to the
   principal, server, OAuth client and resource that created the task (and
-  to the tool's scopes on every access), and
-  telemetry. `Sake.Tasks.Store.ETS` (default) and `Sake.Tasks.Store.Ecto`
+  to the tool's scopes on every access), a cap on each owner's live
+  tasks (`max_per_principal`), and telemetry. `Sake.Tasks.Store.ETS` (default) and `Sake.Tasks.Store.Ecto`
   with `Sake.Tasks.Migration` for several nodes. A tool's optional
   `prepare/2` runs in the request before `execute/2`.
 - MCP Apps (`io.modelcontextprotocol/ui`): `Sake.UI` declares an app's

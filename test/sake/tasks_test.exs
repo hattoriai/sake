@@ -45,6 +45,16 @@ defmodule Sake.TasksTest do
     tools [AdminExport, SakeDev.Conformance.Tools.SlowCompute]
   end
 
+  defmodule Capped do
+    use Sake.Server, name: "capped", version: "1"
+    tools [SakeDev.Conformance.Tools.SlowCompute, SakeDev.Conformance.Tools.FailingJob]
+  end
+
+  defmodule CappedToo do
+    use Sake.Server, name: "capped_too", version: "1"
+    tools [SakeDev.Conformance.Tools.SlowCompute]
+  end
+
   defp opts(overrides \\ []),
     do: ModernClient.opts(Keyword.merge([server: SakeDev.ConformanceServer], overrides))
 
@@ -270,6 +280,36 @@ defmodule Sake.TasksTest do
                  "data" => %{"requiredCapabilities" => %{"roots" => %{}}}
                }
              } = await(opts, id, &terminal?/1)
+    end
+
+    test "an owner with max_per_principal live tasks gets no other until one ends" do
+      config = Sake.Tasks.config()
+      :persistent_term.put({Sake.Tasks, :config}, %{config | max_per_principal: 2})
+      on_exit(fn -> :persistent_term.put({Sake.Tasks, :config}, config) end)
+
+      capped = opts(server: Capped)
+      first = start(capped, "slow_compute", %{"seconds" => 60})
+      second = start(capped, "slow_compute", %{"seconds" => 60})
+
+      # An optional task tool runs in the request instead; a required one
+      # is refused.
+      assert %{"result" => %{"resultType" => "complete", "content" => [%{"text" => text}]}} =
+               call(capped, "slow_compute", %{"seconds" => 0, "label" => "now"})
+
+      assert text == "Computed now in 0s."
+
+      assert %{"error" => %{"code" => -32_600, "message" => "Too many tasks in progress" <> _}} =
+               call(capped, "failing_job", %{})
+
+      # Another owner (here, through another server) is unaffected.
+      other = start(opts(server: CappedToo), "slow_compute", %{"seconds" => 60})
+
+      # An ended task frees its slot.
+      rpc(capped, "tasks/cancel", %{"taskId" => first}, @tasks)
+      _third = start(capped, "failing_job", %{})
+
+      rpc(capped, "tasks/cancel", %{"taskId" => second}, @tasks)
+      rpc(opts(server: CappedToo), "tasks/cancel", %{"taskId" => other}, @tasks)
     end
 
     test "argument errors and scope errors come before any task" do
@@ -690,7 +730,7 @@ defmodule Sake.TasksTest do
         expires_at: DateTime.add(past, 1, :second)
       }
 
-      :ok = module.insert(state, record)
+      :ok = module.insert(state, record, :infinity)
       assert {:ok, _} = module.get(state, "expired-task")
       assert Sake.Tasks.fetch("expired-task") == :error
 

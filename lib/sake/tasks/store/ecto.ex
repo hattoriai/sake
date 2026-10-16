@@ -16,10 +16,39 @@ if Code.ensure_loaded?(Ecto.Query) do
     @impl true
     def init(opts), do: %{repo: Keyword.fetch!(opts, :repo), prefix: opts[:prefix]}
 
+    # A transaction-scoped advisory lock on the owner serializes its
+    # inserts, on every node: the count a new task is checked against
+    # cannot change before the task is in.
     @impl true
-    def insert(%{repo: repo} = s, %Record{} = r) do
-      {:ok, _} = repo.insert(struct!(Row, [id: r.id] ++ fields(r)), prefix: s.prefix)
-      :ok
+    def insert(%{repo: repo} = s, %Record{} = r, max) do
+      {:ok, result} =
+        repo.transaction(fn ->
+          <<key::signed-64, _::binary>> = :crypto.hash(:sha256, "sake_tasks:#{r.principal}")
+          repo.query!("SELECT pg_advisory_xact_lock($1)", [key])
+
+          if max == :infinity or live(s, r.principal, r.created_at) < max do
+            {:ok, _} = repo.insert(struct!(Row, [id: r.id] ++ fields(r)), prefix: s.prefix)
+            :ok
+          else
+            :full
+          end
+        end)
+
+      result
+    end
+
+    defp live(%{repo: repo} = s, principal, now) do
+      now = usec(now)
+
+      query =
+        from(t in Row,
+          where:
+            t.principal == ^principal and t.status in ["working", "input_required"] and
+              t.expires_at > ^now,
+          select: count()
+        )
+
+      repo.one(query, prefix: s.prefix)
     end
 
     @impl true

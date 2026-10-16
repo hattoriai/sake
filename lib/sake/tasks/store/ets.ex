@@ -29,10 +29,24 @@ defmodule Sake.Tasks.Store.ETS do
   def init(_opts), do: nil
 
   @impl true
-  def insert(_s, %Record{} = record) do
-    true = :ets.insert(@table, {record.id, record})
-    :ok
+  def insert(_s, %Record{} = record, max) do
+    Agent.get(__MODULE__, fn nil ->
+      if live(record.principal, record.created_at) < max do
+        true = :ets.insert(@table, {record.id, record})
+        :ok
+      else
+        :full
+      end
+    end)
   end
+
+  defp live(principal, now) do
+    @table
+    |> :ets.select([{{:_, %{principal: principal}}, [], [{:element, 2, :"$_"}]}])
+    |> Enum.count(&live?(&1, now))
+  end
+
+  defp live?(record, now), do: not Record.terminal?(record) and not Record.expired?(record, now)
 
   @impl true
   def get(_s, id) do

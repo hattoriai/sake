@@ -63,10 +63,18 @@ defmodule Sake.Tasks do
   Options: `store` (default `Sake.Tasks.Store.ETS`, which keeps tasks on
   one node; use `Sake.Tasks.Store.Ecto` when the endpoint runs on
   several), `ttl` (how long a task is kept after it was created, in ms;
-  default one hour) and `poll_interval` (the `pollIntervalMs` suggested to
+  default one hour), `poll_interval` (the `pollIntervalMs` suggested to
   clients, and how often a waiting task checks the store; default one
-  second). `tasks: false` turns tasks off: task tools then run like any
-  other tool, and the extension is not advertised.
+  second) and `max_per_principal` (how many live tasks one owner may
+  have at once, see below; default 100, or `:infinity`). `tasks: false`
+  turns tasks off: task tools then run like any other tool, and the
+  extension is not advertised.
+
+  An owner with `max_per_principal` tasks neither ended nor expired gets
+  no new one until one ends: a `task: :optional` tool then runs like any
+  other tool, in the request, and a `task: :required` tool (or a proxied
+  call the upstream made a task of, which is cancelled upstream) is
+  refused with `-32600`.
 
   Telemetry: `[:sake, :task, :start | :stop | :exception]` around the
   tool's run, with `task_id`, `tool` and `server` in the metadata, and the
@@ -79,7 +87,12 @@ defmodule Sake.Tasks do
   alias Sake.Tasks.Record
 
   @extension "io.modelcontextprotocol/tasks"
-  @defaults [store: {Sake.Tasks.Store.ETS, []}, ttl: 3_600_000, poll_interval: 1_000]
+  @defaults [
+    store: {Sake.Tasks.Store.ETS, []},
+    ttl: 3_600_000,
+    poll_interval: 1_000,
+    max_per_principal: 100
+  ]
 
   @doc "Whether the client asked to cancel the task the component runs in; always `false` outside a task."
   @spec cancelled?(Context.t()) :: boolean()
@@ -114,7 +127,8 @@ defmodule Sake.Tasks do
     :persistent_term.put({__MODULE__, :config}, %{
       store: {module, module.init(store_opts)},
       ttl: opts[:ttl],
-      poll_interval: opts[:poll_interval]
+      poll_interval: opts[:poll_interval],
+      max_per_principal: opts[:max_per_principal]
     })
 
     store =
@@ -140,9 +154,11 @@ defmodule Sake.Tasks do
   # ---- the store, as the rest of Sake uses it: expired tasks are gone.
 
   @doc false
-  @spec create(Context.t(), String.t(), [String.t()]) :: Record.t()
+  # The new task, or `:full` when its owner already has
+  # `max_per_principal` live tasks.
+  @spec create(Context.t(), String.t(), [String.t()]) :: {:ok, Record.t()} | :full
   def create(ctx, tool, scopes \\ []) do
-    %{store: {module, state}, ttl: ttl, poll_interval: poll} = config()
+    %{store: {module, state}, ttl: ttl, poll_interval: poll, max_per_principal: max} = config()
     now = now()
 
     record = %Record{
@@ -157,8 +173,10 @@ defmodule Sake.Tasks do
       expires_at: DateTime.add(now, ttl, :millisecond)
     }
 
-    :ok = module.insert(state, record)
-    record
+    case module.insert(state, record, max) do
+      :ok -> {:ok, record}
+      :full -> :full
+    end
   end
 
   @doc false

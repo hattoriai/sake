@@ -10,8 +10,14 @@ defmodule Sake.Tasks.Store do
 
   @callback init(keyword()) :: state()
 
-  @doc "Stores a new task; once this returns, `get/2` on any node finds it."
-  @callback insert(state(), Record.t()) :: :ok
+  @doc """
+  Stores a new task, unless its owner (`principal`) already has `max` live
+  tasks: neither ended nor expired at the new task's `created_at`. The
+  count and the insert are atomic, so concurrent inserts for one owner
+  never get past `max` together. Once this returns `:ok`, `get/2` on any
+  node finds the task.
+  """
+  @callback insert(state(), Record.t(), max :: pos_integer() | :infinity) :: :ok | :full
 
   @callback get(state(), id :: String.t()) :: {:ok, Record.t()} | :error
 
