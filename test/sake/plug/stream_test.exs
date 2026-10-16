@@ -349,10 +349,16 @@ defmodule Sake.Plug.StreamTest do
     assert [
              %{
                "id" => 1,
-               "error" => %{"code" => -32_603, "message" => "The request failed: kaboom"}
+               "error" => %{
+                 "code" => -32_603,
+                 "message" => "The request failed.",
+                 "data" => %{"errorId" => _}
+               }
              }
            ] =
              ModernClient.events(conn.resp_body)
+
+    refute conn.resp_body =~ "kaboom"
   end
 
   test "stopping the stream supervisor ends every open listen stream with its result" do

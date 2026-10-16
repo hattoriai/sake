@@ -304,11 +304,7 @@ defmodule Sake.Test.Endpoint do
         outcome
 
       {:DOWN, ^task_ref, :process, _pid, reason} ->
-        {:error,
-         %{
-           "code" => JSONRPC.code(:internal),
-           "message" => "The request failed: #{inspect(reason)}"
-         }}
+        {:error, Sake.Plug.Stream.failure(:exit, reason, [])}
     end
   end
 

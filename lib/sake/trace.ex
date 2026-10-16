@@ -241,6 +241,23 @@ defmodule Sake.Trace do
   def bind(fun), do: if(enabled?(), do: Backend.bind(fun), else: fun)
 
   @doc """
+  Records a failure inside the server on the current span, as an
+  exception event with its message and `sake.error_id`: the detail the
+  client's error leaves out.
+  """
+  @spec exception(:error | :exit | :throw, term(), Exception.stacktrace(), String.t()) :: :ok
+  def exception(kind, reason, stacktrace, id) do
+    if enabled?() do
+      Backend.exception(kind, reason, stacktrace, %{
+        "exception.message" => Exception.format_banner(kind, reason, stacktrace),
+        "sake.error_id" => id
+      })
+    end
+
+    :ok
+  end
+
+  @doc """
   Records how the request this process serves ended on its span: a
   `Sake.Plug`/`Sake.Stdio` outcome (`{:reply, result}`, `{:error,
   error}`, ...). Returns the outcome.
@@ -418,6 +435,14 @@ if Code.ensure_loaded?(:otel_tracer) do
       end
     end
 
+    @doc "Records an exception on the current span."
+    @spec exception(atom(), term(), list(), map()) :: :ok
+    def exception(class, reason, stacktrace, attributes) do
+      span_ctx = :otel_tracer.current_span_ctx()
+      _ = :otel_span.record_exception(span_ctx, class, reason, stacktrace, attributes)
+      :ok
+    end
+
     @spec set(span, map()) :: span
     def set(span, attributes) do
       _ = :otel_span.set_attributes(span_ctx(span), present(attributes))
@@ -505,6 +530,7 @@ else
     def within(_span, fun), do: fun.()
     def set(span, _attributes), do: span
     def error(_span, _message), do: :ok
+    def exception(_class, _reason, _stacktrace, _attributes), do: :ok
     def inject(params), do: params
     def bind(fun), do: fun
   end

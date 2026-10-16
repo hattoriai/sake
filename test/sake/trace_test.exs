@@ -185,7 +185,14 @@ defmodule Sake.TraceTest do
 
       %{"tools/call boom" => span} = Spans.await(["tools/call boom"])
       assert span.attributes["error.type"] == "-32603"
-      assert {:error, "The request failed: kaboom"} = span.status
+      assert {:error, "The request failed."} = span.status
+
+      # The detail the client is not told is on the span, with the ID the
+      # client is.
+      [{:event, _at, :exception, attributes}] = :otel_events.list(span.events)
+      attributes = :otel_attributes.map(attributes)
+      assert attributes["exception.message"] == "** (RuntimeError) kaboom"
+      assert is_binary(attributes["sake.error_id"])
     end
   end
 
