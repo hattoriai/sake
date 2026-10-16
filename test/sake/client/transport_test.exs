@@ -46,7 +46,7 @@ defmodule Sake.Client.TransportTest do
     end
   end
 
-  defp session(url, max \\ 1_024),
+  defp session(url, max),
     do: %Session{
       url: url,
       era: :modern,
