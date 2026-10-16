@@ -65,7 +65,9 @@ defmodule Sake.Tasks do
 
   Telemetry: `[:sake, :task, :start | :stop | :exception]` around the
   tool's run, with `task_id`, `tool` and `server` in the metadata, and the
-  final `status` on `:stop`.
+  final `status` on `:stop`. With OpenTelemetry, the run is an
+  `execute_tool` span, the child of the span of the `tools/call` that
+  started it (see `guides/observability.md`).
   """
 
   alias Sake.Context
