@@ -420,6 +420,10 @@ defmodule Sake.Proxy.Forward do
     outcome
   end
 
+  @doc "Cancels the upstream's task, which the proxy will not follow."
+  @spec cancel_task(struct(), map(), Context.t()) :: :ok
+  def cancel_task(spec, task, ctx), do: cancel_quietly(spec.proxy, task["taskId"], ctx)
+
   defp poll(proxy, task, ctx, asked, message) do
     message = status_message(ctx, task, message)
 

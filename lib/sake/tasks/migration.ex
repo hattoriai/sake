@@ -36,6 +36,7 @@ if Code.ensure_loaded?(Ecto.Migration) do
       end
 
       create(index(:sake_tasks, [:expires_at], prefix: prefix))
+      create(index(:sake_tasks, [:principal, :status], prefix: prefix))
       :ok
     end
 

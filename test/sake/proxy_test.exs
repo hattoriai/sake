@@ -753,6 +753,39 @@ defmodule Sake.ProxyTest do
                      2_000
     end
 
+    test "an upstream's task is cancelled there when the caller has no room for another",
+         %{url: url} do
+      config = Sake.Tasks.config()
+      :persistent_term.put({Sake.Tasks, :config}, %{config | max_per_principal: 2})
+      on_exit(fn -> :persistent_term.put({Sake.Tasks, :config}, config) end)
+
+      start_proxy(Proxy, url)
+      client = connect(Proxy, scope: :ana, capabilities: %{"elicitation" => %{}})
+      Sake.Test.listen(SakeTest.Upstream, shared: true)
+
+      assert {:ok, {:task, task}} =
+               call_tool_async(client, "export", %{"n" => 50, "delay_ms" => 100})
+
+      # The proxy's caller fills its second slot; the upstream, in this
+      # same node, still has room for the proxy's next task.
+      {:ok, record} = Sake.Tasks.fetch(task["taskId"])
+      %{store: {module, state}} = config
+      :ok = module.insert(state, %{record | id: "filler"}, :infinity)
+
+      assert {:error, {:rpc, %{"code" => -32_600}}} =
+               call_tool_async(client, "export", %{"n" => 50, "delay_ms" => 100})
+
+      assert_receive {:sake_test_broadcast, SakeTest.Upstream,
+                      {:task, %{"status" => "cancelled"}}},
+                     2_000
+
+      assert :ok = cancel_task(client, task["taskId"])
+
+      assert_receive {:sake_test_broadcast, SakeTest.Upstream,
+                      {:task, %{"status" => "cancelled"}}},
+                     2_000
+    end
+
     test "a client without tasks gets the result in the call", %{url: url} do
       start_proxy(Proxy, url)
       client = connect(Proxy, tasks: false, on_input: fn _ -> {:accept, %{"format" => "csv"}} end)

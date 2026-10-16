@@ -356,18 +356,20 @@ defmodule Sake.Server.Dispatch do
   defp run_prepared(%{proxy: proxy} = spec, args, ctx) when proxy != nil do
     case Forward.call_tool(spec, args, ctx) do
       {:ok, result} -> after_result(result, spec, args, ctx)
-      {:task, task} -> Tasks.start(spec, args, ctx, &Forward.follow(spec, task, &1))
+      {:task, task} -> follow(spec, task, args, ctx)
       error -> error
     end
   end
 
   # `prepare/2` runs in the request itself, so it can still ask the client
-  # for input on a modern retry before a task takes over the rest.
+  # for input on a modern retry before a task takes over the rest. An
+  # optional task tool whose caller has no room for another task runs in
+  # the request.
   defp run_prepared(spec, args, ctx) do
     case prepare(spec, args, ctx) do
       {:ok, args} ->
         if spec.task && Tasks.declared?(ctx) && Sake.Tasks.running?(),
-          do: Tasks.start(spec, args, ctx),
+          do: start_task(spec, args, ctx),
           else: execute(spec, args, ctx)
 
       {:error, text} ->
@@ -382,6 +384,27 @@ defmodule Sake.Server.Dispatch do
       )
 
       after_call({:error, "The tool failed."}, spec, args, ctx)
+  end
+
+  # No task of the proxy's own means no one to follow the upstream's: it
+  # is cancelled there.
+  defp follow(spec, task, args, ctx) do
+    case Tasks.start(spec, args, ctx, &Forward.follow(spec, task, &1)) do
+      :full ->
+        :ok = Forward.cancel_task(spec, task, ctx)
+        Tasks.full()
+
+      started ->
+        started
+    end
+  end
+
+  defp start_task(spec, args, ctx) do
+    case Tasks.start(spec, args, ctx) do
+      :full when spec.task == :optional -> execute(spec, args, ctx)
+      :full -> Tasks.full()
+      started -> started
+    end
   end
 
   defp execute(spec, args, ctx) do

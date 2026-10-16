@@ -33,11 +33,18 @@ defmodule Sake.Server.Tasks do
   # Stores the task (so that a `tasks/get` anywhere finds it) before the
   # worker starts, and before the client hears of it. `follow` runs a
   # proxied upstream task instead of the tool (see `Sake.Tasks.Worker`).
+  # `:full` when the owner has as many live tasks as it may.
   def start(spec, args, ctx, follow \\ nil) do
-    record = Tasks.create(ctx, spec.name, spec.scopes)
-    :ok = Worker.start(spec, args, ctx, record, follow)
-    {:ok, record |> Record.to_wire() |> Map.put("resultType", "task")}
+    with {:ok, record} <- Tasks.create(ctx, spec.name, spec.scopes) do
+      :ok = Worker.start(spec, args, ctx, record, follow)
+      {:ok, record |> Record.to_wire() |> Map.put("resultType", "task")}
+    end
   end
+
+  @doc false
+  def full,
+    do:
+      {:error, JSONRPC.code(:invalid_request), "Too many tasks in progress: wait for one to end"}
 
   @doc false
   def get(server, params, ctx) do
