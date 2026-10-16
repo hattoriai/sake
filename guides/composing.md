@@ -246,6 +246,9 @@ client's own authorization flow, such as a machine client's (see
 connect: [auth: [grant: :client_credentials, client_id: "my-app", client_secret: "..."]]
 ```
 
+Sessions are kept per principal whatever the credentials (see below), so
+with `auth:` each principal's session obtains a token of its own.
+
 With `credentials/1`, each principal acts as itself upstream. The
 callback gets the request's `Sake.Context` (the principal is in
 `ctx.scope`, the token in `ctx.token`) and returns `{:bearer, token}`,
