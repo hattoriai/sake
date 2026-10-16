@@ -29,9 +29,13 @@ defmodule SakeTest.Spans do
 
   @doc "Sends the spans of every trace sampled from now to the end of the test to it."
   def capture do
-    test = self()
-    :persistent_term.put(@to, test)
+    send_to(self())
     ExUnit.Callbacks.on_exit(fn -> :persistent_term.erase(@to) end)
+  end
+
+  @doc "Sends every span from now on to `pid` (outside a test: a stdio server's script)."
+  def send_to(pid) do
+    :persistent_term.put(@to, pid)
     :ok
   end
 

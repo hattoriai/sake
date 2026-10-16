@@ -2,12 +2,13 @@ defmodule Sake.Trace do
   @moduledoc false
   # OpenTelemetry spans for MCP, after the semantic conventions for MCP
   # (https://opentelemetry.io/docs/specs/semconv/gen-ai/mcp/): a SERVER
-  # span for every request a server serves, and an INTERNAL
-  # `execute_tool` span for the run of a task. The trace context travels
-  # in the request's `params._meta` (`traceparent`, `tracestate` and
-  # `baggage`, read by the configured propagators): the server takes it
-  # as the parent of its span and links the context of the transport (the
-  # HTTP server span, when the host instruments HTTP).
+  # span for every request a server serves, a CLIENT span for every
+  # request `Sake.Client` sends, and an INTERNAL `execute_tool` span for
+  # the run of a task. The trace context travels in the request's
+  # `params._meta` (`traceparent`, `tracestate` and `baggage`, written by
+  # the configured propagators): the client injects it, and the server
+  # takes it as the parent of its span and links the context of the
+  # transport (the HTTP server span, when the host instruments HTTP).
   #
   # Each span is made current in the process that runs the component, so
   # what the component does under its own instrumentation (Ecto, Req)
@@ -35,7 +36,7 @@ defmodule Sake.Trace do
   # The codes the conventions count as the caller's mistake rather than
   # the server's failure, on a SERVER span: parse error, invalid request,
   # method not found, invalid params (an unknown tool too), and the legacy
-  # resource-not-found. Elsewhere every error code is an error.
+  # resource-not-found. On a CLIENT span every error code is an error.
   @not_errors [-32_700, -32_600, -32_601, -32_602, -32_002]
 
   @type transport :: {:http, Plug.Conn.t()} | {:stdio, String.t() | nil}
@@ -108,6 +109,77 @@ defmodule Sake.Trace do
   defp http_version(conn),
     do: conn |> Plug.Conn.get_http_protocol() |> to_string() |> String.replace_prefix("HTTP/", "")
 
+  # ---- client
+
+  @doc """
+  Runs `fun`, one request of `Sake.Client` (it returns `{:ok, result,
+  session}` or `{:error, reason, session}`), under a CLIENT span.
+  """
+  @spec client(Sake.Client.Session.t(), String.t(), map(), (-> result)) :: result
+        when result: var
+  def client(session, method, params, fun) do
+    if enabled?() do
+      attributes =
+        %{
+          "mcp.protocol.version" => session.revision,
+          "mcp.session.id" => session.session_id
+        }
+        |> Map.merge(request_attributes(session.next_id, method, params))
+        |> Map.merge(server_attributes(session))
+
+      name(method, params)
+      |> Backend.child_span(:client, attributes)
+      |> run(:client, method, fn ->
+        result = fun.()
+        record(client_outcome(result))
+        result
+      end)
+    else
+      fun.()
+    end
+  end
+
+  defp server_attributes(%{stdio: pid}) when is_pid(pid), do: %{"network.transport" => "pipe"}
+
+  defp server_attributes(%{url: url}) do
+    uri = URI.parse(url)
+
+    %{
+      "network.transport" => "tcp",
+      "network.protocol.name" => "http",
+      "server.address" => uri.host,
+      "server.port" => uri.port
+    }
+  end
+
+  defp client_outcome({:ok, result, _session}), do: {:reply, result}
+
+  defp client_outcome({:error, {:rpc, %{"code" => _} = error}, _session}), do: {:error, error}
+
+  defp client_outcome({:error, reason, _session}),
+    do: {:failed, error_type(reason)}
+
+  @doc """
+  `params` with the current trace context added to its `_meta`, beside
+  what is there already (on the modern protocol, the protocol's own
+  fields). Both eras allow `_meta` on every request.
+  """
+  @spec inject(map()) :: map()
+  def inject(params), do: if(enabled?(), do: Backend.inject(params), else: params)
+
+  @doc """
+  The low-cardinality `error.type` of a reason `Sake.Client` returns: the
+  JSON-RPC error code, the HTTP status, the exception's module, or the
+  reason's own name.
+  """
+  @spec error_type(term()) :: String.t()
+  def error_type({:rpc, %{"code" => code}}), do: to_string(code)
+  def error_type({:http, status, _body}), do: to_string(status)
+  def error_type(%{__exception__: true, __struct__: module}), do: inspect(module)
+  def error_type(reason) when is_atom(reason), do: to_string(reason)
+  def error_type({reason, _detail}) when is_atom(reason), do: to_string(reason)
+  def error_type(_reason), do: "_OTHER"
+
   # ---- tasks
 
   @doc """
@@ -177,8 +249,12 @@ defmodule Sake.Trace do
     end
   end
 
-  # A legacy `initialize` names the revision only in its answer.
+  # A legacy `initialize` names the revision only in its answer: the
+  # server's outcome, or the result the client got.
   defp attributes({:initialize, revision, _caps, _result}, _method),
+    do: %{"mcp.protocol.version" => revision}
+
+  defp attributes({:reply, %{"protocolVersion" => revision}}, "initialize"),
     do: %{"mcp.protocol.version" => revision}
 
   defp attributes({:reply, %{"isError" => true}}, _method), do: %{"error.type" => "tool_error"}
@@ -197,6 +273,7 @@ defmodule Sake.Trace do
   defp attributes({:forbidden, _scopes}, _method),
     do: %{"rpc.response.status_code" => to_string(Sake.JSONRPC.code(:invalid_request))}
 
+  defp attributes({:failed, type}, _method), do: %{"error.type" => type}
   defp attributes(_outcome, _method), do: %{}
 
   defp status(span, {:reply, %{"isError" => true}}, _kind), do: Backend.error(span, "")
@@ -207,6 +284,7 @@ defmodule Sake.Trace do
     Backend.error(span, to_string(error["message"]))
   end
 
+  defp status(span, {:failed, _type}, _kind), do: Backend.error(span, "")
   defp status(_span, _outcome, _kind), do: :ok
 
   # ---- the conventions' names and attributes
@@ -323,6 +401,15 @@ if Code.ensure_loaded?(:otel_tracer) do
       :ok
     end
 
+    @doc "`params` with the fields the configured propagators write added to its `_meta`."
+    @spec inject(map()) :: map()
+    def inject(params) do
+      case :otel_propagator_text_map.inject([]) do
+        [] -> params
+        fields -> Map.update(params, "_meta", Map.new(fields), &Map.merge(&1, Map.new(fields)))
+      end
+    end
+
     @doc "`fun`, to run in another process with the caller's context current."
     @spec bind((-> result)) :: (-> result) when result: var
     def bind(fun) do
@@ -388,6 +475,7 @@ else
     def within(_span, fun), do: fun.()
     def set(span, _attributes), do: span
     def error(_span, _message), do: :ok
+    def inject(params), do: params
     def bind(fun), do: fun
   end
 end
