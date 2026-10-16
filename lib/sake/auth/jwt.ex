@@ -16,6 +16,10 @@ defmodule Sake.Auth.JWT do
   # (an HMAC "signature" checked against a public key is the classic
   # algorithm-confusion attack), and a key is only ever tried with an `alg`
   # of its own type and, when the JWK names one, its own `alg`.
+  #
+  # Headers, claims and thumbprints are always `JSON`, never the host's
+  # `:json_library` (see `Sake.JSON`): one fixed parser for what is about
+  # to be trusted, and the exact bytes RFC 7638 hashes.
 
   alias Sake.Auth.JWT.JOSE, as: Backend
 

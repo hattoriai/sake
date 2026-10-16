@@ -328,7 +328,7 @@ defmodule Sake.Test.Endpoint do
     Transport.notify(session, method, params)
   end
 
-  defp wire(message), do: message |> JSON.encode!() |> JSON.decode!()
+  defp wire(message), do: message |> Sake.JSON.encode!() |> JSON.decode!()
 
   # ---- tasks
 

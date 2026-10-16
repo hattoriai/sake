@@ -100,6 +100,24 @@ syntax. `execute/2` returns:
   `%{"sampling" => %{}}`. Resources' `read/2` and prompts' `get/2` may
   return it too.
 
+Sake encodes maps and lists with Elixir's `JSON`, which encodes a struct
+only when it implements `JSON.Encoder`. Ecto schemas and other structs
+in Phoenix applications often derive `Jason.Encoder` instead; for those,
+tell Sake to encode with Jason, as Phoenix's own `:json_library` does:
+
+```elixir
+# config/config.exs
+config :sake, :json_library, Jason
+```
+
+The setting covers everything Sake encodes from your code: tool results
+and `structuredContent`, resource and prompt payloads, elicitation
+requests, notifications, task results, and the arguments `Sake.Client`
+sends. It takes any module with `encode!/1` and `encode_to_iodata!/1`,
+and Sake checks it when `{Sake, ...}` starts (or on first use without
+it). Decoding, and the JSON in tokens and OAuth responses, always uses
+`JSON`, whatever the setting, so those bytes do not depend on it.
+
 ## Caching
 
 On the modern protocol, list results carry `ttlMs` and `cacheScope`. The

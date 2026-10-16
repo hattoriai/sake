@@ -13,7 +13,7 @@ defmodule Sake.Plug.SSE do
 
   @spec event(Plug.Conn.t(), map()) :: {:ok, Plug.Conn.t()} | {:error, term()}
   def event(conn, message),
-    do: chunk(conn, ["event: message\ndata: ", JSON.encode!(message), "\n\n"])
+    do: chunk(conn, ["event: message\ndata: ", Sake.JSON.encode_to_iodata!(message), "\n\n"])
 
   @spec comment(Plug.Conn.t()) :: {:ok, Plug.Conn.t()} | {:error, term()}
   def comment(conn), do: chunk(conn, ":\n\n")

@@ -473,7 +473,9 @@ defmodule Sake.Plug do
 
   @doc false
   def send_json(conn, status, body) do
-    conn |> put_resp_content_type("application/json") |> send_resp(status, JSON.encode!(body))
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, Sake.JSON.encode_to_iodata!(body))
   end
 
   @doc false

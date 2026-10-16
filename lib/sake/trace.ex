@@ -351,7 +351,7 @@ defmodule Sake.Trace do
   defp content(_method, _params), do: %{}
 
   defp json(value) do
-    JSON.encode!(value)
+    Sake.JSON.encode!(value)
   rescue
     _ -> nil
   end
