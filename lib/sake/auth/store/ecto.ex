@@ -142,6 +142,30 @@ if Code.ensure_loaded?(Ecto.Query) do
       result
     end
 
+    # The replaced refresh token's row, locked: a concurrent
+    # `revoke_family/2` locks the family's rows before revoking them, so it
+    # waits for this transaction and then revokes the new pair too; one
+    # that ran first left the row revoked, and nothing is inserted.
+    @impl true
+    def put_rotated_tokens(%{repo: repo} = s, refresh_hash, tokens) do
+      fence =
+        from(t in S.Token,
+          where: t.hash == ^refresh_hash and t.kind == "refresh" and is_nil(t.revoked_at),
+          lock: "FOR UPDATE",
+          select: t.id
+        )
+
+      {:ok, result} =
+        repo.transaction(fn ->
+          case repo.one(fence, prefix: s.prefix) do
+            nil -> :revoked
+            _ -> Enum.each(tokens, &(:ok = put_token(s, &1)))
+          end
+        end)
+
+      result
+    end
+
     @impl true
     def put_token(%{repo: repo} = s, %TokenRecord{} = t) do
       row = %S.Token{
@@ -216,9 +240,13 @@ if Code.ensure_loaded?(Ecto.Query) do
     end
 
     # A family born of a code also revokes the code's row, under its lock
-    # (see `put_code_tokens/3`), before sweeping the family's tokens: a
-    # pair being inserted for the code either is refused, or is committed
-    # before the sweep runs.
+    # (see `put_code_tokens/3`), and every family locks its tokens' rows
+    # (see `put_rotated_tokens/3`), before the sweep. A pair being stored
+    # for the code or a rotation either is refused, or is committed before
+    # the sweep runs: the sweep is a statement of its own, and READ
+    # COMMITTED gives it a snapshot taken after the locks were granted.
+    # The rows are locked in `id` order, so two revocations of one family
+    # cannot deadlock.
     @impl true
     def revoke_family(%{repo: repo} = s, family_id) do
       {:ok, :ok} =
@@ -226,6 +254,16 @@ if Code.ensure_loaded?(Ecto.Query) do
           repo.update_all(
             from(c in S.Code, where: c.hash == ^family_id and is_nil(c.revoked_at)),
             [set: [revoked_at: now()]],
+            prefix: s.prefix
+          )
+
+          repo.all(
+            from(t in S.Token,
+              where: t.family_id == ^family_id,
+              order_by: t.id,
+              lock: "FOR UPDATE",
+              select: t.id
+            ),
             prefix: s.prefix
           )
 

@@ -25,6 +25,15 @@ defmodule Sake.Auth.Store do
   @callback put_code_tokens(state(), code_hash :: String.t(), [TokenRecord.t()]) ::
               :ok | :revoked
   @callback put_token(state(), TokenRecord.t()) :: :ok
+  @doc """
+  Stores the tokens a refresh rotated into, all of them or none: none,
+  returning `:revoked`, when the refresh token they replace (by hash) is
+  revoked or gone, as a concurrent reuse of it revokes its family.
+  Atomic with `revoke_family/2`: whichever of the two runs second sees
+  the other's effect.
+  """
+  @callback put_rotated_tokens(state(), refresh_hash :: String.t(), [TokenRecord.t()]) ::
+              :ok | :revoked
   @callback get_token(state(), :access | :refresh, String.t()) :: {:ok, TokenRecord.t()} | :error
   @doc """
   Marks a refresh token used now, if and only if it was unused, atomically:

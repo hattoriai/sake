@@ -466,6 +466,12 @@ the other did, so a replay that races the request redeeming the code
 never leaves a live pair behind: that request gets `invalid_grant`
 instead.
 
+A refresh works the same way, the refresh token it consumed being the
+fence: the rotated pair is inserted in a transaction that locks that
+token's row and checks it is not revoked, and revoking a family locks
+the family's rows before it revokes them. A reuse that races the
+legitimate refresh leaves no live pair either.
+
 ## The ETS store for development
 
 The default, `{Sake.Auth.Store.ETS, []}`, needs no database: an `Agent`
