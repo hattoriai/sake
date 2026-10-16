@@ -72,6 +72,19 @@ defmodule SakeTest.StoreCases do
         assert length(mod.tokens_for_subject(state, "u1")) == 4
       end
 
+      test "a DPoP-bound token keeps its key's thumbprint", %{config: config} do
+        {mod, state} = store(config)
+
+        {_a, _r, %{access: a, refresh: r}} =
+          issue(config, %{family_id: "fd", jkt: "thumb-a", refresh_jkt: "thumb-r"})
+
+        assert {:ok, %TokenRecord{jkt: "thumb-a"}} = mod.get_token(state, :access, a.hash)
+        assert {:ok, %TokenRecord{jkt: "thumb-r"}} = mod.consume_refresh(state, r.hash)
+
+        {_a, _r, %{access: bearer}} = issue(config, %{family_id: "fb"})
+        assert {:ok, %TokenRecord{jkt: nil}} = mod.get_token(state, :access, bearer.hash)
+      end
+
       test "a machine client's keys, and its token without a subject", %{config: config} do
         {mod, state} = store(config)
 

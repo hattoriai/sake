@@ -10,7 +10,7 @@ defmodule Sake.Auth.WellKnown do
   @behaviour Plug
   import Plug.Conn
 
-  alias Sake.Auth.{Config, JWT, Resource}
+  alias Sake.Auth.{Config, DPoP, JWT, Resource}
 
   @id_jag_profile "urn:ietf:params:oauth:grant-profile:id-jag"
 
@@ -42,14 +42,25 @@ defmodule Sake.Auth.WellKnown do
     config = Sake.Auth.config()
     suffix = if rest == [], do: "", else: "/" <> Enum.join(rest, "/")
 
-    json(conn, %{
-      "resource" => Resource.origin(conn) <> suffix,
-      "authorization_servers" => [config.issuer],
-      "scopes_supported" => config |> Config.scopes() |> Enum.map(&elem(&1, 0)),
-      "bearer_methods_supported" => ["header"],
-      "resource_name" => config.name
-    })
+    json(
+      conn,
+      dpop_algs(config, %{
+        "resource" => Resource.origin(conn) <> suffix,
+        "authorization_servers" => [config.issuer],
+        "scopes_supported" => config |> Config.scopes() |> Enum.map(&elem(&1, 0)),
+        "bearer_methods_supported" => ["header"],
+        "resource_name" => config.name
+      })
+    )
   end
+
+  # RFC 9449 §5.1 (the authorization server) and RFC 9728 §2 (the
+  # resource): the algorithms DPoP proofs may use, which is how a client
+  # learns that DPoP is on offer at all.
+  defp dpop_algs(%Config{dpop: false}, body), do: body
+
+  defp dpop_algs(_config, body),
+    do: Map.put(body, "dpop_signing_alg_values_supported", DPoP.algs())
 
   defp authorization_server(conn) do
     config = Sake.Auth.config()
@@ -89,7 +100,7 @@ defmodule Sake.Auth.WellKnown do
         do: Map.put(body, "registration_endpoint", Config.register_url(config)),
         else: body
 
-    json(conn, body)
+    json(conn, dpop_algs(config, body))
   end
 
   # `private_key_jwt` needs jose to verify the client's assertion.

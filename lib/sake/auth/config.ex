@@ -17,6 +17,7 @@ defmodule Sake.Auth.Config do
             trusted_issuers: [],
             allow_insecure: false,
             oauth_path: "/oauth",
+            dpop: true,
             name: nil
 
   @spec new(keyword()) :: t()
@@ -39,6 +40,7 @@ defmodule Sake.Auth.Config do
       config
       | issuer: String.trim_trailing(config.issuer, "/"),
         trusted_issuers: trusted_issuers(config),
+        dpop: dpop(config.dpop),
         store_state: module.init(store_opts),
         name: config.name || uri.host
     }
@@ -63,6 +65,30 @@ defmodule Sake.Auth.Config do
 
     Enum.map(issuers, &Sake.Auth.TrustedIssuer.new/1)
   end
+
+  # DPoP needs jose to check proofs. By default it is on when jose is
+  # there, and quietly off when not (the metadata then does not offer it);
+  # a host that asks for it by name, nonces and all, is told at start.
+  defp dpop(false), do: false
+  defp dpop(true), do: if(Sake.Auth.JWT.available?(), do: %{nonce: false}, else: false)
+
+  defp dpop(opts) when is_list(opts) do
+    Sake.Auth.JWT.require!("dpop:")
+    nonce = Keyword.get(opts, :nonce, false)
+
+    if nonce and Sake.Secret.configured() == nil,
+      do:
+        raise(
+          ArgumentError,
+          "dpop: [nonce: true] needs the Sake secret: start {Sake, secret_key_base: ...}"
+        )
+
+    %{nonce: nonce}
+  end
+
+  defp dpop(other),
+    do:
+      raise(ArgumentError, "dpop: must be true, false or [nonce: boolean], got #{inspect(other)}")
 
   @doc "All scopes the configured servers declare, with descriptions."
   @spec scopes(t()) :: [{String.t(), String.t()}]

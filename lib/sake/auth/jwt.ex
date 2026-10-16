@@ -2,7 +2,9 @@ defmodule Sake.Auth.JWT do
   @moduledoc false
   # Compact JWS (RFC 7515) and JWT (RFC 7519) for the few places Sake needs
   # them: client assertions (RFC 7523 §2.2), JWT authorization grants
-  # (RFC 7523 §2.1, the ID-JAG), and the client's own signed assertions.
+  # (RFC 7523 §2.1, the ID-JAG), the client's own signed assertions, and
+  # DPoP proofs (RFC 9449, see `Sake.Auth.DPoP`), which are verified with
+  # the key in their own header.
   #
   # The signatures are `jose`'s, an optional dependency: everything that
   # touches a key goes through `Sake.Auth.JWT.JOSE`, and without `jose`
@@ -142,6 +144,27 @@ defmodule Sake.Auth.JWT do
   @doc "The public JWK of a private key, to register with an authorization server."
   @spec public_jwk(key()) :: map()
   def public_jwk(key), do: Backend.public_jwk(key)
+
+  @doc """
+  The RFC 7638 SHA-256 thumbprint of a public JWK, base64url-encoded:
+  the hash of its required members only, in lexicographic order with no
+  whitespace, so the same key always has the same thumbprint whatever
+  else its JWK says. It needs no `jose`.
+  """
+  @spec thumbprint(map()) :: String.t()
+  def thumbprint(jwk) do
+    members =
+      case key_type(jwk) do
+        :rsa -> ~w(e kty n)
+        curve when curve in [:p256, :p384] -> ~w(crv kty x y)
+      end
+
+    json =
+      "{" <>
+        Enum.map_join(members, ",", &(JSON.encode!(&1) <> ":" <> JSON.encode!(jwk[&1]))) <> "}"
+
+    :sha256 |> :crypto.hash(json) |> Base.url_encode64(padding: false)
+  end
 
   @doc "The algorithm a private key signs with unless told otherwise: RS256, ES256 or ES384."
   @spec default_alg(key()) :: String.t()

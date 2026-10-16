@@ -18,7 +18,8 @@ defmodule Sake.Auth.WellKnownTest do
              "authorization_servers" => ["http://www.example.com"],
              "scopes_supported" => ["issues:read", "issues:write"],
              "bearer_methods_supported" => ["header"],
-             "resource_name" => "www.example.com"
+             "resource_name" => "www.example.com",
+             "dpop_signing_alg_values_supported" => ["RS256", "PS256", "ES256", "ES384"]
            }
 
     body = JSON.decode!(get("/.well-known/oauth-protected-resource/acme/mcp").resp_body)
@@ -57,6 +58,20 @@ defmodule Sake.Auth.WellKnownTest do
     refute Map.has_key?(body, "authorization_grant_profiles_supported")
 
     assert body["scopes_supported"] == ["issues:read", "issues:write"]
+
+    assert body["dpop_signing_alg_values_supported"] == ["RS256", "PS256", "ES256", "ES384"]
+  end
+
+  @tag auth: [dpop: false]
+  test "no DPoP algorithms when DPoP is off" do
+    for path <- [
+          "/.well-known/oauth-authorization-server",
+          "/.well-known/oauth-protected-resource"
+        ] do
+      refute get(path).resp_body
+             |> JSON.decode!()
+             |> Map.has_key?("dpop_signing_alg_values_supported")
+    end
   end
 
   @tag auth: [subject: SakeTest.TenantSubject]

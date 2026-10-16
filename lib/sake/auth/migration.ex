@@ -63,6 +63,9 @@ if Code.ensure_loaded?(Ecto.Migration) do
         add(:revoked_at, :utc_datetime)
         add(:used_at, :utc_datetime)
         add(:inserted_at, :utc_datetime, null: false)
+        # The thumbprint of the DPoP key a token is bound to (RFC 9449
+        # `cnf.jkt`); a bearer token has none.
+        add(:jkt, :string)
       end
 
       create(unique_index(:sake_oauth_tokens, [:hash], prefix: prefix))

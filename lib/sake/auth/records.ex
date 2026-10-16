@@ -14,7 +14,12 @@ defmodule Sake.Auth.Code do
 end
 
 defmodule Sake.Auth.TokenRecord do
-  @moduledoc "An access or refresh token (stored hashed). `family_id` groups the tokens born from one authorization code."
+  @moduledoc """
+  An access or refresh token (stored hashed). `family_id` groups the
+  tokens born from one authorization code. `jkt` is the RFC 7638
+  thumbprint of the DPoP key the token is bound to (its `cnf.jkt`), or nil
+  for a bearer token.
+  """
   @type t :: %__MODULE__{}
   defstruct [
     :id,
@@ -28,6 +33,7 @@ defmodule Sake.Auth.TokenRecord do
     :revoked_at,
     :used_at,
     :inserted_at,
+    :jkt,
     scopes: []
   ]
 end

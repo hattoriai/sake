@@ -125,7 +125,8 @@ if Code.ensure_loaded?(Ecto.Query) do
         expires_at: DateTime.truncate(t.expires_at, :second),
         revoked_at: t.revoked_at,
         used_at: t.used_at,
-        inserted_at: DateTime.truncate(t.inserted_at || DateTime.utc_now(), :second)
+        inserted_at: DateTime.truncate(t.inserted_at || DateTime.utc_now(), :second),
+        jkt: t.jkt
       }
 
       {:ok, _} =
@@ -214,7 +215,8 @@ if Code.ensure_loaded?(Ecto.Query) do
         expires_at: r.expires_at,
         revoked_at: r.revoked_at,
         used_at: r.used_at,
-        inserted_at: r.inserted_at
+        inserted_at: r.inserted_at,
+        jkt: r.jkt
       }
     end
 
