@@ -128,8 +128,10 @@ First release.
   and broadcast, per test, so tests can be `async: true`; tasks run in
   the background and are followed without sleeping through their poll
   interval (`await_task/3`); an exception in a component fails the test
-  as it was raised. `Sake.Test.start/0` starts what Sake needs when the
-  application does not. See `guides/testing.md`.
+  as it was raised. With `plug:`, the requests go over HTTP through the
+  host's endpoint or router instead, with a real bearer token from
+  `Sake.Test.access_token/1`. `Sake.Test.start/0` starts what Sake needs
+  when the application does not. See `guides/testing.md`.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the

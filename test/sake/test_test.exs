@@ -197,14 +197,11 @@ defmodule Sake.TestTest do
 
         assert {:ok, %{text: "Hello, Rui!"}} = call_tool(client, "confirm")
 
-        assert_asked("elicitation/create", %{
-          "mode" => "form",
-          "message" => "Who should be greeted?"
-        })
+        assert_asked "elicitation/create", %{"message" => "Who should be greeted?"}
 
         client = connect(Server, era: @era, on_input: fn _params -> :decline end)
         assert {:ok, %{text: "No greeting then."}} = call_tool(client, "confirm")
-        assert_asked("elicitation/create")
+        assert_asked "elicitation/create"
 
         on_input = fn requests, _session ->
           Map.new(requests, fn {key, _} ->
@@ -214,7 +211,7 @@ defmodule Sake.TestTest do
 
         client = connect(Server, era: @era, on_input: on_input)
         assert {:ok, %{text: "Hi, Ana!"}} = call_tool(client, "confirm", %{"greeting" => "Hi"})
-        assert_asked("elicitation/create")
+        assert_asked "elicitation/create"
 
         client = connect(Server, era: @era)
 
@@ -222,7 +219,7 @@ defmodule Sake.TestTest do
                 %{is_error: true, text: "This tool needs a client that supports elicitation."}} =
                  call_tool(client, "confirm")
 
-        refute_asked("elicitation/create")
+        refute_asked "elicitation/create"
       end
 
       test "sampling and roots are answered by sampling: and roots: and recorded" do
@@ -236,9 +233,9 @@ defmodule Sake.TestTest do
         assert {:ok, %{text: "A short summary."}} =
                  call_tool(client, "summarize", %{"text" => "x"})
 
-        assert_asked("sampling/createMessage", %{"maxTokens" => 100})
+        assert_asked "sampling/createMessage", %{"maxTokens" => 100}
         assert {:ok, %{text: "file:///work (Work)"}} = call_tool(client, "roots")
-        assert_asked("roots/list")
+        assert_asked "roots/list"
 
         client = connect(Server, era: @era)
 
@@ -252,26 +249,23 @@ defmodule Sake.TestTest do
         assert {:ok, %{text: "counted to 2"}} =
                  call_tool(client, "slow", %{"n" => 2, "delay_ms" => 0})
 
-        assert_notification("notifications/progress", %{"progress" => 1, "total" => 2})
-        assert_notification("notifications/progress", %{"progress" => 2})
+        assert_notification "notifications/progress", %{"progress" => 1, "total" => 2}
+        assert_notification "notifications/progress", %{"progress" => 2}
 
         assert {:ok, _} = call_tool(client, "test_logging_tool")
-        refute_notification("notifications/message")
+        refute_notification "notifications/message"
 
         assert :ok = set_log_level(client, :info)
         assert {:ok, _} = call_tool(client, "test_logging_tool")
 
-        assert_notification("notifications/message", %{
-          "level" => "info",
-          "data" => "Tool execution started"
-        })
+        assert_notification "notifications/message", %{"data" => "Tool execution started"}
 
         parent = self()
         on_notification = fn method, _params -> send(parent, {:mine, method}) end
         client = connect(Server, era: @era, log_level: "info", on_notification: on_notification)
         assert {:ok, _} = call_tool(client, "test_logging_tool")
         assert_received {:mine, "notifications/message"}
-        assert_notification("notifications/message", %{"data" => "Tool execution completed"})
+        assert_notification "notifications/message", %{"data" => "Tool execution completed"}
       end
 
       test "MCP Apps: ui: true shows the app-only tools and the UI resources" do
@@ -312,7 +306,7 @@ defmodule Sake.TestTest do
       assert {:ok, %{text: "Exported 3 issues as csv."}} =
                call_tool(client, "export", %{"delay_ms" => 0})
 
-      assert_asked("elicitation/create", %{"message" => "Which format?"})
+      assert_asked "elicitation/create", %{"message" => "Which format?"}
 
       # A legacy session never gets a task: the same call runs synchronously.
       client =
@@ -410,22 +404,22 @@ defmodule Sake.TestTest do
       client = connect(Server)
 
       Sake.Server.notify_list_changed(Server, :prompts)
-      assert_list_changed(:prompts)
+      assert_list_changed :prompts
 
       assert {:ok, %{text: "Announced."}} = call_tool(client, "changes")
-      assert_list_changed(:tools)
-      assert_resource_updated("issue://1")
-      refute_resource_updated("issue://2")
-      refute_list_changed(:resources)
+      assert_list_changed :tools
+      assert_resource_updated "issue://1"
+      refute_resource_updated "issue://2"
+      refute_list_changed :resources
 
       # Another process, not started by this test: not this test's business.
       spawn(fn -> Sake.Server.notify_list_changed(Server, :resources) end)
       Process.sleep(20)
-      refute_list_changed(:resources)
+      refute_list_changed :resources
 
       # Another server's broadcasts go to that server's listeners.
       Sake.Server.notify_list_changed(SakeDev.Server, :tools)
-      refute_list_changed(:tools)
+      refute_list_changed :tools
     end
 
     test "takes a client, and listening twice records once" do
@@ -433,8 +427,8 @@ defmodule Sake.TestTest do
       :ok = listen(client)
       :ok = listen(client)
       Sake.Server.resource_updated(Server, "issue://2")
-      assert_resource_updated("issue://2")
-      refute_resource_updated("issue://2")
+      assert_resource_updated "issue://2"
+      refute_resource_updated "issue://2"
     end
   end
 
@@ -494,6 +488,129 @@ defmodule Sake.TestSharedTest do
   test "listen with shared: true records broadcasts from any process" do
     :ok = listen(Sake.TestTest.Server, shared: true)
     spawn(fn -> Sake.Server.notify_list_changed(Sake.TestTest.Server, :resources) end)
-    assert_list_changed(:resources)
+    assert_list_changed :resources
+  end
+end
+
+defmodule Sake.TestPlugTest do
+  # Through a plug: Sake.Plug itself, and a Phoenix endpoint with
+  # authorization. Sake.Auth's configuration is the node's, so the tests
+  # run alone.
+  use ExUnit.Case, async: false
+
+  import Sake.Test
+
+  alias Sake.Client.Challenge
+  alias Sake.TestTest.Server
+
+  @secret String.duplicate("s", 64)
+
+  test "through Sake.Plug: the same calls, over HTTP" do
+    client = connect(Server, plug: {Sake.Plug, server: Server, secret: @secret})
+    assert session(client).url == "http://www.example.com/mcp"
+
+    assert {:ok, %{text: "hi"}} = call_tool(client, "echo", %{"text" => "hi"})
+
+    # The headers are checked: Sake.Client mirrors an argument into its
+    # header once it has listed the tool, as a client does before a call.
+    assert {:error, {:http, 400, %{"error" => %{"code" => -32_020}}}} =
+             call_tool(client, "add", %{"a" => 1, "b" => 2, "precision" => 0})
+
+    assert {:ok, _tools} = list_tools(client)
+
+    assert {:ok, %{structured: %{"sum" => 3.0}}} =
+             call_tool(client, "add", %{"a" => 1, "b" => 2, "precision" => 0})
+
+    assert {:ok, %{text: "counted to 2"}} =
+             call_tool(client, "slow", %{"n" => 2, "delay_ms" => 0})
+
+    assert_notification "notifications/progress", %{"progress" => 2, "total" => 2}
+
+    listen(Server)
+    assert {:ok, _} = call_tool(client, "changes")
+    assert_list_changed :tools
+
+    client =
+      connect(Server,
+        plug: {Sake.Plug, server: Server, secret: @secret},
+        on_input: fn _params -> {:accept, %{"name" => "Rui"}} end
+      )
+
+    assert {:ok, %{text: "Hello, Rui!"}} = call_tool(client, "confirm")
+    assert_asked "elicitation/create"
+
+    client = connect(Server, plug: {Sake.Plug, server: Server, secret: @secret}, era: :legacy)
+    assert session(client).revision == "2025-11-25"
+    assert {:ok, %{text: "hi"}} = call_tool(client, "echo", %{"text" => "hi"})
+
+    # The client asks for progress, so an error comes on the call's stream,
+    # as a JSON-RPC error, the same as in memory.
+    client = connect(Server, plug: {Sake.Plug, server: Server, secret: @secret}, tasks: false)
+    assert {:error, {:rpc, %{"code" => -32_021}}} = get_task(client, "x")
+    assert {:error, {:rpc, %{"code" => -32_021}}} = get_task(connect(Server, tasks: false), "x")
+  end
+
+  test "through a Phoenix endpoint with authorization: a real bearer token" do
+    start_supervised!(SakeTest.PhoenixEndpoint)
+
+    start_supervised!(
+      {Sake,
+       auth: [
+         subject: SakeDev.Subject,
+         issuer: "http://www.example.com",
+         allow_insecure: true,
+         servers: [SakeDev.Server],
+         resources: ["/:org/mcp"]
+       ],
+       secret_key_base: @secret,
+       streams: false,
+       tasks: false}
+    )
+
+    client =
+      connect(SakeDev.Server,
+        plug: SakeTest.PhoenixEndpoint,
+        path: "/acme/mcp",
+        scopes: ["issues:read"],
+        subject: "u1"
+      )
+
+    assert {:ok, tools} = list_tools(client)
+    assert "issue_board" in Enum.map(tools, & &1.name)
+    refute "slow" in Enum.map(tools, & &1.name)
+
+    assert {:error, {:insufficient_scope, %Challenge{scope: ["issues:write"]}}} =
+             call_tool(client, "slow", %{"n" => 1})
+
+    # The token is for one tenant's endpoint.
+    token = access_token(subject: "u1", resource: "http://www.example.com/acme/mcp")
+
+    assert_raise RuntimeError, ~r/unauthorized/, fn ->
+      connect(SakeDev.Server,
+        plug: SakeTest.PhoenixEndpoint,
+        path: "/beta/mcp",
+        headers: [{"authorization", "Bearer " <> token}]
+      )
+    end
+
+    assert_raise RuntimeError, ~r/unauthorized/, fn ->
+      connect(SakeDev.Server, plug: SakeTest.PhoenixEndpoint, path: "/acme/mcp")
+    end
+  end
+
+  test "what a plug cannot take is refused up front" do
+    assert_raise ArgumentError, ~r/principal/, fn ->
+      connect(Server, plug: {Sake.Plug, server: Server}, scope: :ana)
+    end
+
+    assert_raise ArgumentError, ~r/in-memory/, fn ->
+      connect(Server,
+        plug: {Sake.Plug, server: Server},
+        era: :legacy,
+        on_input: fn _ -> :cancel end
+      )
+    end
+
+    assert_raise ArgumentError, ~r/subject/, fn -> access_token(scopes: []) end
   end
 end

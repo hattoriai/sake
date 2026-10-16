@@ -84,6 +84,20 @@ defmodule Sake.Test do
   `async: true`; `shared: true` sees every broadcast of the server, from
   any process, for a test that cannot run concurrently with others.
 
+  ## Through a plug
+
+  `plug:` sends the requests through a plug instead, over HTTP as
+  `Sake.Client` sends them, with Req running the plug in the test's
+  process: the host's endpoint or router, with its pipelines and its
+  authorization (`plug: MyAppWeb.Endpoint, path: "/acme/mcp"`), or
+  `Sake.Plug` itself (`plug: {Sake.Plug, server: MyApp.MCP}`). `path:` is
+  the endpoint's path (default `"/mcp"`) and `headers:` go with every
+  request. The stack computes the principal from the request, so `scope:`
+  does not apply; `scopes:` issues a real access token for `subject:`
+  (see `access_token/1`) and sends it as a bearer token. A legacy server's
+  questions need the in-memory client, and a task is polled at the
+  interval the server suggests, as over the network.
+
   ## Tasks
 
   A tool that runs as a task (see `Sake.Tasks`) runs as one here, in the
@@ -98,6 +112,9 @@ defmodule Sake.Test do
   alias Sake.Client.{Session, Transport}
   alias Sake.Plug.Streams
   alias Sake.Test.{Client, Endpoint}
+
+  # The origin of a request through a plug, as `Plug.Test` has it.
+  @origin "http://www.example.com"
 
   @client_options [
     :era,
@@ -160,9 +177,9 @@ defmodule Sake.Test do
       |> answer_and_record(owner)
       |> Keyword.put(:on_notification, recorder(owner, opts[:on_notification]))
 
-    endpoint = Endpoint.new(server, Keyword.put(opts, :token, token(opts)))
+    {target, client_opts} = target(server, opts, client_opts)
 
-    case Sake.Client.connect({:local, endpoint}, client_opts) do
+    case Sake.Client.connect(target, client_opts) do
       {:ok, session} ->
         {:ok, pid} = Agent.start_link(fn -> session end)
         %Client{pid: pid, server: server}
@@ -170,6 +187,74 @@ defmodule Sake.Test do
       {:error, reason} ->
         raise "Sake.Test could not connect to #{inspect(server)}: #{inspect(reason)}"
     end
+  end
+
+  defp target(server, opts, client_opts) do
+    case opts[:plug] do
+      nil -> {{:local, Endpoint.new(server, Keyword.put(opts, :token, token(opts)))}, client_opts}
+      plug -> through(plug, opts, client_opts)
+    end
+  end
+
+  # Through a plug, as `Sake.Client` sends requests over HTTP, with Req
+  # running the plug in this process: the stack decides who is calling,
+  # from the request.
+  defp through(plug, opts, client_opts) do
+    if Keyword.has_key?(opts, :scope) do
+      raise ArgumentError,
+            "Sake.Test: with plug:, the stack computes the principal; pass headers:, or scopes: and subject: for a bearer token"
+    end
+
+    # A legacy server asks its questions on the call's response stream,
+    # and the client answers with a request of its own while the call is
+    # still open, which a plug run in this process cannot take.
+    if client_opts[:era] == :legacy and Enum.any?([:on_input, :sampling, :roots], &opts[&1]) do
+      raise ArgumentError,
+            "Sake.Test: a legacy server's questions need the in-memory client; leave out plug:"
+    end
+
+    url = @origin <> (opts[:path] || "/mcp")
+    headers = (opts[:headers] || []) ++ bearer(opts, url)
+    {url, Keyword.merge(client_opts, headers: headers, req: [plug: plug])}
+  end
+
+  defp bearer(opts, url) do
+    if opts[:scopes],
+      do: [{"authorization", "Bearer " <> access_token(Keyword.put_new(opts, :resource, url))}],
+      else: []
+  end
+
+  @doc """
+  Issues an access token in the `Sake.Auth` store and returns it, for a
+  request through a host's endpoint with authorization: `connect/2` with
+  `plug:` and `scopes:` sends one, and a `Phoenix.ConnTest` test can put
+  it in an `authorization` header itself. `Sake.Auth` must be configured
+  (`{Sake, auth: ...}`).
+
+  Options: `subject:` (required: the ID your subject module's `fetch/1`
+  takes, or `nil` for a machine client's token), `client_id:` (default
+  `"sake-test"`; a machine client's must be registered, see
+  `Sake.Auth.Clients.create/2`), `scopes:` (default none), `resource:`
+  (the endpoint's URL, which the token is for; default
+  `"http://www.example.com/mcp"`, the endpoint of a test request at
+  `/mcp`).
+  """
+  @spec access_token(keyword()) :: String.t()
+  def access_token(opts) do
+    unless Keyword.has_key?(opts, :subject) do
+      raise ArgumentError,
+            "Sake.Test.access_token/1 needs subject: (the ID your subject module fetches), or subject: nil for a machine client"
+    end
+
+    {token, _record} =
+      Sake.Auth.Tokens.issue_access(Sake.Auth.config(), %{
+        client_id: opts[:client_id] || "sake-test",
+        subject_id: opts[:subject] && to_string(opts[:subject]),
+        scopes: opts[:scopes] || [],
+        resource: opts[:resource] || @origin <> "/mcp"
+      })
+
+    token
   end
 
   # ---- the simulated token

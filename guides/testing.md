@@ -46,6 +46,9 @@ ExUnit.start()
 `start/1` leaves alone what already runs, and takes `tasks:` (the
 `Sake.Tasks` options, or `false`).
 
+The assertions below read best without parentheses; with `:sake` in the
+`import_deps` of your `.formatter.exs`, `mix format` leaves them so.
+
 ## Calls and results
 
 `connect/2` returns a client, and the calls are `Sake.Client`'s:
@@ -228,6 +231,49 @@ An exception in a component fails the test with that exception and its
 stack trace, rather than coming back as the `"The tool failed."` result
 a client would get. `reraise: false` gives the client's view instead,
 for a test of that.
+
+## Through the whole stack
+
+The in-memory client skips HTTP, and with it your router, its
+pipelines, and Sake's bearer check. `plug:` keeps them: the client
+sends its requests over HTTP as it does over the network, and Req runs
+the plug in the test's process instead of sending them to a socket.
+
+```elixir
+client =
+  connect(MyApp.MCP,
+    plug: MyAppWeb.Endpoint,
+    path: "/acme/mcp",
+    scopes: ["issues:read"],
+    subject: user.id
+  )
+
+assert {:ok, tools} = list_tools(client)
+```
+
+`plug:` is the host's endpoint or router (started, as for
+`Phoenix.ConnTest`), or `{Sake.Plug, server: MyApp.MCP}` for Sake's own
+endpoint alone; `path:` is where the endpoint is mounted (default
+`"/mcp"`), and `headers:` go with every request. The stack computes the
+principal from the request, so `scope:` does not apply. With `scopes:`,
+the client sends a real access token for `subject:` (the ID your subject
+module's `fetch/1` takes) and that endpoint's URL, issued in the
+`Sake.Auth` store by `access_token/1`, which a `Phoenix.ConnTest` test
+can use too:
+
+```elixir
+token = Sake.Test.access_token(subject: user.id, scopes: ["issues:read"], resource: "http://www.example.com/acme/mcp")
+```
+
+Everything the client checks over the network is checked here: the
+`Mcp-*` headers (an argument mirrored into a header is sent once the
+client has listed the tool, as a client does before a call), the
+`Origin` and the token's audience. Two things need the in-memory client
+instead: a legacy server's questions, which travel on the call's
+response stream while the client answers with a request of its own, and
+tasks followed without waiting, since through a plug the client polls a
+task at the interval the server suggests. A test configuration can
+shorten it: `tasks: [poll_interval: 10]` on the `Sake` child.
 
 ## Async tests
 
