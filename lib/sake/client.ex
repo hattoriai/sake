@@ -124,11 +124,17 @@ defmodule Sake.Client do
     client_info = opts[:client_info] || %{"name" => "Sake", "version" => Sake.version()}
     req = opts[:req] || []
 
+    # There is no HTTP authorization on stdio: the server takes its
+    # credentials from its environment.
+    auth =
+      url && opts[:auth] &&
+        Auth.new(url, opts[:auth], client_name: client_info["name"], req: req)
+
     %Session{
       url: url,
       headers: opts[:headers] || [],
       client_info: client_info,
-      capabilities: opts[:capabilities] || default_capabilities(opts),
+      capabilities: opts[:capabilities] || default_capabilities(opts, auth),
       on_input: opts[:on_input],
       sampling: opts[:sampling],
       roots: opts[:roots],
@@ -136,27 +142,28 @@ defmodule Sake.Client do
       log_level: opts[:log_level] && to_string(opts[:log_level]),
       tasks: Keyword.get(opts, :tasks, true),
       task_timeout: opts[:task_timeout] || 300_000,
-      # There is no HTTP authorization on stdio: the server takes its
-      # credentials from its environment.
-      auth:
-        url && opts[:auth] &&
-          Auth.new(url, opts[:auth], client_name: client_info["name"], req: req),
+      auth: auth,
       req: req
     }
   end
 
   # A client claims only what it can answer: each answering option turns
-  # on its own capability.
-  defp default_capabilities(opts) do
+  # on its own capability. The authorization extension of a machine or
+  # enterprise grant goes along on both eras, as MCP Apps do.
+  defp default_capabilities(opts, auth) do
     %{}
     |> put_capability(opts[:on_input], "elicitation", %{})
     |> put_capability(opts[:sampling], "sampling", %{})
     |> put_capability(opts[:roots], "roots", %{"listChanged" => false})
-    |> put_capability(opts[:ui] || nil, "extensions", Sake.UI.client_capability())
+    |> put_extensions(if(opts[:ui], do: Sake.UI.client_capability(), else: %{}))
+    |> put_extensions(Auth.extensions(auth))
   end
 
   defp put_capability(caps, nil, _name, _value), do: caps
   defp put_capability(caps, _option, name, value), do: Map.put(caps, name, value)
+
+  defp put_extensions(caps, ext) when ext == %{}, do: caps
+  defp put_extensions(caps, ext), do: Map.update(caps, "extensions", ext, &Map.merge(&1, ext))
 
   defp modern(session), do: %{session | era: :modern, revision: Protocol.modern()}
 

@@ -107,7 +107,12 @@ MCP Apps (the `io.modelcontextprotocol/ui` extension) work on every
 revision: a host declares the extension in each request's capabilities on
 2026-07-28 and in `initialize` on the legacy revisions, and the server
 advertises it in `server/discover` and in its `initialize` result; see
-`guides/apps.md`.
+`guides/apps.md`. The authorization extensions
+(`io.modelcontextprotocol/oauth-client-credentials` and
+`io.modelcontextprotocol/enterprise-managed-authorization`) are declared
+the same way on both sides: by `Sake.Client` with the matching `grant:`,
+and by an endpoint with `auth: true` whose authorization server offers
+the grant; see `guides/authorization.md`.
 
 ## Conformance status
 

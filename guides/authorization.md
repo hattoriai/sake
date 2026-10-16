@@ -188,6 +188,25 @@ client goes back to the identity provider for a new grant, so a person
 removed from the directory loses access within one access token
 lifetime.
 
+## The extensions in the MCP capabilities
+
+An endpoint with `auth: true` advertises the extensions whose grants
+its authorization server offers, in the `extensions` of its
+capabilities (`server/discover`, and the `initialize` result on the
+legacy revisions), next to the server's own:
+`io.modelcontextprotocol/oauth-client-credentials` when your subject
+module defines `client_principal/1`, and
+`io.modelcontextprotocol/enterprise-managed-authorization` when a
+trusted issuer has `profile: :id_jag`. Each has an empty settings
+object. A workload's JWT grant and DPoP have no extension identifier;
+the authorization server's metadata is where a client learns of them.
+
+Nothing depends on the declaration, since the grants happen at the
+token endpoint before any MCP request; it lets a host see what the
+server takes. The same server on an endpoint without `auth:` advertises
+neither. A mounted server is advertised by the endpoint that serves
+it, and a proxy's upstream authorization is the upstream's own.
+
 ## DPoP: tokens bound to the client's key
 
 A bearer token works for whoever holds it: one that leaks from a log, a

@@ -97,7 +97,8 @@ Without a person at a browser, both sides also speak the official
 authorization extensions: the client credentials grant for a service
 acting as itself (with a secret, or a key and `private_key_jwt`), and
 the JWT bearer grant for an enterprise identity provider's ID-JAG
-(enterprise-managed authorization) or a workload's platform JWT. Signed
+(enterprise-managed authorization) or a workload's platform JWT, and
+declare the extensions in their MCP capabilities. Signed
 JWTs, and DPoP, need the optional `jose` dependency:
 
 ```elixir

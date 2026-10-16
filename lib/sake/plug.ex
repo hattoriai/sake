@@ -315,7 +315,8 @@ defmodule Sake.Plug do
         secret: secret(opts),
         server: opts.server,
         reraise: opts.reraise,
-        scope: opts.scope.(conn)
+        scope: opts.scope.(conn),
+        conn_assigns: conn.assigns
       )
 
     outcome =

@@ -64,8 +64,10 @@ First release.
   or a workload identity token, mapped to an account by the subject
   module's `assertion_principal/2`. Neither grant issues a refresh token;
   key sets are fetched and cached, `jti`s are remembered against replay,
-  and the metadata advertises only what is configured. Signed JWTs need
-  the optional `jose` dependency.
+  and the metadata advertises only what is configured. An endpoint with
+  `auth: true` advertises the extensions of the grants offered in the
+  `extensions` of its capabilities (`server/discover` and the legacy
+  `initialize` result). Signed JWTs need the optional `jose` dependency.
 - `Sake.Auth.Store.ETS` (development) and `Sake.Auth.Store.Ecto`
   (production) token/client/code/consent stores, plus a grants API for a
   settings page and `Sake.Auth.prune/1` for expired rows.
@@ -94,7 +96,9 @@ First release.
   `private_key_jwt`), `grant: :jwt_bearer` (a workload's JWT) and `grant:
   :enterprise` (the RFC 8693 token exchange of an ID token for an ID-JAG
   at the identity provider, then the JWT bearer grant), renewing an
-  expiring token by running the grant again.
+  expiring token by running the grant again. `:client_credentials` and
+  `:enterprise` declare their extension in the client's capabilities
+  (per request on 2026-07-28, in `initialize` on the legacy revisions).
 - DPoP (RFC 9449, SEP-1932), sender-constrained tokens, on both sides and
   both eras. The authorization server binds the tokens of a request that
   carries a proof to the proof's key (`token_type: DPoP`, the key's

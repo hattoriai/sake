@@ -14,7 +14,7 @@ defmodule Sake.Server.Legacy do
   @spec handle(module(), JSONRPC.parsed(), Context.t()) :: outcome()
   def handle(_server, {:notification, _method, _params}, _ctx), do: :noreply
 
-  def handle(server, {:request, _id, "initialize", params}, _ctx) do
+  def handle(server, {:request, _id, "initialize", params}, ctx) do
     case params do
       %{"protocolVersion" => requested, "capabilities" => caps}
       when is_binary(requested) and is_map(caps) ->
@@ -24,7 +24,8 @@ defmodule Sake.Server.Legacy do
         result =
           %{
             "protocolVersion" => revision,
-            "capabilities" => server |> Server.capabilities() |> UI.advertise(server),
+            "capabilities" =>
+              server |> Server.capabilities() |> UI.advertise(server) |> advertise_auth(ctx),
             "serverInfo" => %{"name" => info.name, "version" => info.version}
           }
           |> then(
@@ -47,6 +48,15 @@ defmodule Sake.Server.Legacy do
       {:error, code, message} -> {:error, error(code, message)}
       {:error, code, message, data} -> {:error, Map.put(error(code, message), "data", data)}
       other -> other
+    end
+  end
+
+  # The endpoint's authorization extensions, in the `initialize` result
+  # as MCP Apps are (see `Dispatch.auth_extensions/1`).
+  defp advertise_auth(caps, ctx) do
+    case Dispatch.auth_extensions(ctx) do
+      ext when ext == %{} -> caps
+      ext -> Map.update(caps, "extensions", ext, &Map.merge(ext, &1))
     end
   end
 

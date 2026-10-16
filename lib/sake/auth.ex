@@ -15,6 +15,34 @@ defmodule Sake.Auth do
       raise "Sake authorization is not configured: start {Sake, auth: [...]}"
   end
 
+  @doc """
+  The identifier of an authorization extension: `:client_credentials`
+  (`io.modelcontextprotocol/oauth-client-credentials`) or `:enterprise`
+  (`io.modelcontextprotocol/enterprise-managed-authorization`).
+  """
+  @spec extension(:client_credentials | :enterprise) :: String.t()
+  def extension(:client_credentials), do: "io.modelcontextprotocol/oauth-client-credentials"
+  def extension(:enterprise), do: "io.modelcontextprotocol/enterprise-managed-authorization"
+
+  @doc false
+  # The authorization extensions whose grants the authorization server
+  # offers, for the capabilities of an endpoint it protects. They follow
+  # its metadata: client credentials when `grant_types_supported` lists
+  # them, enterprise-managed authorization when a trusted issuer issues
+  # ID-JAGs. A workload's JWT grant has no extension to declare.
+  @spec extensions(Config.t()) :: map()
+  def extensions(config) do
+    %{}
+    |> put_extension(
+      "client_credentials" in Sake.Auth.Token.grant_types(config),
+      :client_credentials
+    )
+    |> put_extension(Enum.any?(config.trusted_issuers, &(&1.profile == :id_jag)), :enterprise)
+  end
+
+  defp put_extension(ext, true, name), do: Map.put(ext, extension(name), %{})
+  defp put_extension(ext, false, _name), do: ext
+
   @doc false
   def store(%Config{store: {module, _}, store_state: state}), do: {module, state}
 
