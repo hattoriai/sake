@@ -29,11 +29,16 @@ if Code.ensure_loaded?(Ecto.Query) do
         jwks: c.jwks,
         jwks_uri: c.jwks_uri,
         application_type: c.application_type,
-        dpop_bound_access_tokens: c.dpop_bound_access_tokens
+        dpop_bound_access_tokens: c.dpop_bound_access_tokens,
+        inserted_at: c.inserted_at
       }
 
       {:ok, _} =
-        repo.insert(row, on_conflict: :replace_all, conflict_target: :id, prefix: s.prefix)
+        repo.insert(row,
+          on_conflict: {:replace_all_except, [:id, :inserted_at]},
+          conflict_target: :id,
+          prefix: s.prefix
+        )
 
       :ok
     end
@@ -71,7 +76,8 @@ if Code.ensure_loaded?(Ecto.Query) do
         jwks: r.jwks,
         jwks_uri: r.jwks_uri,
         application_type: r.application_type,
-        dpop_bound_access_tokens: r.dpop_bound_access_tokens
+        dpop_bound_access_tokens: r.dpop_bound_access_tokens,
+        inserted_at: r.inserted_at
       }
     end
 
@@ -379,7 +385,7 @@ if Code.ensure_loaded?(Ecto.Query) do
     end
 
     @impl true
-    def prune(%{repo: repo} = s, now, consents_before) do
+    def prune(%{repo: repo} = s, now, before) do
       repo.delete_all(from(c in S.Code, where: c.expires_at <= ^now), prefix: s.prefix)
       repo.delete_all(from(t in S.Token, where: t.expires_at <= ^now), prefix: s.prefix)
       repo.delete_all(from(r in S.Replay, where: r.expires_at < ^now), prefix: s.prefix)
@@ -397,7 +403,34 @@ if Code.ensure_loaded?(Ecto.Query) do
       repo.delete_all(
         from(c in S.Consent,
           as: :consent,
-          where: c.inserted_at < ^consents_before and not exists(live)
+          where: c.inserted_at < ^before.consents and not exists(live)
+        ),
+        prefix: s.prefix
+      )
+
+      prune_unused_clients(s, now, before.unused_clients)
+    end
+
+    # What is left of the codes and tokens is unexpired: a client with a
+    # code, an unrevoked token or a consent is in use.
+    defp prune_unused_clients(%{repo: repo} = s, now, registered_before) do
+      token =
+        from(t in S.Token,
+          where:
+            t.client_id == parent_as(:client).id and is_nil(t.revoked_at) and
+              t.expires_at > ^now,
+          select: 1
+        )
+
+      consent = from(c in S.Consent, where: c.client_id == parent_as(:client).id, select: 1)
+      code = from(c in S.Code, where: c.client_id == parent_as(:client).id, select: 1)
+
+      repo.delete_all(
+        from(c in S.Client,
+          as: :client,
+          where:
+            c.kind == "dynamic" and c.inserted_at < ^registered_before and
+              not exists(token) and not exists(consent) and not exists(code)
         ),
         prefix: s.prefix
       )

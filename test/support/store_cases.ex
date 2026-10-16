@@ -11,6 +11,7 @@ defmodule SakeTest.StoreCases do
       unquote(code_replay_cases())
       unquote(consent_and_prune_cases())
       unquote(once_cases())
+      unquote(client_prune_cases())
     end
   end
 
@@ -23,6 +24,7 @@ defmodule SakeTest.StoreCases do
           id: "dc_1",
           name: "A",
           kind: :dynamic,
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
           redirect_uris: ["http://127.0.0.1:1/cb"],
           grant_types: ["authorization_code"],
           token_endpoint_auth_method: "none"
@@ -94,6 +96,7 @@ defmodule SakeTest.StoreCases do
           id: "rc_m",
           name: "Machine",
           kind: :registered,
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
           grant_types: ["client_credentials"],
           token_endpoint_auth_method: "private_key_jwt",
           jwks: %{"keys" => [%{"kty" => "EC", "crv" => "P-256", "x" => "x", "y" => "y"}]},
@@ -202,6 +205,100 @@ defmodule SakeTest.StoreCases do
     end
   end
 
+  defp client_prune_cases do
+    quote do
+      test "prune forgets dynamic clients that nothing came to use", %{config: config} do
+        {mod, state} = store(config)
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
+        old = DateTime.add(now, -2 * 86_400)
+
+        client = fn id, kind, at ->
+          :ok =
+            mod.put_client(state, %Client{
+              id: id,
+              name: id,
+              kind: kind,
+              redirect_uris: ["http://127.0.0.1:1/cb"],
+              inserted_at: at
+            })
+        end
+
+        for id <- ~w(unused revoked live consented coded) do
+          client.("dc_" <> id, :dynamic, old)
+        end
+
+        client.("dc_recent", :dynamic, now)
+        client.("rc_unused", :registered, old)
+
+        {_, _, %{access: a, refresh: r}} =
+          issue(config, %{client_id: "dc_revoked", family_id: "f-revoked"})
+
+        :ok = mod.revoke_family(state, "f-revoked")
+        issue(config, %{client_id: "dc_live", family_id: "f-live"})
+
+        :ok =
+          mod.put_consent(state, %Consent{
+            subject_id: "u1",
+            client_id: "dc_consented",
+            resource: "r",
+            scopes: [],
+            inserted_at: now
+          })
+
+        :ok =
+          mod.put_code(state, %Code{
+            hash: "code-pending",
+            client_id: "dc_coded",
+            redirect_uri: "http://127.0.0.1:1/cb",
+            code_challenge: "x",
+            scopes: [],
+            resource: "r",
+            subject_id: "u1",
+            expires_at: DateTime.add(now, 60)
+          })
+
+        assert :ok =
+                 mod.prune(state, now, %{
+                   consents: DateTime.add(now, -30 * 86_400),
+                   unused_clients: DateTime.add(now, -86_400)
+                 })
+
+        assert :error = mod.get_client(state, "dc_unused")
+        assert :error = mod.get_client(state, "dc_revoked")
+
+        for id <- ~w(dc_live dc_consented dc_coded dc_recent rc_unused),
+            do: assert({:ok, _} = mod.get_client(state, id), id)
+
+        # The revoked client's tokens were its own business, and are left.
+        assert {:ok, _} = mod.get_token(state, :access, a.hash)
+        assert {:ok, _} = mod.get_token(state, :refresh, r.hash)
+      end
+
+      test "Sake.Auth.prune/1 prunes after unused_client_ttl", %{config: config} do
+        {mod, state} = store(config)
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+        for {id, age} <- [{"dc_hour", 3_600}, {"dc_week", 7 * 86_400}] do
+          :ok =
+            mod.put_client(state, %Client{
+              id: id,
+              name: id,
+              kind: :dynamic,
+              redirect_uris: ["http://127.0.0.1:1/cb"],
+              inserted_at: DateTime.add(now, -age)
+            })
+        end
+
+        assert :ok = Sake.Auth.prune(config)
+        assert {:ok, _} = mod.get_client(state, "dc_hour")
+        assert :error = mod.get_client(state, "dc_week")
+
+        assert :ok = Sake.Auth.prune(%{config | unused_client_ttl: 60})
+        assert :error = mod.get_client(state, "dc_hour")
+      end
+    end
+  end
+
   defp once_cases do
     quote do
       test "once records a key until it expires", %{config: config} do
@@ -289,7 +386,9 @@ defmodule SakeTest.StoreCases do
         # recent, no tokens: kept
         mod.put_consent(state, consent.("recent", now))
 
-        assert :ok = mod.prune(state, now, DateTime.add(now, -10))
+        assert :ok =
+                 mod.prune(state, now, %{consents: DateTime.add(now, -10), unused_clients: now})
+
         assert {:ok, _} = mod.get_consent(state, "u7", "live", resource)
         assert :error = mod.get_consent(state, "u7", "revoked", resource)
         assert :error = mod.get_consent(state, "u7", "unused", resource)
@@ -340,7 +439,11 @@ defmodule SakeTest.StoreCases do
 
         assert {:ok, _} = mod.consume_code(state, "used")
 
-        assert :ok = mod.prune(state, DateTime.utc_now(), DateTime.add(DateTime.utc_now(), -60))
+        now = DateTime.utc_now()
+
+        assert :ok =
+                 mod.prune(state, now, %{consents: DateTime.add(now, -60), unused_clients: now})
+
         assert :error = mod.consume_code(state, "old")
         assert :revoked = mod.put_code_tokens(state, "used", [])
         assert :error = mod.get_token(state, :access, "h-old")

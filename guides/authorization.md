@@ -358,9 +358,12 @@ client, with no authentication of the caller — that is the point of
 dynamic registration, and also its risk: an unrate-limited registration
 endpoint lets anyone mint clients. Put a rate limit in front of it (by
 IP, in your router's pipeline) the same way you would any other
-unauthenticated write endpoint. Set `dcr: false` in the auth config to
-turn registration off entirely (CIMD and host-registered clients still
-work).
+unauthenticated write endpoint. Even rate-limited, registrations add
+up: `Sake.Auth.prune/1` forgets a dynamically registered client that,
+`unused_client_ttl` seconds after registering (a day by default), holds
+no live token, no consent and no pending code. Set `dcr: false` in the
+auth config to turn registration off entirely (CIMD and host-registered
+clients still work).
 
 ## Token lifetimes and rotation
 
@@ -427,8 +430,10 @@ resource or scope set — for an "apps connected to your account" page.
 Sake.Auth.prune(config)
 ```
 
-Deletes expired codes and tokens, and remembered consents older than the
-refresh token lifetime that no live token family still uses. Schedule it — a cron job, an Oban
+Deletes expired codes and tokens, remembered consents older than the
+refresh token lifetime that no live token family still uses, and
+dynamically registered clients that nothing has used since
+`unused_client_ttl` (a day) after they registered. Schedule it — a cron job, an Oban
 worker, a periodic `Task` — since neither store does this on its own; the
 ETS store especially will otherwise keep every expired row in memory
 forever.

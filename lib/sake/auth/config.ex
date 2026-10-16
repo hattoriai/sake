@@ -9,6 +9,7 @@ defmodule Sake.Auth.Config do
             resources: nil,
             access_token_ttl: 3_600,
             refresh_token_ttl: 30 * 24 * 3_600,
+            unused_client_ttl: 24 * 3_600,
             cimd: [policy: :allow_all],
             dcr: true,
             remember_consent: true,

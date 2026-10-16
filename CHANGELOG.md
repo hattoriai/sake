@@ -49,7 +49,8 @@ First release.
   tenant segment.
 - An OAuth 2.1 authorization server on the host application's own login:
   bearer token validation, `/.well-known` discovery, Client ID Metadata
-  Document support, dynamic client registration (RFC 7591), the
+  Document support, dynamic client registration (RFC 7591, its unused
+  clients pruned after `unused_client_ttl`), the
   authorize/consent flow, the token endpoint (authorization code + PKCE,
   refresh token rotation with reuse detection and family revocation, and
   a replayed code revoking its family atomically with its issuance), and

@@ -177,17 +177,39 @@ defmodule Sake.Auth.Store.ETS do
   end
 
   @impl Sake.Auth.Store
-  def prune(_s, now, consents_before) do
+  def prune(_s, now, before) do
     prune_expired(now)
     tokens = :ets.tab2list(@tables.tokens)
 
     for {key, %{inserted_at: at} = consent} <- :ets.tab2list(@tables.consents),
-        DateTime.compare(at, consents_before) == :lt,
+        DateTime.compare(at, before.consents) == :lt,
         not Enum.any?(tokens, &live_refresh?(&1, consent, now)),
         do: :ets.delete(@tables.consents, key)
 
+    prune_unused_clients(now, before.unused_clients)
+  end
+
+  # What is left of the codes is unexpired: a client with a code, an
+  # unrevoked unexpired token or a consent is in use.
+  defp prune_unused_clients(now, registered_before) do
+    in_use =
+      MapSet.new(
+        Enum.concat([
+          for({_, t} <- :ets.tab2list(@tables.tokens), live?(t, now), do: t.client_id),
+          for({{_, client_id, _}, _} <- :ets.tab2list(@tables.consents), do: client_id),
+          for({_, code, _} <- :ets.tab2list(@tables.codes), do: code.client_id)
+        ])
+      )
+
+    for {id, %{kind: :dynamic, inserted_at: %DateTime{} = at}} <- :ets.tab2list(@tables.clients),
+        DateTime.compare(at, registered_before) == :lt,
+        not MapSet.member?(in_use, id),
+        do: :ets.delete(@tables.clients, id)
+
     :ok
   end
+
+  defp live?(t, now), do: t.revoked_at == nil and DateTime.compare(t.expires_at, now) == :gt
 
   defp live_refresh?({_, t}, consent, now) do
     t.kind == :refresh and t.subject_id == consent.subject_id and
