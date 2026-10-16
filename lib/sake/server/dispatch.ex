@@ -53,7 +53,7 @@ defmodule Sake.Server.Dispatch do
     {:ok,
      %{
        "supportedVersions" => Protocol.supported(),
-       "capabilities" => capabilities(server),
+       "capabilities" => capabilities(server, ctx),
        "instructions" => server.__sake__(:instructions)
      }
      |> Map.reject(fn {_, v} -> is_nil(v) end)
@@ -86,15 +86,19 @@ defmodule Sake.Server.Dispatch do
     do: {:error, JSONRPC.code(:method_not_found), "Method not found"}
 
   @doc false
-  def capabilities(server) do
+  def capabilities(server, ctx) do
     caps = Server.capabilities(server)
-    ext = extensions(server)
+    ext = extensions(server, ctx)
     if ext == %{}, do: caps, else: Map.put(caps, "extensions", ext)
   end
 
   # The server's own `extensions:`, plus the tasks extension when a tool
-  # can run as a task and MCP Apps when the server has a UI.
-  defp extensions(server) do
+  # can run as a task, MCP Apps when the server has a UI, and the
+  # authorization extensions of the endpoint's authorization server.
+  # These come from the endpoint, not the server: the same server may be
+  # served with and without `auth:`, and the answer is the same for every
+  # caller of one endpoint, so `server/discover` stays cacheable as it is.
+  defp extensions(server, ctx) do
     ext = server.__sake__(:extensions)
 
     ext =
@@ -102,8 +106,18 @@ defmodule Sake.Server.Dispatch do
         do: Map.put_new(ext, Sake.Tasks.extension(), %{}),
         else: ext
 
-    UI.extensions(ext, server)
+    Map.merge(auth_extensions(ctx), UI.extensions(ext, server))
   end
+
+  @doc false
+  # The authorization extensions an endpoint with `auth:` advertises. A
+  # mounted server is served by its parent's endpoint, so the parent's
+  # authorization decides; a proxy's upstream authorizes its own clients,
+  # which is not this endpoint's to advertise.
+  def auth_extensions(%Context{conn_assigns: %{sake_auth: auth}}) when auth not in [nil, false],
+    do: Sake.Auth.extensions(Sake.Auth.config())
+
+  def auth_extensions(_ctx), do: %{}
 
   # ---- lists
 
