@@ -202,6 +202,32 @@ defmodule Sake.Auth.JWTTest do
       assert {:error, :unsupported_alg} = JWT.verify(token, jwks, algs: ["RS256"])
     end
 
+    # The algorithm-confusion attack in every shape: an HMAC keyed with
+    # the bytes of the verifier's own public key (as its JWK, its PEM, its
+    # DER, or its raw modulus or coordinate), against RSA and EC key sets,
+    # for each HMAC algorithm. None gets as far as a key, not even when the
+    # caller lists the algorithm or the key set holds a symmetric key.
+    test "HMAC with a public key's bytes never verifies, against RSA or EC keys" do
+      for kind <- [:rsa, :ec], {alg, hash} <- [HS256: :sha256, HS384: :sha384, HS512: :sha512] do
+        alg = Atom.to_string(alg)
+        jwk = Map.put(JWT.public_jwk(key(kind)), "kid", "k")
+        {_, pem} = jwk |> JOSE.JWK.from_map() |> JOSE.JWK.to_pem()
+        [{_, der, _}] = :public_key.pem_decode(pem)
+        raw = Base.url_decode64!(jwk["n"] || jwk["x"], padding: false)
+        input = "#{segment(%{"alg" => alg, "kid" => "k"})}.#{segment(claims())}"
+
+        for secret <- [JSON.encode!(jwk), pem, der, raw] do
+          token = "#{input}.#{b64(:crypto.mac(:hmac, hash, secret, input))}"
+          oct = %{"kty" => "oct", "k" => b64(secret), "kid" => "k", "alg" => alg}
+
+          assert {:error, :unsupported_alg} = JWT.verify(token, %{"keys" => [jwk]})
+          assert {:error, :unsupported_alg} = JWT.verify(token, [jwk], algs: [alg])
+          assert {:error, :unsupported_alg} = JWT.verify(token, [Map.put(jwk, "alg", alg)])
+          assert {:error, :unsupported_alg} = JWT.verify(token, [oct, jwk])
+        end
+      end
+    end
+
     test "no key of the algorithm's type, kid, use or alg", %{key: key, jwks: jwks} do
       token = JWT.sign(claims(), key, "ES256", %{"kid" => "a"})
       assert {:ok, _} = JWT.verify(token, jwks)
