@@ -23,7 +23,7 @@ defmodule Sake.Auth.ClientCredentialsTest do
   import Plug.Conn
 
   alias Sake.Auth.CIMD.Cache
-  alias Sake.Auth.{Clients, Tokens}
+  alias Sake.Auth.{Clients, JWT, Tokens}
   alias SakeTest.{Keys, ModernClient}
 
   @resource "http://www.example.com/mcp"
@@ -321,6 +321,73 @@ defmodule Sake.Auth.ClientCredentialsTest do
           })
         )
       )
+    end
+
+    # client_secret_jwt is not offered here: the secret is stored hashed,
+    # so there is nothing to check an HMAC with. An HMAC'd assertion is
+    # refused whatever it is keyed with: the client's secret, or the bytes
+    # of a key client's public key (algorithm confusion).
+    test "an HMAC assertion is invalid_client, keyed with a secret or a public key", %{
+      config: config
+    } do
+      hs256 = fn client, secret ->
+        claims = %{
+          "iss" => client.id,
+          "sub" => client.id,
+          "aud" => "http://www.example.com",
+          "exp" => Keys.now(60),
+          "jti" => Keys.jti()
+        }
+
+        b64 = &Base.url_encode64(&1, padding: false)
+
+        input =
+          b64.(JSON.encode!(%{"alg" => "HS256", "kid" => "k1"})) <>
+            "." <> b64.(JSON.encode!(claims))
+
+        input <> "." <> b64.(:crypto.mac(:hmac, :sha256, secret, input))
+      end
+
+      {secret_client, secret} = secret_client(config)
+
+      rsa_pem = Keys.pem(:rsa)
+      {:ok, rsa} = JWT.private_key(rsa_pem)
+      rsa_jwk = Map.put(JWT.public_jwk(rsa), "kid", "k1")
+
+      {:ok, rsa_client, nil} =
+        Clients.create(config, %{
+          name: "RSA",
+          grant_types: ["client_credentials"],
+          jwks: %{"keys" => [rsa_jwk]}
+        })
+
+      {ec_client, ec} = key_client(config)
+      ec_jwk = Map.put(JWT.public_jwk(ec), "kid", "k1")
+
+      for {client, key} <- [
+            {secret_client, secret},
+            {rsa_client, JSON.encode!(rsa_jwk)},
+            {ec_client, JSON.encode!(ec_jwk)}
+          ] do
+        assert_invalid_client(
+          post(
+            grant(%{
+              "client_assertion_type" => @assertion_type,
+              "client_assertion" => hs256.(client, key)
+            })
+          )
+        )
+      end
+
+      # The same clients get in with what they are registered for.
+      assert post(grant(), [basic(secret_client.id, secret)]).status == 200
+
+      assert post(
+               grant(%{
+                 "client_assertion_type" => @assertion_type,
+                 "client_assertion" => assertion(rsa_client, rsa)
+               })
+             ).status == 200
     end
 
     test "keys at a jwks_uri are fetched, cached, and refetched for a new kid", %{config: config} do

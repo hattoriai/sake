@@ -92,11 +92,27 @@ First release.
   loopback listener, `Sake.Client.Auth.Headless`), and so is token
   persistence (`Sake.Client.Auth.Store`).
 - `Sake.Client.Auth` runs the grants without a person too: `grant:
-  :client_credentials` (`client_secret_basic`, `client_secret_post` or
-  `private_key_jwt`), `grant: :jwt_bearer` (a workload's JWT) and `grant:
-  :enterprise` (the RFC 8693 token exchange of an ID token for an ID-JAG
-  at the identity provider, then the JWT bearer grant), renewing an
-  expiring token by running the grant again. `:client_credentials` and
+  :client_credentials` (`client_secret_basic`, `client_secret_post`,
+  `private_key_jwt` or `client_secret_jwt`), `grant: :jwt_bearer` (a
+  workload's JWT) and `grant: :enterprise` (the RFC 8693 token exchange
+  of an ID token for an ID-JAG at the identity provider, then the JWT
+  bearer grant), renewing an expiring token by running the grant again.
+  With SAML single sign-on, `grant: :enterprise` takes `saml_assertion:`
+  in place of `id_token:`: the assertion is exchanged at the identity
+  provider for a refresh token, and that for the ID-JAG
+  (draft-ietf-oauth-identity-assertion-authz-grant §4.5); the refresh
+  token is kept (in `Sake.Client.Auth.Store` too, under `{:idp, issuer}`)
+  and stands in for the assertion until it expires or is refused.
+  `client_secret_jwt` (RFC 7523 §2.2, HS256 over the client secret, with
+  no `jose` needed) authenticates the client at the authorization server
+  (`token_endpoint_auth_method: "client_secret_jwt"`, or when the server
+  lists it as its only secret method) and at the identity provider. The
+  authorization server does not offer `client_secret_jwt`: it keeps only
+  a hash of each secret, and verifies no HMAC. `assertion_audience:`
+  (`:issuer`, the default, `:token_endpoint` or a string), in `auth:`
+  and in `idp:`, sets the `aud` of the client's `private_key_jwt` and
+  `client_secret_jwt` assertions; `idp: [saml_scope: [...]]` is the
+  `scope` of the SAML exchange (none by default). `:client_credentials` and
   `:enterprise` declare their extension in the client's capabilities
   (per request on 2026-07-28, in `initialize` on the legacy revisions).
 - DPoP (RFC 9449, SEP-1932), sender-constrained tokens, on both sides and

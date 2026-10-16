@@ -3,6 +3,7 @@ defmodule Sake.Client.AuthMachineTest do
 
   alias Sake.Auth.JWT
   alias Sake.Client
+  alias Sake.Client.Auth.Grant
   alias SakeTest.{FakeOAuth, HTTP, Keys}
 
   @jwt_bearer "urn:ietf:params:oauth:grant-type:jwt-bearer"
@@ -299,6 +300,367 @@ defmodule Sake.Client.AuthMachineTest do
     end
   end
 
+  describe "enterprise-managed authorization with SAML" do
+    @exchange "urn:ietf:params:oauth:grant-type:token-exchange"
+    @refresh_type "urn:ietf:params:oauth:token-type:refresh_token"
+
+    defmodule Store do
+      @moduledoc false
+      @behaviour Sake.Client.Auth.Store
+
+      @impl true
+      def fetch(agent, key), do: Agent.get(agent, &Map.fetch(&1, key))
+
+      @impl true
+      def put(agent, key, value), do: Agent.update(agent, &Map.put(&1, key, value))
+    end
+
+    defp saml_auth(base, extra \\ []) do
+      Keyword.merge(
+        [
+          grant: :enterprise,
+          client_id: "agent",
+          saml_assertion: "PHNhbWw6QXNzZXJ0aW9uLz4",
+          idp: [issuer: base <> "/idp", client_id: "idp-agent", client_secret: "idp-secret"]
+        ],
+        extra
+      )
+    end
+
+    defp expire(session),
+      do: put_in(session.auth.token["expires_at"], System.system_time(:second))
+
+    test "the assertion is traded for the IdP's refresh token, and that for the ID-JAG", ctx do
+      {base, url} = serve(ctx)
+
+      assert {:ok, session} = Client.connect(url, auth: saml_auth(base))
+      requests = requests()
+
+      [{saml, _}, {exchange, _}] = posts(requests, "/idp/token")
+
+      # draft-ietf-oauth-identity-assertion-authz-grant §4.5: a token
+      # exchange for a refresh token, the IdP itself as the audience.
+      assert saml == %{
+               "grant_type" => @exchange,
+               "requested_token_type" => @refresh_type,
+               "audience" => base <> "/idp",
+               "subject_token" => "PHNhbWw6QXNzZXJ0aW9uLz4",
+               "subject_token_type" => "urn:ietf:params:oauth:token-type:saml2",
+               "client_id" => "idp-agent",
+               "client_secret" => "idp-secret"
+             }
+
+      "idp-refresh-" <> _ = refresh = session.auth.idp_token["refresh_token"]
+
+      assert Map.drop(exchange, ["client_id", "client_secret"]) == %{
+               "grant_type" => @exchange,
+               "requested_token_type" => "urn:ietf:params:oauth:token-type:id-jag",
+               "audience" => base,
+               "resource" => base <> "/mcp",
+               "subject_token" => refresh,
+               "subject_token_type" => @refresh_type
+             }
+
+      [{grant, _}] = posts(requests, "/token")
+      assert grant["grant_type"] == @jwt_bearer
+      assert grant["assertion"] == "jag-PHNhbWw6QXNzZXJ0aW9uLz4"
+      assert {:ok, %{text: "echo"}, _session} = Client.call_tool(session, "echo", %{})
+    end
+
+    test "a later authorization uses the kept refresh token, without the assertion", ctx do
+      {base, url} = serve(ctx, expires_in: 3600)
+      test = self()
+
+      assertion = fn target ->
+        send(test, {:asked, target})
+        {:ok, "c2FtbA"}
+      end
+
+      assert {:ok, session} =
+               Client.connect(url, auth: saml_auth(base, saml_assertion: assertion))
+
+      assert_received {:asked, %{issuer: ^base}}
+      refresh = session.auth.idp_token["refresh_token"]
+      _ = requests()
+
+      assert {:ok, _result, _session} = Client.call_tool(expire(session), "echo", %{})
+      refute_received {:asked, _}
+
+      requests = requests()
+      assert [{%{"subject_token" => ^refresh}, _}] = posts(requests, "/idp/token")
+      assert [{%{"assertion" => "jag-c2FtbA"}, _}] = posts(requests, "/token")
+    end
+
+    test "the refresh token is kept in the store, for the next session", ctx do
+      {base, url} = serve(ctx)
+      {:ok, store} = Agent.start_link(fn -> %{} end)
+      auth = saml_auth(base, store: {Store, store})
+
+      assert {:ok, session} = Client.connect(url, auth: auth)
+      issuer = base <> "/idp"
+      kept = Agent.get(store, & &1[{:idp, issuer}])
+
+      assert kept == %{
+               "refresh_token" => session.auth.idp_token["refresh_token"],
+               "expires_at" => nil,
+               "issuer" => issuer,
+               "client_id" => "idp-agent"
+             }
+
+      # A new session without the MCP token: the ID-JAG comes from the
+      # stored refresh token, and the assertion is not traded again.
+      Agent.update(store, &Map.delete(&1, {:token, url}))
+      _ = requests()
+
+      assert {:ok, _session} =
+               Client.connect(url, auth: Keyword.put(auth, :saml_assertion, "unused"))
+
+      assert [{%{"subject_token_type" => @refresh_type}, _}] =
+               posts(requests(), "/idp/token")
+
+      # It belongs to the client at the IdP it was issued to.
+      Agent.update(store, &Map.delete(&1, {:token, url}))
+      other = put_in(auth[:idp][:client_id], "someone-else")
+      assert {:ok, _session} = Client.connect(url, auth: other)
+
+      assert [{%{"subject_token_type" => "urn:ietf:params:oauth:token-type:saml2"}, _}, _] =
+               posts(requests(), "/idp/token")
+    end
+
+    test "a refresh token the IdP refuses is dropped, and the assertion traded again", ctx do
+      {base, url} = serve(ctx, expires_in: 3600)
+
+      assert {:ok, session} = Client.connect(url, auth: saml_auth(base))
+      old = session.auth.idp_token["refresh_token"]
+      Agent.update(ctx.state, &%{&1 | idp_refresh: %{}})
+      _ = requests()
+
+      assert {:ok, _result, session} = Client.call_tool(expire(session), "echo", %{})
+
+      assert [
+               {%{"subject_token" => ^old}, _},
+               {%{"subject_token_type" => "urn:ietf:params:oauth:token-type:saml2"}, _},
+               {%{"subject_token" => new}, _}
+             ] = posts(requests(), "/idp/token")
+
+      assert new != old and session.auth.idp_token["refresh_token"] == new
+    end
+
+    test "an expired refresh token is not used", ctx do
+      {base, url} = serve(ctx, expires_in: 3600, idp_refresh_expires_in: 10)
+
+      assert {:ok, session} = Client.connect(url, auth: saml_auth(base))
+      assert is_integer(session.auth.idp_token["expires_at"])
+      _ = requests()
+
+      # Ten seconds is inside the expiry margin: the assertion goes again.
+      assert {:ok, _result, _session} = Client.call_tool(expire(session), "echo", %{})
+
+      assert [{%{"subject_token_type" => "urn:ietf:params:oauth:token-type:saml2"}, _}, _] =
+               posts(requests(), "/idp/token")
+    end
+
+    test "saml_scope is the scope of the SAML exchange alone", ctx do
+      {base, url} = serve(ctx)
+      auth = saml_auth(base)
+      scoped = put_in(auth[:idp][:saml_scope], ["openid", "offline_access"])
+
+      assert {:ok, _session} = Client.connect(url, auth: scoped)
+      [{saml, _}, {exchange, _}] = posts(requests(), "/idp/token")
+      assert saml["scope"] == "openid offline_access"
+      refute Map.has_key?(exchange, "scope")
+
+      # None is sent by default.
+      assert {:ok, _session} = Client.connect(url, auth: auth)
+      [{saml, _}, _] = posts(requests(), "/idp/token")
+      refute Map.has_key?(saml, "scope")
+    end
+
+    test "the refresh token may come in access_token, as RFC 8693 carries it", ctx do
+      {base, url} = serve(ctx, saml_in: :access_token)
+
+      assert {:ok, session} = Client.connect(url, auth: saml_auth(base))
+      assert "idp-refresh-" <> _ = session.auth.idp_token["refresh_token"]
+    end
+
+    test "a refusal at the IdP ends the flow", ctx do
+      {base, url} = serve(ctx, idp_error: "invalid_grant")
+
+      assert {:error, {:auth, {:saml_exchange_failed, 400, %{"error" => "invalid_grant"}}}} =
+               Client.connect(url, auth: saml_auth(base))
+
+      assert [_] = posts(requests(), "/idp/token")
+    end
+  end
+
+  describe "client_secret_jwt" do
+    @secret "a-client-secret-of-32-bytes-or-more"
+    @assertion_type "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+
+    defp hs256_claims(jwt) do
+      [h, c, _] = String.split(jwt, ".")
+
+      {JSON.decode!(Base.url_decode64!(h, padding: false)),
+       JSON.decode!(Base.url_decode64!(c, padding: false))}
+    end
+
+    test "at the authorization server, when asked for", ctx do
+      {base, url} = serve(ctx, hmac_secret: @secret)
+
+      auth = [
+        grant: :client_credentials,
+        client_id: "svc",
+        client_secret: @secret,
+        token_endpoint_auth_method: "client_secret_jwt"
+      ]
+
+      # The fake server checks the HMAC and the claims, and refuses
+      # anything else with invalid_client.
+      assert {:ok, _session} = Client.connect(url, auth: auth)
+      [{token, headers}] = posts(requests(), "/token")
+
+      refute Map.has_key?(headers, "authorization")
+      refute Map.has_key?(token, "client_secret") or Map.has_key?(token, "client_id")
+      assert token["client_assertion_type"] == @assertion_type
+
+      {header, claims} = hs256_claims(token["client_assertion"])
+      assert header == %{"alg" => "HS256"}
+      assert %{"iss" => "svc", "sub" => "svc", "aud" => ^base} = claims
+      assert claims["exp"] - claims["iat"] <= 60
+
+      # A wrong secret is refused by the server that checks it.
+      auth = Keyword.put(auth, :client_secret, String.reverse(@secret))
+
+      assert {:error, {:auth, {:token_failed, 401, %{"error" => "invalid_client"}}}} =
+               Client.connect(url, auth: auth)
+    end
+
+    test "chosen for a server that lists it as its only secret method", ctx do
+      {_base, url} =
+        serve(ctx,
+          hmac_secret: @secret,
+          metadata: %{"token_endpoint_auth_methods_supported" => ["client_secret_jwt"]}
+        )
+
+      auth = [grant: :client_credentials, client_id: "svc", client_secret: @secret]
+      assert {:ok, session} = Client.connect(url, auth: auth)
+      assert session.auth.token["token_endpoint_auth_method"] == "client_secret_jwt"
+
+      # A secret too short to key HS256 goes as HTTP Basic instead.
+      auth = Keyword.put(auth, :client_secret, "short")
+      _ = requests()
+      assert {:ok, _session} = Client.connect(url, auth: auth)
+      [{_, headers}] = posts(requests(), "/token")
+      assert headers["authorization"] == basic("svc", "short")
+    end
+
+    test "at the identity provider, for the token exchange", ctx do
+      {base, url} = serve(ctx, hmac_secret: @secret, idp_auth_methods: ["client_secret_jwt"])
+
+      auth = [
+        grant: :enterprise,
+        client_id: "agent",
+        id_token: "id.token.x",
+        idp: [issuer: base <> "/idp", client_id: "idp-agent", client_secret: @secret]
+      ]
+
+      assert {:ok, _session} = Client.connect(url, auth: auth)
+      [{exchange, _}] = posts(requests(), "/idp/token")
+      refute Map.has_key?(exchange, "client_secret")
+
+      {_header, claims} = hs256_claims(exchange["client_assertion"])
+      assert %{"iss" => "idp-agent", "sub" => "idp-agent"} = claims
+      assert claims["aud"] == base <> "/idp"
+
+      # Named explicitly, against a provider given by its token endpoint
+      # only: the assertion is then for that endpoint.
+      auth =
+        put_in(auth[:idp],
+          token_endpoint: base <> "/idp/token",
+          client_id: "idp-agent",
+          client_secret: @secret,
+          token_endpoint_auth_method: "client_secret_jwt"
+        )
+
+      assert {:ok, _session} = Client.connect(url, auth: auth)
+      [{exchange, _}] = posts(requests(), "/idp/token")
+      assert {_, %{"aud" => aud}} = hs256_claims(exchange["client_assertion"])
+      assert aud == base <> "/idp/token"
+    end
+
+    test "assertion_audience at the authorization server, for both assertion methods", ctx do
+      pem = Keys.pem(:ec)
+
+      # The fake server checks a client_secret_jwt assertion (its HMAC and
+      # its audience); a private_key_jwt one is read from the request.
+      for {method, extra, opts} <- [
+            {"client_secret_jwt", [client_secret: @secret], [hmac_secret: @secret]},
+            {"private_key_jwt", [private_key: pem], []}
+          ],
+          {aud, expected} <- [
+            {nil, & &1},
+            {:issuer, & &1},
+            {:token_endpoint, &(&1 <> "/token")},
+            {"urn:test:audience", fn _ -> "urn:test:audience" end}
+          ] do
+        {base, url} = serve(ctx, opts)
+
+        auth =
+          [grant: :client_credentials, client_id: "svc", token_endpoint_auth_method: method] ++
+            extra ++ if(aud, do: [assertion_audience: aud], else: [])
+
+        assert {:ok, _session} = Client.connect(url, auth: auth)
+        [{token, _}] = posts(requests(), "/token")
+        {:ok, _header, claims} = JWT.peek(token["client_assertion"])
+        assert claims["aud"] == expected.(base), "#{method} with #{inspect(aud)}"
+      end
+    end
+
+    test "assertion_audience at the identity provider", ctx do
+      {base, url} = serve(ctx, hmac_secret: @secret, idp_auth_methods: ["client_secret_jwt"])
+
+      for {aud, expected} <- [
+            {nil, base <> "/idp"},
+            {:issuer, base <> "/idp"},
+            {:token_endpoint, base <> "/idp/token"},
+            {"urn:test:audience", "urn:test:audience"}
+          ] do
+        idp =
+          [issuer: base <> "/idp", client_id: "idp-agent", client_secret: @secret] ++
+            if(aud, do: [assertion_audience: aud], else: [])
+
+        auth = [grant: :enterprise, client_id: "agent", id_token: "id.token.x", idp: idp]
+
+        # The fake provider refuses an assertion for any other audience.
+        assert {:ok, _session} = Client.connect(url, auth: auth)
+        [{exchange, _}] = posts(requests(), "/idp/token")
+        {_header, claims} = hs256_claims(exchange["client_assertion"])
+        assert claims["aud"] == expected, inspect(aud)
+      end
+    end
+
+    test "the assertion is an HMAC over the secret, made with :crypto alone" do
+      # No jose, and no key: verifying it by hand with the secret is all
+      # it takes.
+      {params, []} =
+        Grant.authenticate(
+          [],
+          %{
+            "client_id" => "c",
+            "client_secret" => @secret,
+            "token_endpoint_auth_method" => "client_secret_jwt",
+            "issuer" => "https://as.example"
+          },
+          "https://as.example/token"
+        )
+
+      [h, c, mac] = String.split(params[:client_assertion], ".")
+
+      assert Base.url_decode64!(mac, padding: false) ==
+               :crypto.mac(:hmac, :sha256, @secret, h <> "." <> c)
+    end
+  end
+
   describe "the authorization extension in the client's capabilities" do
     @client_credentials "io.modelcontextprotocol/oauth-client-credentials"
     @enterprise "io.modelcontextprotocol/enterprise-managed-authorization"
@@ -368,6 +730,7 @@ defmodule Sake.Client.AuthMachineTest do
 
   test "the options are checked when the session is built" do
     url = "https://mcp.example.com/mcp"
+    idp = [issuer: "https://idp", client_id: "a"]
 
     for {opts, message} <- [
           {[grant: :password], ~r/grant must be one of/},
@@ -379,7 +742,41 @@ defmodule Sake.Client.AuthMachineTest do
           {[grant: :jwt_bearer], ~r/assertion/},
           {[grant: :enterprise, id_token: "t", idp: [issuer: "https://idp"]], ~r/client_id/},
           {[grant: :enterprise, client_id: "a", idp: [issuer: "https://idp"]], ~r/id_token/},
-          {[grant: :enterprise, client_id: "a", id_token: "t"], ~r/idp/}
+          {[grant: :enterprise, client_id: "a", id_token: "t"], ~r/idp/},
+          {[grant: :enterprise, client_id: "a", id_token: "t", saml_assertion: "s", idp: idp],
+           ~r/not both/},
+          {[grant: :enterprise, client_id: "a", saml_assertion: "s", idp: [token_endpoint: "x"]],
+           ~r/saml_assertion needs idp: \[issuer/},
+          {[
+             grant: :client_credentials,
+             client_id: "a",
+             client_secret: "short",
+             token_endpoint_auth_method: "client_secret_jwt"
+           ], ~r/at least 32 bytes/},
+          {[
+             grant: :enterprise,
+             client_id: "a",
+             id_token: "t",
+             idp: idp ++ [token_endpoint_auth_method: "client_secret_jwt"]
+           ], ~r/idp: client_secret_jwt needs/},
+          {[
+             grant: :client_credentials,
+             client_id: "a",
+             client_secret: "s",
+             assertion_audience: :aud
+           ], ~r/auth: :assertion_audience must be/},
+          {[
+             grant: :enterprise,
+             client_id: "a",
+             id_token: "t",
+             idp: idp ++ [assertion_audience: 1]
+           ], ~r/idp: :assertion_audience must be/},
+          {[
+             grant: :enterprise,
+             client_id: "a",
+             saml_assertion: "s",
+             idp: idp ++ [saml_scope: "x"]
+           ], ~r/saml_scope must be a list/}
         ] do
       assert_raise ArgumentError, message, fn -> Client.connect(url, auth: opts) end
     end

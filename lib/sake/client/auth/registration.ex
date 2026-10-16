@@ -13,7 +13,7 @@ defmodule Sake.Client.Auth.Registration do
   # options on every run.
 
   alias Sake.Client.Auth
-  alias Sake.Client.Auth.HTTP
+  alias Sake.Client.Auth.{Grant, HTTP}
 
   @secret_methods ["client_secret_basic", "client_secret_post"]
   @grant_types ["authorization_code", "refresh_token"]
@@ -81,20 +81,34 @@ defmodule Sake.Client.Auth.Registration do
     })
   end
 
-  # The private key of `private_key_jwt` stays in the session: it is
-  # added to a pre-registered client's registration, which is never
-  # persisted, and is not JSON.
-  defp with_key(%Auth{private_key: nil}, registration), do: registration
+  # The private key of `private_key_jwt` and the audience of the client
+  # assertions stay in the session: they are added to a pre-registered
+  # client's registration, which is never persisted, and are not JSON.
+  defp with_key(%Auth{private_key: key, assertion_audience: aud}, registration) do
+    registration
+    |> put_present("private_key", key)
+    |> put_present("assertion_audience", aud)
+  end
 
-  defp with_key(%Auth{private_key: key}, registration),
-    do: Map.put(registration, "private_key", key)
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   defp secret_method(%Auth{private_key: {_key, _alg}}, _metadata), do: "private_key_jwt"
   defp secret_method(%Auth{client_secret: secret}, metadata), do: secret_method(secret, metadata)
   defp secret_method(nil, _metadata), do: "none"
 
-  defp secret_method(_secret, metadata),
-    do: Enum.find(@secret_methods, "client_secret_basic", &(&1 in supported_methods(metadata)))
+  # The secret goes as it is when the server takes it that way, and as
+  # the key of a client_secret_jwt assertion when that is the only method
+  # it lists (and the secret is long enough to key one).
+  defp secret_method(secret, metadata) do
+    supported = supported_methods(metadata)
+
+    cond do
+      method = Enum.find(@secret_methods, &(&1 in supported)) -> method
+      "client_secret_jwt" in supported and Grant.hmac_key?(secret) -> "client_secret_jwt"
+      true -> "client_secret_basic"
+    end
+  end
 
   # A metadata document URL is not bound to any one server: each server
   # fetches the document itself.

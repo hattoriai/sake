@@ -338,6 +338,14 @@ auth: [
   id_token: id_token,
   idp: [issuer: "https://acme.okta.com", client_id: "agent-at-okta", client_secret: okta_secret]
 ]
+
+# The same with SAML single sign-on: the assertion in place of the ID token.
+auth: [
+  grant: :enterprise,
+  client_id: "agent",
+  saml_assertion: fn _target -> MyApp.SSO.saml_assertion(conn) end,
+  idp: [issuer: "https://acme.okta.com", client_id: "agent-at-okta", client_secret: okta_secret]
+]
 ```
 
 The token exchange (RFC 8693) asks the identity provider for an ID-JAG
@@ -348,11 +356,67 @@ it from the provider's metadata. Obtaining the ID token is your single
 sign-on's business: pass it, or a function that returns `{:ok, token}`
 when the flow needs one.
 
+With SAML single sign-on, pass `saml_assertion:` instead of `id_token:`:
+the SAML 2.0 assertion, base64url-encoded as RFC 8693 expects it, or a
+function returning `{:ok, assertion}`. The identity provider needs
+`issuer:` then. The client follows §4.5 of
+draft-ietf-oauth-identity-assertion-authz-grant: it first exchanges
+the assertion at the provider for a refresh token (a token exchange
+with `subject_token_type` `urn:ietf:params:oauth:token-type:saml2`,
+`requested_token_type` `urn:ietf:params:oauth:token-type:refresh_token`
+and the provider's issuer as `audience`, and no `scope` unless
+`idp: [saml_scope: [...]]` gives one; some providers issue a refresh
+token only when `offline_access` is asked for, so
+`saml_scope: ["offline_access"]` is the setting for them), then
+exchanges that refresh
+token for the ID-JAG, as it would an ID token. Sake never reads the
+assertion; it passes it on as it is.
+
+The refresh token is kept, in the session and in the `store:`, bound to
+the provider and to the client id there. The next authorizations (a
+renewal, a step-up, a new session with the same store) exchange it for
+a new ID-JAG and need no assertion, until it expires (the `expires_in`
+of the provider's answer) or the provider refuses it with
+`invalid_grant`; then the assertion is traded again, once. A function
+`saml_assertion:` is therefore only called when there is no usable
+refresh token. A refusal of the assertion itself comes back as
+`{:saml_exchange_failed, status, body}`.
+
 `private_key:` is a PEM RSA (2048 bits or more), P-256 or P-384 private
 key, signing RS256, ES256 or ES384, or `{pem, alg}` for another algorithm
 (PS256); it needs the optional `jose` dependency (`{:jose, "~> 1.11"}`).
 Pre-registered credentials stay bound to their authorization server, as
 above.
+
+`client_secret_jwt` (RFC 7523 §2.2 with an HMAC) proves the secret
+without sending it: the client signs the same one-minute assertion as
+`private_key_jwt` (the client as `iss` and `sub`, the server's issuer as
+`aud`, a unique `jti`) with HS256 keyed by `client_secret:`. It needs no
+`jose`, and a secret of at least 32 bytes (RFC 7518 §3.2). Ask for it
+with `token_endpoint_auth_method: "client_secret_jwt"` at the
+authorization server, or `idp: [token_endpoint_auth_method:
+"client_secret_jwt"]` at the identity provider, where some providers
+require it for the token exchange; it is also chosen, at either, when
+the metadata lists it and neither `client_secret_basic` nor
+`client_secret_post`. Sake's own authorization server does not take it
+(see the security guide).
+
+The `aud` of a client assertion, `private_key_jwt` or
+`client_secret_jwt`, is the server's issuer identifier by default, as
+draft-ietf-oauth-rfc7523bis asks: an assertion made for one server's
+issuer cannot be replayed at another's token endpoint. Some servers
+want their token endpoint URL instead (Okta's `private_key_jwt`
+documentation, for one), so `assertion_audience:` picks it:
+
+```elixir
+auth: [..., assertion_audience: :issuer]           # the default
+auth: [..., assertion_audience: :token_endpoint]   # the token endpoint's URL
+auth: [..., assertion_audience: "https://..."]     # this exact value
+idp: [..., assertion_audience: :token_endpoint]    # the same, at the identity provider
+```
+
+At an identity provider given by `token_endpoint:` alone, the default
+`aud` is that endpoint, since no issuer is known.
 
 `grant: :client_credentials` and `grant: :enterprise` declare their
 extension (`io.modelcontextprotocol/oauth-client-credentials`,
@@ -431,8 +495,10 @@ Tokens and dynamic registrations live in the session by default. To keep
 them across runs, pass `store: {module, arg}`, a module implementing
 `Sake.Client.Auth.Store` (`fetch/2` and `put/3`, with JSON-friendly maps);
 its documentation has a file-based example. The values hold credentials,
-and a DPoP-bound token's private key with it: store them where only the
-person running the client can read them.
+a DPoP-bound token's private key, and an identity provider's refresh
+token from a SAML exchange (which stands for the person's sign-on until
+it expires): store them where only the person running the client can
+read them.
 
 ### Errors
 
@@ -444,9 +510,10 @@ authorization response), `:pkce_not_supported`, `:missing_iss`,
 `:state_mismatch`, `{:denied, error, description}`,
 `{:insecure_url, url}`, `:no_client_registration`,
 `{:registration_failed, ...}`, `{:token_failed, ...}`,
-`{:token_exchange_failed, ...}`, `{:authorize, reason}` (your
-`authorize:` function's error), `{:assertion, reason}` (your
-`assertion:` or `id_token:` function's), and so on.
+`{:token_exchange_failed, ...}`, `{:saml_exchange_failed, ...}`,
+`{:authorize, reason}` (your `authorize:` function's error),
+`{:assertion, reason}` (your `assertion:`, `id_token:` or
+`saml_assertion:` function's), and so on.
 
 ### Without `auth:`
 
