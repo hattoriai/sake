@@ -79,8 +79,12 @@ defmodule Sake.Auth.Store.ETS do
     end)
   end
 
+  # Serialized with `revoke_family/2` too: a revocation's sweep either
+  # runs before the insert (and revokes the refresh token a rotation
+  # consumed, which the token endpoint checks after storing the new pair)
+  # or after it (and revokes the new pair).
   @impl Sake.Auth.Store
-  def put_token(_s, token), do: insert(:tokens, token.id, token)
+  def put_token(_s, token), do: atomically(fn -> insert(:tokens, token.id, token) end)
 
   @impl Sake.Auth.Store
   def get_token(_s, kind, hash) do
@@ -116,7 +120,8 @@ defmodule Sake.Auth.Store.ETS do
   # not stored yet never is (see `put_code_tokens/3`); then the family's
   # tokens are swept. Nothing is kept for a family that does not exist:
   # an unknown code costs nothing. A pair a refresh is about to store is
-  # the token endpoint's to catch: it checks after storing it.
+  # the token endpoint's to catch: it checks after storing it (see
+  # `put_token/2`).
   @impl Sake.Auth.Store
   def revoke_family(_s, family_id) do
     atomically(fn ->

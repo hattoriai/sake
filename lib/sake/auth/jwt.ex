@@ -26,6 +26,10 @@ defmodule Sake.Auth.JWT do
   @algs ~w(RS256 PS256 ES256 ES384)
   @leeway 30
 
+  @doc "The clock skew allowed, in seconds."
+  @spec leeway() :: pos_integer()
+  def leeway, do: @leeway
+
   # RFC 7518 §3.3: an RSA key for RS256 or PS256 is at least 2048 bits.
   @min_rsa_bytes 256
 

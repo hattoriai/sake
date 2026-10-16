@@ -9,11 +9,6 @@ defmodule Sake.Auth.ClientAuth do
 
   @assertion_type "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 
-  # A client assertion is meant for one request: one that claims to stay
-  # valid for longer than this is refused, which also bounds how long its
-  # `jti` has to be remembered.
-  @max_assertion_lifetime 3_600
-
   @spec authenticate(Config.t(), Plug.Conn.t(), map()) ::
           {:ok, Sake.Auth.Client.t()} | {:error, :invalid_client}
   def authenticate(config, conn, params) do
@@ -94,7 +89,7 @@ defmodule Sake.Auth.ClientAuth do
              aud: [config.issuer, Config.token_url(config)],
              required: ["iss", "sub", "exp", "jti"]
            ),
-         true <- claims["exp"] <= System.system_time(:second) + @max_assertion_lifetime,
+         true <- short_lived?(config, claims),
          :ok <- Replay.once(id, to_string(claims["jti"]), claims["exp"]) do
       {:ok, client}
     else
@@ -103,4 +98,10 @@ defmodule Sake.Auth.ClientAuth do
   end
 
   defp assertion(_config, _params), do: {:error, :invalid_client}
+
+  # A client assertion is meant for one request: one that claims to stay
+  # valid for longer than `max_assertion_lifetime` (plus the clock leeway)
+  # is refused, which also bounds how long its `jti` has to be remembered.
+  defp short_lived?(config, %{"exp" => exp}),
+    do: exp <= System.system_time(:second) + config.max_assertion_lifetime + JWT.leeway()
 end

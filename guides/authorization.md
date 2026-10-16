@@ -92,7 +92,10 @@ established out of band:
 ```
 
 A machine client needs no redirect URI. Keys need the optional `jose`
-dependency (`{:jose, "~> 1.11"}`); a secret does not.
+dependency (`{:jose, "~> 1.11"}`); a secret does not. An assertion that
+claims to stay valid for more than five minutes is refused; a client
+that signs for longer needs `max_assertion_lifetime:` (in seconds) in
+the auth config.
 
 The grant is offered only when your subject module defines
 `client_principal/1`, which names the principal the client acts as (or
@@ -166,7 +169,11 @@ says otherwise), unexpired, issued to the very client presenting it
 (`client_id`), for one of your endpoints (`resource`, when present), and
 not seen before (`jti`). Its `scope` limits the token's. A workload
 token (`profile: :workload`) needs only `sub`, the audience and an
-expiry, and is single use when it has a `jti`.
+expiry, and is single use when it has a `jti`. Neither may stay valid
+for longer than the issuer's `max_lifetime:` from when it is presented:
+five minutes for an ID-JAG and an hour for a workload token by default,
+which is also how long a workload token without a `jti` can be
+presented again.
 
 Your subject module's `assertion_principal/2` maps the verified claims
 to an account, or refuses with `:error`; Sake will not start with

@@ -15,6 +15,7 @@ defmodule Sake.Auth.Config do
             consent: Sake.Auth.Consent.Default,
             servers: [],
             trusted_issuers: [],
+            max_assertion_lifetime: 300,
             allow_insecure: false,
             oauth_path: "/oauth",
             dpop: true,
@@ -33,6 +34,9 @@ defmodule Sake.Auth.Config do
           ArgumentError,
           "the issuer must be an https URL (or allow_insecure: true in development)"
         )
+
+    unless is_integer(config.max_assertion_lifetime) and config.max_assertion_lifetime > 0,
+      do: raise(ArgumentError, "max_assertion_lifetime: is a positive number of seconds")
 
     {module, store_opts} = config.store
 
