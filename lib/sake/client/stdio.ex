@@ -8,6 +8,15 @@ defmodule Sake.Client.Stdio do
   # call in flight. The waiting call answers a request itself, with the
   # session it holds (`on_input`), and runs `on_notification`; this process
   # only answers `ping`.
+  #
+  # Each request goes to the server under an id of this process's own, and
+  # its response comes back under the caller's: callers that share a
+  # session, or a caller that reuses an id after giving up on a call, never
+  # get each other's responses.
+  #
+  # The notifications of a `subscriptions/listen` request carry its id (in
+  # `_meta`), and go to it. A legacy server's list changes and resource
+  # updates belong to no call: they go to the processes that `listen/2`.
 
   use GenServer
   require Logger
@@ -49,13 +58,13 @@ defmodule Sake.Client.Stdio do
     ref = Process.monitor(pid)
     deadline = System.monotonic_time(:millisecond) + Keyword.get(opts, :timeout, 300_000)
 
-    result =
+    try do
       if call(pid, {:request, message, self()}) == :ok,
         do: await(session, pid, ref, id, deadline),
         else: {:error, :closed}
-
-    Process.demonitor(ref, [:flush])
-    result
+    after
+      Process.demonitor(ref, [:flush])
+    end
   end
 
   def post(%Session{stdio: pid} = session, message, _opts) do
@@ -75,15 +84,56 @@ defmodule Sake.Client.Stdio do
         await(session, pid, ref, id, deadline)
 
       {:sake_stdio, ^id, {:request, rid, method, params}} ->
-        _ = call(pid, {:send, Transport.answer(session, rid, method, params)})
+        _ = call(pid, {:send, answer(session, pid, id, rid, method, params)})
         await(session, pid, ref, id, deadline)
 
       {:DOWN, ^ref, :process, ^pid, _reason} ->
         {:error, :closed}
     after
       max(deadline - System.monotonic_time(:millisecond), 0) ->
-        GenServer.cast(pid, {:cancel, id})
+        GenServer.cast(pid, {:cancel, self(), id, "Request timed out"})
         {:error, :timeout}
+    end
+  end
+
+  # An answering function that throws gives up on the call: the server's
+  # question gets an error, the call is cancelled, and the throw carries
+  # on (see `Sake.Client.Transport`).
+  defp answer(session, pid, id, rid, method, params) do
+    Transport.answer(session, rid, method, params)
+  catch
+    :throw, value ->
+      message = JSONRPC.error(rid, JSONRPC.code(:internal), "The call was abandoned")
+      _ = call(pid, {:send, message})
+      GenServer.cast(pid, {:cancel, self(), id, "The call was abandoned"})
+      throw(value)
+  end
+
+  @session_notifications [
+    "notifications/tools/list_changed",
+    "notifications/resources/list_changed",
+    "notifications/prompts/list_changed",
+    "notifications/resources/updated"
+  ]
+
+  @doc "Hands the server's notifications between calls to `fun`, until the server exits."
+  @spec listen(pid(), (String.t(), map() -> any())) :: :ok | {:error, :closed}
+  def listen(pid, fun) do
+    ref = Process.monitor(pid)
+
+    if call(pid, {:listen, self()}) == :ok,
+      do: listened(ref, pid, fun),
+      else: {:error, :closed}
+  end
+
+  defp listened(ref, pid, fun) do
+    receive do
+      {:sake_stdio_notification, method, params} ->
+        fun.(method, params)
+        listened(ref, pid, fun)
+
+      {:DOWN, ^ref, :process, ^pid, _reason} ->
+        :ok
     end
   end
 
@@ -135,7 +185,9 @@ defmodule Sake.Client.Stdio do
        os_pid: os_pid,
        close_timeout: opts[:close_timeout] || @close_timeout,
        line: [],
-       waiters: []
+       waiters: [],
+       listeners: [],
+       wire_id: 0
      }}
   end
 
@@ -152,8 +204,14 @@ defmodule Sake.Client.Stdio do
 
   @impl true
   def handle_call({:request, %{"id" => id} = message, from}, _from, state) do
-    write(state, message)
-    {:reply, :ok, %{state | waiters: state.waiters ++ [{id, from}]}}
+    wire_id = state.wire_id + 1
+    write(state, %{message | "id" => wire_id})
+    {:reply, :ok, %{state | waiters: state.waiters ++ [{wire_id, id, from}], wire_id: wire_id}}
+  end
+
+  def handle_call({:listen, pid}, _from, state) do
+    Process.monitor(pid)
+    {:reply, :ok, %{state | listeners: [pid | state.listeners]}}
   end
 
   def handle_call({:send, message}, _from, state) do
@@ -181,16 +239,16 @@ defmodule Sake.Client.Stdio do
   # A call that timed out stops waiting; the server is told to stop working
   # on it, as the specification asks of a client that gives up.
   @impl true
-  def handle_cast({:cancel, id}, state) do
-    write(
-      state,
-      JSONRPC.notification("notifications/cancelled", %{
-        "requestId" => id,
-        "reason" => "Request timed out"
-      })
-    )
+  def handle_cast({:cancel, pid, id, reason}, state) do
+    case Enum.find(state.waiters, &match?({_wire_id, ^id, ^pid}, &1)) do
+      {wire_id, _id, _pid} = waiter ->
+        params = %{"requestId" => wire_id, "reason" => reason}
+        write(state, JSONRPC.notification("notifications/cancelled", params))
+        {:noreply, %{state | waiters: List.delete(state.waiters, waiter)}}
 
-    {:noreply, %{state | waiters: List.keydelete(state.waiters, id, 0)}}
+      nil ->
+        {:noreply, state}
+    end
   end
 
   @impl true
@@ -212,6 +270,9 @@ defmodule Sake.Client.Stdio do
     {:stop, :normal, state}
   end
 
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, state),
+    do: {:noreply, %{state | listeners: List.delete(state.listeners, pid)}}
+
   # Exits are trapped only for the port's sake: the caller's exit still
   # ends this process (and so the server's input) unless it was normal.
   def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
@@ -232,10 +293,10 @@ defmodule Sake.Client.Stdio do
     end
   end
 
-  defp route({kind, id, _}, message, state) when kind in [:response, :error_response] do
-    case List.keytake(state.waiters, id, 0) do
-      {{^id, pid}, waiters} ->
-        send(pid, {:sake_stdio, id, {:response, message}})
+  defp route({kind, wire_id, _}, message, state) when kind in [:response, :error_response] do
+    case List.keytake(state.waiters, wire_id, 0) do
+      {{^wire_id, id, pid}, waiters} ->
+        send(pid, {:sake_stdio, id, {:response, %{message | "id" => id}}})
         %{state | waiters: waiters}
 
       nil ->
@@ -243,11 +304,28 @@ defmodule Sake.Client.Stdio do
     end
   end
 
+  # A listen stream's notifications carry its id; a progress token is the
+  # caller's own id for its request.
   defp route({:notification, method, params}, _message, state) do
-    waiter =
-      List.keyfind(state.waiters, params["progressToken"], 0) || List.first(state.waiters)
+    subscription = get_in(params, ["_meta", Sake.Protocol.meta(:subscription_id)])
 
-    with {id, pid} <- waiter, do: send(pid, {:sake_stdio, id, {:notification, method, params}})
+    cond do
+      waiter = subscription && List.keyfind(state.waiters, subscription, 0) ->
+        notify_waiter(waiter, method, params)
+
+      method in @session_notifications ->
+        Enum.each(state.listeners, &send(&1, {:sake_stdio_notification, method, params}))
+
+      waiter = List.keyfind(state.waiters, params["progressToken"], 1) ->
+        notify_waiter(waiter, method, params)
+
+      waiter = List.first(state.waiters) ->
+        notify_waiter(waiter, method, params)
+
+      true ->
+        :ok
+    end
+
     state
   end
 
@@ -258,7 +336,7 @@ defmodule Sake.Client.Stdio do
 
   defp route({:request, rid, method, params}, _message, state) do
     case state.waiters do
-      [{id, pid} | _] ->
+      [{_wire_id, id, pid} | _] ->
         send(pid, {:sake_stdio, id, {:request, rid, method, params}})
 
       [] ->
@@ -269,6 +347,9 @@ defmodule Sake.Client.Stdio do
   end
 
   defp route(_parsed, _message, state), do: state
+
+  defp notify_waiter({_wire_id, id, pid}, method, params),
+    do: send(pid, {:sake_stdio, id, {:notification, method, params}})
 
   # A port that already closed has its exit waiting in the mailbox.
   defp write(state, message) do

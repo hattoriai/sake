@@ -79,7 +79,7 @@ defmodule Sake.Server.Legacy do
     do: Dispatch.complete(server, params, ctx)
 
   defp dispatch(server, "resources/subscribe", %{"uri" => uri}, ctx) when is_binary(uri) do
-    case Server.resource(server, uri) do
+    case Server.resource(server, uri, ctx) do
       {:ok, %{subscribe: true} = spec, _} ->
         with :ok <- Dispatch.listed(:resources, spec, %{"uri" => uri}, ctx),
              do: subscribe(spec, uri, ctx)
@@ -97,8 +97,15 @@ defmodule Sake.Server.Legacy do
 
   # A resource the server's middleware hides is answered by `dispatch/4` as one
   # without subscriptions; the scopes are checked after.
-  defp subscribe(spec, uri, ctx),
-    do: if(Server.allowed?(spec, ctx), do: {:subscribe, uri}, else: {:forbidden, spec.scopes})
+  # A proxied resource is followed upstream (see `Sake.Proxy`).
+  defp subscribe(spec, uri, ctx) do
+    if Server.allowed?(spec, ctx) do
+      if spec.proxy, do: :ok = Sake.Proxy.follow(spec, uri)
+      {:subscribe, uri}
+    else
+      {:forbidden, spec.scopes}
+    end
+  end
 
   defp error(code, message), do: %{"code" => code, "message" => message}
 end

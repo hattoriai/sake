@@ -6,6 +6,8 @@ locals_without_parens = [
   resources: 1,
   prompts: 1,
   middleware: 2,
+  mount: 1,
+  mount: 2,
   output: 1,
   # Sake.Test
   assert_notification: 1,

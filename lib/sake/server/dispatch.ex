@@ -3,11 +3,18 @@ defmodule Sake.Server.Dispatch do
   # The modern (2026-07-28) methods. `handle/3` wraps results with
   # resultType and server info; the bare functions are shared with the
   # legacy dispatcher.
+  #
+  # A proxied component (a spec with a `proxy`, see `Sake.Proxy`) goes
+  # through the same checks and middleware as a local one; where a local
+  # component's module would run, its request is forwarded upstream
+  # (`Sake.Proxy.Forward`). Its arguments are the upstream's to validate,
+  # and reach the middleware as the client sent them, with string keys.
 
   require Logger
 
   alias Sake.{Context, JSONRPC, Protocol, Server}
-  alias Sake.Server.{Cursor, Middleware, Results, Tasks, UI}
+  alias Sake.Proxy.Forward
+  alias Sake.Server.{Cursor, Middleware, Mount, Results, Tasks, UI}
 
   @type outcome ::
           {:reply, map()}
@@ -104,7 +111,8 @@ defmodule Sake.Server.Dispatch do
   def list_tools(server, params, ctx) do
     with {:ok, offset} <- offset(params, ctx),
          {:ok, specs} <-
-           server.__sake__(:tools)
+           server
+           |> Server.tools(ctx)
            |> Enum.filter(&(Server.allowed?(&1, ctx) and UI.visible?(&1, ctx)))
            |> listable(:tools, params, ctx) do
       {page, next} = page(specs, offset, server)
@@ -114,7 +122,8 @@ defmodule Sake.Server.Dispatch do
        |> next_cursor(next, ctx)
        |> cacheable(server, ctx, Enum.map(page, & &1.ttl))
        |> UI.cache_scope(server)
-       |> Middleware.cache_scope(server, [:after_list])}
+       |> Middleware.cache_scope(server, [:after_list])
+       |> dynamic_scope(server)}
     end
   end
 
@@ -122,7 +131,8 @@ defmodule Sake.Server.Dispatch do
   def list_resources(server, params, ctx) do
     with {:ok, offset} <- offset(params, ctx),
          {:ok, specs} <-
-           server.__sake__(:resources)
+           server
+           |> Server.resources(ctx)
            |> Enum.filter(&(Server.allowed?(&1, ctx) and UI.listed?(&1, ctx)))
            |> listable(:resources, params, ctx) do
       entries = Enum.flat_map(specs, &resource_entries(&1, ctx))
@@ -134,7 +144,8 @@ defmodule Sake.Server.Dispatch do
        |> next_cursor(next, ctx)
        |> cacheable(server, ctx, ttls)
        |> UI.cache_scope(server)
-       |> Middleware.cache_scope(server, [:after_list])}
+       |> Middleware.cache_scope(server, [:after_list])
+       |> dynamic_scope(server)}
     end
   end
 
@@ -144,20 +155,28 @@ defmodule Sake.Server.Dispatch do
 
   defp resource_entries(spec, ctx) do
     if Code.ensure_loaded?(spec.module) and function_exported?(spec.module, :list, 1) do
-      Enum.map(
-        spec.module.list(ctx),
-        &{spec.ttl, Sake.Resource.Spec.listed_to_wire(spec, &1, ctx.protocol_version)}
-      )
+      for item <- spec.module.list(Mount.component_ctx(spec, ctx)),
+          {:ok, item} <- [listed_uri(spec, item)],
+          do: {spec.ttl, Sake.Resource.Spec.listed_to_wire(spec, item, ctx.protocol_version)}
     else
       []
     end
+  end
+
+  # A mounted template lists its resources by the URIs its server knows;
+  # the client knows them under the mount's prefix.
+  defp listed_uri(spec, uri) when is_binary(uri), do: Mount.outer_uri(spec, uri)
+
+  defp listed_uri(spec, %{uri: uri} = item) do
+    with {:ok, uri} <- Mount.outer_uri(spec, uri), do: {:ok, %{item | uri: uri}}
   end
 
   @doc false
   def list_resource_templates(server, params, ctx) do
     with {:ok, offset} <- offset(params, ctx),
          {:ok, specs} <-
-           server.__sake__(:resources)
+           server
+           |> Server.resources(ctx)
            |> Enum.filter(&(&1.template and Server.allowed?(&1, ctx)))
            |> listable(:resources, params, ctx) do
       {page, next} = page(specs, offset, server)
@@ -169,7 +188,8 @@ defmodule Sake.Server.Dispatch do
        }
        |> next_cursor(next, ctx)
        |> cacheable(server, ctx, Enum.map(page, & &1.ttl))
-       |> Middleware.cache_scope(server, [:after_list])}
+       |> Middleware.cache_scope(server, [:after_list])
+       |> dynamic_scope(server)}
     end
   end
 
@@ -177,7 +197,8 @@ defmodule Sake.Server.Dispatch do
   def list_prompts(server, params, ctx) do
     with {:ok, offset} <- offset(params, ctx),
          {:ok, specs} <-
-           server.__sake__(:prompts)
+           server
+           |> Server.prompts(ctx)
            |> Enum.filter(&Server.allowed?(&1, ctx))
            |> listable(:prompts, params, ctx) do
       {page, next} = page(specs, offset, server)
@@ -186,9 +207,19 @@ defmodule Sake.Server.Dispatch do
        %{"prompts" => Enum.map(page, &Sake.Prompt.Spec.to_wire(&1, ctx.protocol_version))}
        |> next_cursor(next, ctx)
        |> cacheable(server, ctx, Enum.map(page, & &1.ttl))
-       |> Middleware.cache_scope(server, [:after_list])}
+       |> Middleware.cache_scope(server, [:after_list])
+       |> dynamic_scope(server)}
     end
   end
+
+  # What a proxy lists depends on who asks (each principal has its own
+  # upstream session, and maybe its own credentials), so no shared cache
+  # may keep it.
+  defp dynamic_scope(%{"cacheScope" => _} = result, server) do
+    if Server.dynamic?(server), do: Map.put(result, "cacheScope", "private"), else: result
+  end
+
+  defp dynamic_scope(result, _server), do: result
 
   # The `:after_list` plugs see what Sake's own checks (scopes, MCP Apps)
   # let through, and before the list is paged, so that pages stay full.
@@ -235,7 +266,7 @@ defmodule Sake.Server.Dispatch do
 
   @doc false
   def call_tool(server, %{"name" => name} = params, ctx) when is_binary(name) do
-    with {:ok, spec} <- find_tool(server, name),
+    with {:ok, spec} <- find_tool(server, name, ctx),
          :ok <- visible(spec, name, ctx),
          :ok <- listed(:tools, spec, params, ctx),
          :ok <- allowed(spec, ctx) do
@@ -245,6 +276,11 @@ defmodule Sake.Server.Dispatch do
 
   def call_tool(_server, _params, _ctx),
     do: {:error, JSONRPC.code(:invalid_params), "tools/call needs a tool name"}
+
+  defp call_validated(%{proxy: proxy} = spec, params, ctx) when proxy != nil do
+    raw_args = params["arguments"] || %{}
+    with_inputs(spec.name, raw_args, params, ctx, &run_tool(spec, raw_args, &1))
+  end
 
   defp call_validated(spec, params, ctx) do
     raw_args = params["arguments"] || %{}
@@ -269,8 +305,8 @@ defmodule Sake.Server.Dispatch do
 
   defp task_capability(_spec, _ctx), do: :ok
 
-  defp find_tool(server, name) do
-    case Server.tool(server, name) do
+  defp find_tool(server, name, ctx) do
+    case Server.tool(server, name, ctx) do
       {:ok, spec} -> {:ok, spec}
       :error -> {:error, JSONRPC.code(:invalid_params), "Unknown tool: #{name}"}
     end
@@ -294,6 +330,16 @@ defmodule Sake.Server.Dispatch do
     case Middleware.before(:before_call, %{tool: spec, arguments: args}, :arguments, ctx) do
       {:ok, args, ctx} -> run_prepared(spec, args, ctx)
       {:halt, reason} -> Middleware.refusal(reason, %{"name" => spec.name}, ctx)
+    end
+  end
+
+  # An upstream that makes a task of the call has its task followed by one
+  # of the proxy's own.
+  defp run_prepared(%{proxy: proxy} = spec, args, ctx) when proxy != nil do
+    case Forward.call_tool(spec, args, ctx) do
+      {:ok, result} -> after_result(result, spec, args, ctx)
+      {:task, task} -> Tasks.start(spec, args, ctx, &Forward.follow(spec, task, &1))
+      error -> error
     end
   end
 
@@ -321,7 +367,7 @@ defmodule Sake.Server.Dispatch do
   end
 
   defp execute(spec, args, ctx) do
-    case spec.module.execute(args, ctx) do
+    case spec.module.execute(args, Mount.component_ctx(spec, ctx)) do
       {:error, {:missing_capability, caps}} -> missing_capability(caps)
       result -> after_call(result, spec, args, ctx)
     end
@@ -330,8 +376,11 @@ defmodule Sake.Server.Dispatch do
   # Every result the tool gives the client goes through `:after_call`, an
   # error result too; a task's goes through it when the task ends (see
   # `Sake.Tasks.Worker`).
-  defp after_call(value, spec, args, ctx) do
-    result = Results.tool(value, spec, ctx)
+  defp after_call(value, spec, args, ctx),
+    do: value |> Results.tool(spec, ctx) |> after_result(spec, args, ctx)
+
+  defp after_result(result, spec, args, ctx) do
+    result = Mount.outer_result(result, spec, ctx)
     payload = %{tool: spec, arguments: args, result: result}
 
     case Middleware.after_result(:after_call, payload, ctx) do
@@ -351,7 +400,7 @@ defmodule Sake.Server.Dispatch do
 
   defp prepare(spec, args, ctx) do
     if Code.ensure_loaded?(spec.module) and function_exported?(spec.module, :prepare, 2),
-      do: spec.module.prepare(args, ctx),
+      do: spec.module.prepare(args, Mount.component_ctx(spec, ctx)),
       else: {:ok, args}
   end
 
@@ -365,7 +414,7 @@ defmodule Sake.Server.Dispatch do
 
   @doc false
   def read_resource(server, %{"uri" => uri} = params, ctx) when is_binary(uri) do
-    with {:ok, spec, uri_params} <- find_resource(server, uri),
+    with {:ok, spec, uri_params} <- find_resource(server, uri, ctx),
          :ok <- listed(:resources, spec, params, ctx),
          :ok <- allowed(spec, ctx) do
       with_inputs(uri, %{"uri" => uri}, params, ctx, fn ctx ->
@@ -387,10 +436,36 @@ defmodule Sake.Server.Dispatch do
   end
 
   # A result that read middleware rewrote or redacted may be one
-  # principal's, so it is private.
+  # principal's, so it is private. A mounted resource reads as its server
+  # knows it, and its contents go out under the mount's prefix.
+  defp read_spec(%{proxy: proxy} = spec, uri_params, uri, server, ctx) when proxy != nil do
+    case Forward.read(spec, uri, ctx) do
+      {:ok, result, ttl} ->
+        result = Mount.outer_result(result, spec, ctx)
+
+        with {:ok, result} <- after_read(result, spec, uri_params, uri, ctx) do
+          {:ok,
+           result
+           |> cacheable(server, ctx, [spec.ttl, ttl])
+           |> Map.put("cacheScope", "private")}
+        end
+
+      {:error, :not_found} ->
+        not_found(uri, ctx)
+
+      error ->
+        error
+    end
+  end
+
   defp read_spec(spec, uri_params, uri, server, ctx) do
-    case Results.resource(spec.module.read(uri_params, ctx), spec, uri, ctx) do
+    {:ok, inner} = Mount.inner_uri(spec, uri)
+    value = spec.module.read(uri_params, Mount.component_ctx(spec, ctx))
+
+    case Results.resource(value, spec, inner, ctx) do
       {:ok, result} ->
+        result = Mount.outer_result(result, spec, ctx)
+
         with {:ok, result} <- after_read(result, spec, uri_params, uri, ctx) do
           {:ok,
            result
@@ -418,8 +493,8 @@ defmodule Sake.Server.Dispatch do
     end
   end
 
-  defp find_resource(server, uri) do
-    case Server.resource(server, uri) do
+  defp find_resource(server, uri, ctx) do
+    case Server.resource(server, uri, ctx) do
       {:ok, spec, params} ->
         {:ok, spec, params}
 
@@ -442,7 +517,7 @@ defmodule Sake.Server.Dispatch do
 
   @doc false
   def get_prompt(server, %{"name" => name} = params, ctx) when is_binary(name) do
-    with {:ok, spec} <- find_prompt(server, name),
+    with {:ok, spec} <- find_prompt(server, name, ctx),
          :ok <- listed(:prompts, spec, params, ctx),
          :ok <- allowed(spec, ctx),
          {:ok, args} <- prompt_args(spec, params["arguments"] || %{}) do
@@ -462,8 +537,13 @@ defmodule Sake.Server.Dispatch do
     end
   end
 
+  defp render_prompt(%{proxy: proxy} = spec, args, ctx) when proxy != nil do
+    with {:ok, result} <- Forward.get_prompt(spec, args, ctx),
+         do: after_get(result, spec, args, ctx)
+  end
+
   defp render_prompt(spec, args, ctx) do
-    case Results.prompt(spec.module.get(args, ctx), spec, ctx) do
+    case Results.prompt(spec.module.get(args, Mount.component_ctx(spec, ctx)), spec, ctx) do
       {:ok, result} -> after_get(result, spec, args, ctx)
       {:error, {:missing_capability, caps}} -> missing_capability(caps)
       {:error, text} -> {:error, JSONRPC.code(:invalid_params), text}
@@ -481,11 +561,19 @@ defmodule Sake.Server.Dispatch do
     end
   end
 
-  defp find_prompt(server, name) do
-    case Server.prompt(server, name) do
+  defp find_prompt(server, name, ctx) do
+    case Server.prompt(server, name, ctx) do
       {:ok, spec} -> {:ok, spec}
       :error -> {:error, JSONRPC.code(:invalid_params), "Unknown prompt: #{name}"}
     end
+  end
+
+  # A proxied prompt's arguments go upstream as the client sent them: only
+  # their shape is checked here, and no name becomes an atom.
+  defp prompt_args(%{proxy: proxy}, given) when proxy != nil do
+    if is_map(given) and Enum.all?(given, fn {_name, value} -> is_binary(value) end),
+      do: {:ok, given},
+      else: {:error, JSONRPC.code(:invalid_params), "Prompt arguments must be strings"}
   end
 
   defp prompt_args(spec, given) do
@@ -522,9 +610,11 @@ defmodule Sake.Server.Dispatch do
     end
   end
 
+  # A key under Sake's own prefix is state Sake signed (a proxied call's
+  # upstream state, say), never a client's answer.
   defp resolve_inputs(name, args, %{"requestState" => state} = params, ctx) do
     case Sake.Server.RequestState.verify(ctx, name, args, state) do
-      {:ok, previous} -> {:ok, Map.merge(previous, params["inputResponses"] || %{})}
+      {:ok, previous} -> {:ok, Map.merge(previous, answers(params["inputResponses"]))}
       :error -> :error
     end
   end
@@ -537,6 +627,11 @@ defmodule Sake.Server.Dispatch do
   # recommends when a retry lacks the information the server needs.
   defp resolve_inputs(_name, _args, _params, _ctx), do: {:ok, %{}}
 
+  defp answers(%{} = responses),
+    do: Map.reject(responses, fn {key, _} -> String.starts_with?(key, "ai.hattori.sake/") end)
+
+  defp answers(_responses), do: %{}
+
   defp run_with_inputs(name, args, ctx, inputs, fun) do
     ctx = %{ctx | inputs: inputs}
 
@@ -544,13 +639,22 @@ defmodule Sake.Server.Dispatch do
       fun.(ctx)
     catch
       :throw, {:sake_input_required, requests} ->
-        {:ok,
-         %{
-           "resultType" => "input_required",
-           "inputRequests" => requests,
-           "requestState" => Sake.Server.RequestState.sign(ctx, name, args, inputs)
-         }}
+        input_required(ctx, name, args, requests, inputs)
+
+      # A proxied call's questions carry the upstream's state, which the
+      # signed request state keeps until the retry.
+      :throw, {:sake_input_required, requests, state} ->
+        input_required(ctx, name, args, requests, Map.merge(inputs, state))
     end
+  end
+
+  defp input_required(ctx, name, args, requests, inputs) do
+    {:ok,
+     %{
+       "resultType" => "input_required",
+       "inputRequests" => requests,
+       "requestState" => Sake.Server.RequestState.sign(ctx, name, args, inputs)
+     }}
   end
 
   # ---- completion/complete
@@ -561,7 +665,7 @@ defmodule Sake.Server.Dispatch do
         %{"ref" => ref, "argument" => %{"name" => arg, "value" => value}} = params,
         ctx
       ) do
-    case resolve_completion_ref(server, ref) do
+    case resolve_completion_ref(server, ref, ctx) do
       %{module: _} = spec -> listed_completion(spec, arg, value, params, ctx)
       _ -> {:error, JSONRPC.code(:invalid_params), "Unknown completion reference"}
     end
@@ -570,14 +674,14 @@ defmodule Sake.Server.Dispatch do
   def complete(_server, _params, _ctx),
     do: {:error, JSONRPC.code(:invalid_params), "completion/complete needs a ref and an argument"}
 
-  defp resolve_completion_ref(server, %{"type" => "ref/prompt", "name" => name}) do
-    with({:ok, s} <- Server.prompt(server, name), do: s)
+  defp resolve_completion_ref(server, %{"type" => "ref/prompt", "name" => name}, ctx) do
+    with({:ok, s} <- Server.prompt(server, name, ctx), do: s)
   end
 
-  defp resolve_completion_ref(server, %{"type" => "ref/resource", "uri" => uri}),
-    do: Enum.find(server.__sake__(:resources), &(&1.uri == uri))
+  defp resolve_completion_ref(server, %{"type" => "ref/resource", "uri" => uri}, ctx),
+    do: Enum.find(Server.resources(server, ctx), &(&1.uri == uri))
 
-  defp resolve_completion_ref(_server, _ref), do: :error
+  defp resolve_completion_ref(_server, _ref, _ctx), do: :error
 
   # A prompt or resource template the list hides cannot be completed.
   defp listed_completion(spec, arg, value, params, ctx) do
@@ -591,8 +695,9 @@ defmodule Sake.Server.Dispatch do
   defp run_completion(spec, arg, value, ctx) do
     cond do
       not Server.allowed?(spec, ctx) -> {:forbidden, spec.scopes}
+      spec.proxy != nil -> Forward.complete(spec, arg, value, ctx)
       not completable?(spec.module) -> {:ok, completion([], [])}
-      true -> complete_with(spec.module, arg, value, ctx)
+      true -> complete_with(spec.module, arg, value, Mount.component_ctx(spec, ctx))
     end
   end
 

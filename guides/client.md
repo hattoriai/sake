@@ -175,6 +175,39 @@ later with `set_log_level/2`. On the modern protocol the level travels in
 every request's `_meta`; on a legacy session the client sends
 `logging/setLevel`, right after the handshake for `log_level:`.
 
+## Following the server's changes
+
+`listen/3` follows what the server announces between calls, until it
+ends the stream: list changes, and the updates of the resources the
+filter names.
+
+```elixir
+filter = %{"toolsListChanged" => true, "resourceSubscriptions" => ["issue://1"]}
+
+Task.start_link(fn ->
+  Sake.Client.listen(session, filter, fn method, params -> send(owner, {method, params}) end)
+end)
+```
+
+On the modern protocol it is a `subscriptions/listen` request; on a
+legacy session, the session's GET stream (over stdio, what the server
+sends between calls), with a `resources/subscribe` for each URI. It
+blocks while the stream lasts, so run it in a process of its own, and
+stop that process to stop listening.
+
+## Raw requests
+
+`request/4` sends any request and returns its result as the server sent
+it, with the session's `_meta`, headers and authorization: an
+input-required result or a task comes back as it is, for you to answer
+(retry with `inputResponses` and the `requestState`) or follow
+(`get_task/2`). `Sake.Proxy` forwards calls this way.
+
+```elixir
+{:ok, %{"resultType" => "input_required"} = result, session} =
+  Sake.Client.request(session, "tools/call", %{"name" => "confirm", "arguments" => %{}})
+```
+
 ## Authorization
 
 Pass `auth:` and the client runs the MCP authorization flow itself

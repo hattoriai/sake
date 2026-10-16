@@ -72,7 +72,7 @@ defmodule Sake.Plug.Stream do
 
     tool_streams =
       method == "tools/call" and
-        match?({:ok, %{stream: true}}, Sake.Server.tool(ctx.server, params["name"] || ""))
+        match?({:ok, %{stream: true}}, Sake.Server.tool(ctx.server, params["name"] || "", ctx))
 
     # A legacy client that can be asked something (elicitation, sampling,
     # roots) gets the stream the question would travel on.
@@ -84,22 +84,23 @@ defmodule Sake.Plug.Stream do
   end
 
   defp refused?(method, params, ctx) do
-    case component(method, params, ctx.server) do
+    case component(method, params, ctx) do
       {:ok, spec} -> not Sake.Server.allowed?(spec, ctx)
       _ -> false
     end
   end
 
-  defp component("tools/call", params, server), do: Sake.Server.tool(server, params["name"] || "")
+  defp component("tools/call", params, ctx),
+    do: Sake.Server.tool(ctx.server, params["name"] || "", ctx)
 
-  defp component("prompts/get", params, server),
-    do: Sake.Server.prompt(server, params["name"] || "")
+  defp component("prompts/get", params, ctx),
+    do: Sake.Server.prompt(ctx.server, params["name"] || "", ctx)
 
-  defp component("resources/read", %{"uri" => uri}, server) when is_binary(uri) do
-    with {:ok, spec, _params} <- Sake.Server.resource(server, uri), do: {:ok, spec}
+  defp component("resources/read", %{"uri" => uri}, ctx) when is_binary(uri) do
+    with {:ok, spec, _params} <- Sake.Server.resource(ctx.server, uri, ctx), do: {:ok, spec}
   end
 
-  defp component(_method, _params, _server), do: :error
+  defp component(_method, _params, _ctx), do: :error
 
   defp stream(conn, opts, {:request, id, _method, params} = parsed, ctx, handler) do
     conn = SSE.start(conn)
@@ -382,12 +383,19 @@ defmodule Sake.Plug.Stream do
 
   defp subscribable(honoured, _ctx), do: honoured
 
+  # A proxied resource it honours is followed upstream (see `Sake.Proxy`).
   defp subscribable?(uri, ctx) do
-    case is_binary(uri) and Sake.Server.resource(ctx.server, uri) do
-      {:ok, spec, _params} -> Middleware.listed(:resources, spec, ctx) == :ok
-      _ -> true
+    case is_binary(uri) and Sake.Server.resource(ctx.server, uri, ctx) do
+      {:ok, spec, _params} ->
+        Middleware.listed(:resources, spec, ctx) == :ok and followed(spec, uri)
+
+      _ ->
+        true
     end
   end
+
+  defp followed(%{proxy: nil}, _uri), do: true
+  defp followed(spec, uri), do: Sake.Proxy.follow(spec, uri) == :ok
 
   # The caller's own tasks only: anything else was left out of `taskIds`.
   defp put_task_ids(honoured, []), do: honoured
@@ -425,8 +433,13 @@ defmodule Sake.Plug.Stream do
   @spec legacy(Plug.Conn.t(), map(), Sake.Server.Session.session()) :: Plug.Conn.t()
   def legacy(conn, opts, session) do
     Streams.register_legacy(opts.server, session.nonce)
-    conn = SSE.start(conn)
-    legacy_loop(conn, opts, %{})
+
+    # A comment at once tells the client the stream is open: the session's
+    # subscriptions live on it, so a client subscribes once it is.
+    case conn |> SSE.start() |> SSE.comment() do
+      {:ok, conn} -> legacy_loop(conn, opts, %{})
+      {:error, _} -> conn
+    end
   end
 
   # `subscribed` is a set of URIs kept as a plain map (URI => true): a

@@ -50,6 +50,12 @@ defmodule Sake.UI do
   see UI resources listed (it can still read them).
   """
 
+  # A UI module keeps the `Sake.Resource.Spec` this module builds for it,
+  # compiled in. The struct's defaults are read when this module compiles,
+  # so that a change of the struct recompiles it, and so (through `use`)
+  # every UI module, which would otherwise keep a spec of the old shape.
+  @spec_defaults Sake.Resource.Spec.__struct__()
+
   @mime_type "text/html;profile=mcp-app"
   @extension "io.modelcontextprotocol/ui"
 
@@ -197,18 +203,19 @@ defmodule Sake.UI do
   end
 
   defp build_spec(module, opts) do
-    %Sake.Resource.Spec{
-      module: module,
-      uri: uri!(module, opts[:uri]),
-      name: opts[:name] || Sake.Tool.default_name(module),
-      title: opts[:title],
-      description: opts[:description],
-      mime_type: @mime_type,
-      icons: opts[:icons] || [],
-      scopes: List.wrap(opts[:scope]),
-      ttl: opts[:ttl],
-      meta: meta(module, opts),
-      ui: true
+    %{
+      @spec_defaults
+      | module: module,
+        uri: uri!(module, opts[:uri]),
+        name: opts[:name] || Sake.Tool.default_name(module),
+        title: opts[:title],
+        description: opts[:description],
+        mime_type: @mime_type,
+        icons: opts[:icons] || [],
+        scopes: List.wrap(opts[:scope]),
+        ttl: opts[:ttl],
+        meta: meta(module, opts),
+        ui: true
     }
   end
 

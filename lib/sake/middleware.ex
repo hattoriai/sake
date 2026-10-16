@@ -41,9 +41,14 @@ defmodule Sake.Middleware do
 
   ## Events
 
-  Every payload has `:server` (the server module), `:method` (the
-  JSON-RPC method), `:ctx` (the request's `Sake.Context`, with the
-  principal in `ctx.scope`) and `:assigns`.
+  Every payload has `:server` (the server module whose plugs run),
+  `:method` (the JSON-RPC method), `:ctx` (the request's `Sake.Context`,
+  with the principal in `ctx.scope`) and `:assigns`.
+
+  A server mounted in another (`Sake.Server.mount/2`) keeps its
+  middleware around its own components, inside the parent's, and its
+  plugs see the components by the names it gave them; see
+  `guides/composing.md`.
 
   | Event | Runs | Also in the payload | A plug may change |
   |---|---|---|---|

@@ -295,7 +295,7 @@ defmodule Sake.Test.Endpoint do
         %{"params" => params} = wire(%{"params" => params})
 
         {:ok, :accepted, _session} =
-          post(session, Transport.answer(session, request_id, method, params), [])
+          post(session, answer(session, task, request_id, method, params), [])
 
         loop(session, task)
 
@@ -310,6 +310,17 @@ defmodule Sake.Test.Endpoint do
            "message" => "The request failed: #{inspect(reason)}"
          }}
     end
+  end
+
+  # An answering function that throws gives up on the call, as on HTTP:
+  # the handler is stopped, as a dropped stream stops it, and the throw
+  # carries on (see `Sake.Client.Transport`).
+  defp answer(session, task, request_id, method, params) do
+    Transport.answer(session, request_id, method, params)
+  catch
+    :throw, value ->
+      Task.shutdown(task, :brutal_kill)
+      throw(value)
   end
 
   defp notify(session, notification) do

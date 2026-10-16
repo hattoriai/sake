@@ -44,7 +44,15 @@ defmodule Sake.Tool do
   @name_re ~r/^[A-Za-z0-9_.\-]{1,128}$/
 
   defmodule Spec do
-    @moduledoc "The compiled definition of a tool."
+    @moduledoc """
+    The compiled definition of a tool.
+
+    `mount` is `nil` for a tool the server declares itself, and
+    `{server, prefix, spec}` for one it mounted (`Sake.Server.mount/2`):
+    the server it came from, the mount's prefix, and the spec as that
+    server has it. `proxy` is the `Sake.Proxy` whose upstream serves a
+    proxied tool; it has no `module`.
+    """
     @type t :: %__MODULE__{}
     defstruct [
       :module,
@@ -62,7 +70,9 @@ defmodule Sake.Tool do
       ttl: nil,
       task: nil,
       visibility: [:model, :app],
-      headers: %{}
+      headers: %{},
+      mount: nil,
+      proxy: nil
     ]
 
     @spec to_wire(t(), String.t()) :: map()

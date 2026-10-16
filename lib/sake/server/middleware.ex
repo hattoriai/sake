@@ -5,11 +5,19 @@ defmodule Sake.Server.Middleware do
   # `Sake.Test`) reaches the components through `Sake.Server.Dispatch` and
   # `Sake.Server.Legacy`, and those call here, so a plug runs the same way
   # whatever carried the request.
+  #
+  # A component of a mounted server (`Sake.Server.mount/2`) runs the
+  # parent's plugs and its own server's, each server's with the spec (and
+  # the URI) as that server knows it: the `before_` events from the
+  # outermost server in, the `after_` events from the innermost out, and
+  # `:after_list` each mounted server on its own components first. A
+  # mounted server's `:before_request` does not run: the request is the
+  # parent's.
 
   require Logger
 
   alias Sake.{Context, JSONRPC, Trace}
-  alias Sake.Server.{Dispatch, Results}
+  alias Sake.Server.{Dispatch, Mount, Results}
 
   # What Sake reads back from a payload, by event; every other key a plug
   # changes is ignored.
@@ -28,9 +36,16 @@ defmodule Sake.Server.Middleware do
   # this module so that no reason a plug gives can be mistaken for it.
   @failed __MODULE__
 
-  @doc "Whether the server declares middleware for any of `events`."
+  # The events that run from the innermost server out.
+  @after_events [:after_list, :after_call, :after_read, :after_get]
+
+  @doc "Whether the server, or a server it mounts, declares middleware for any of `events`."
   @spec any?(module(), [Sake.Middleware.event()]) :: boolean()
-  def any?(server, events), do: Enum.any?(events, &(pipeline(server, &1) != []))
+  def any?(server, events) do
+    Enum.any?(Mount.tree(server), fn {server, _prefixes} ->
+      Enum.any?(events, &(pipeline(server, &1) != []))
+    end)
+  end
 
   defp pipeline(server, event), do: Map.get(server.__sake__(:middleware), event, [])
 
@@ -40,7 +55,7 @@ defmodule Sake.Server.Middleware do
   """
   @spec before_request(map(), Context.t()) :: {:ok, Context.t()} | {:halt, term()}
   def before_request(params, ctx) do
-    case run(:before_request, %{params: params}, ctx) do
+    case run(ctx.server, :before_request, %{params: params}, ctx) do
       {:cont, payload} -> {:ok, %{ctx | assigns: payload.assigns}}
       {:halt, reason} -> {:halt, reason}
     end
@@ -53,7 +68,7 @@ defmodule Sake.Server.Middleware do
   @spec before(Sake.Middleware.event(), map(), atom(), Context.t()) ::
           {:ok, term(), Context.t()} | {:halt, term()}
   def before(event, payload, key, ctx) do
-    case run(event, payload, ctx) do
+    case run_layers(event, payload, ctx) do
       {:cont, payload} -> {:ok, Map.fetch!(payload, key), %{ctx | assigns: payload.assigns}}
       {:halt, reason} -> {:halt, reason}
     end
@@ -63,7 +78,7 @@ defmodule Sake.Server.Middleware do
   @spec after_result(Sake.Middleware.event(), map(), Context.t()) ::
           {:ok, map()} | {:halt, term()}
   def after_result(event, payload, ctx) do
-    case run(event, payload, ctx) do
+    case run_layers(event, payload, ctx) do
       {:cont, payload} -> {:ok, payload.result}
       {:halt, reason} -> {:halt, reason}
     end
@@ -77,13 +92,51 @@ defmodule Sake.Server.Middleware do
   @spec filter(:tools | :resources | :prompts, [struct()], Context.t()) ::
           {:ok, [struct()]} | {:halt, term()}
   def filter(kind, specs, ctx) do
-    if pipeline(ctx.server, :after_list) == [],
-      do: {:ok, specs},
-      else: run_filter(kind, specs, ctx)
+    if any?(ctx.server, [:after_list]),
+      do: filter(ctx.server, kind, specs, ctx),
+      else: {:ok, specs}
   end
 
-  defp run_filter(kind, specs, ctx) do
-    case run(:after_list, %{kind: kind, items: specs}, ctx) do
+  # Each mounted server's plugs see its own components, as it knows them,
+  # before the server's plugs see what they let through.
+  defp filter(server, kind, specs, ctx) do
+    with {:ok, kept} <- filter_mounted(kind, specs, ctx) do
+      specs = Enum.filter(specs, &MapSet.member?(kept, &1))
+
+      if pipeline(server, :after_list) == [],
+        do: {:ok, specs},
+        else: run_filter(server, kind, specs, ctx)
+    end
+  end
+
+  defp filter_mounted(kind, specs, ctx) do
+    specs
+    |> Enum.group_by(&mounted_from/1)
+    |> Enum.reduce_while({:ok, MapSet.new()}, fn {from, group}, {:ok, kept} ->
+      case kept(from, kind, group, ctx) do
+        {:ok, group} -> {:cont, {:ok, MapSet.union(kept, MapSet.new(group))}}
+        {:halt, reason} -> {:halt, {:halt, reason}}
+      end
+    end)
+  end
+
+  # The components of one mounted server that its own plugs let through.
+  defp kept(nil, _kind, own, _ctx), do: {:ok, own}
+
+  defp kept({server, _prefix}, kind, outer, ctx) do
+    inner = Enum.map(outer, fn %{mount: {_, _, spec}} -> spec end)
+
+    with {:ok, survivors} <- filter(server, kind, inner, ctx) do
+      keys = MapSet.new(survivors, &key/1)
+      {:ok, Enum.filter(outer, fn %{mount: {_, _, spec}} -> MapSet.member?(keys, key(spec)) end)}
+    end
+  end
+
+  defp mounted_from(%{mount: {server, prefix, _spec}}), do: {server, prefix}
+  defp mounted_from(_spec), do: nil
+
+  defp run_filter(server, kind, specs, ctx) do
+    case run(server, :after_list, %{kind: kind, items: specs}, ctx) do
       {:cont, %{items: items}} ->
         offered = MapSet.new(specs, &key/1)
         {:ok, Enum.filter(items, &(is_struct(&1) and MapSet.member?(offered, key(&1))))}
@@ -184,14 +237,57 @@ defmodule Sake.Server.Middleware do
 
   # ---- the pipeline
 
-  defp run(event, payload, ctx) do
-    case pipeline(ctx.server, event) do
+  # An event of one component: the server's plugs, then (or, for an
+  # `after_` event, first) those of every server the component was
+  # mounted from, each with the component as that server declared it.
+  defp run_layers(event, payload, ctx) do
+    layers = layers(ctx.server, payload)
+    layers = if event in @after_events, do: Enum.reverse(layers), else: layers
+
+    Enum.reduce_while(layers, {:cont, payload}, fn {server, overrides}, {:cont, payload} ->
+      case run(server, event, Map.merge(payload, overrides), ctx) do
+        {:cont, payload} -> {:cont, {:cont, payload}}
+        {:halt, reason} -> {:halt, {:halt, reason}}
+      end
+    end)
+  end
+
+  defp layers(server, payload) do
+    case Enum.find([:tool, :resource, :prompt], &Map.has_key?(payload, &1)) do
+      nil ->
+        [{server, %{}}]
+
+      key ->
+        spec = Map.fetch!(payload, key)
+        [{server, overrides(key, spec, payload[:uri])} | inner_layers(key, spec, payload[:uri])]
+    end
+  end
+
+  defp inner_layers(key, %{mount: {server, prefix, inner}}, uri) do
+    uri = uri && inner_uri(prefix, uri)
+    [{server, overrides(key, inner, uri)} | inner_layers(key, inner, uri)]
+  end
+
+  defp inner_layers(_key, _spec, _uri), do: []
+
+  defp inner_uri(prefix, uri) do
+    case Mount.unuri(prefix, uri) do
+      {:ok, uri} -> uri
+      :error -> uri
+    end
+  end
+
+  defp overrides(key, spec, nil), do: %{key => spec}
+  defp overrides(key, spec, uri), do: %{key => spec, uri: uri}
+
+  defp run(server, event, payload, ctx) do
+    case pipeline(server, event) do
       [] ->
         {:cont, Map.put_new(payload, :assigns, ctx.assigns)}
 
       plugs ->
-        base = %{server: ctx.server, method: ctx.method, ctx: ctx, assigns: ctx.assigns}
-        run_plugs(plugs, event, Map.merge(base, payload))
+        base = %{method: ctx.method, ctx: ctx, assigns: ctx.assigns}
+        run_plugs(plugs, event, base |> Map.merge(payload) |> Map.put(:server, server))
     end
   end
 

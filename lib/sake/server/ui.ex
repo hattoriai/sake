@@ -11,10 +11,13 @@ defmodule Sake.Server.UI do
 
   @default_visibility [:model, :app]
 
-  @doc "Adds the extension to the server's `extensions` when it has a UI."
+  @doc """
+  Adds the extension to the server's `extensions` when it has a UI, or a
+  proxy, whose upstream's apps it passes on.
+  """
   @spec extensions(map(), module()) :: map()
   def extensions(ext, server) do
-    if Enum.any?(server.__sake__(:resources), & &1.ui),
+    if Sake.Server.dynamic?(server) or Enum.any?(server.__sake__(:resources), & &1.ui),
       do: Map.put_new(ext, UI.extension(), %{}),
       else: ext
   end

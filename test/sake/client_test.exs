@@ -358,6 +358,54 @@ defmodule Sake.ClientTest do
     end
   end
 
+  test "request/4 hands back an input-required result and a task as the server sent them",
+       %{url: url} do
+    assert {:ok, session} = Client.connect(url, era: :modern, on_input: fn _, _ -> raise "no" end)
+
+    assert {:ok, %{"resultType" => "input_required", "inputRequests" => %{"who" => _}} = asked,
+            session} =
+             Client.request(session, "tools/call", %{"name" => "confirm", "arguments" => %{}})
+
+    retry = %{
+      "name" => "confirm",
+      "arguments" => %{},
+      "requestState" => asked["requestState"],
+      "inputResponses" => %{"who" => %{"action" => "accept", "content" => %{"name" => "Rui"}}}
+    }
+
+    assert {:ok, %{"content" => [%{"text" => "Hello, Rui!"}]}, session} =
+             Client.request(session, "tools/call", retry)
+
+    assert {:ok, %{"resultType" => "task", "taskId" => id}, session} =
+             Client.request(session, "tools/call", %{"name" => "export", "arguments" => %{}})
+
+    assert {:ok, session} = Client.cancel_task(session, id)
+    assert :ok = Client.close(session)
+  end
+
+  for transport <- [:http, :stdio, :local] do
+    test "an answering function may throw to abandon a legacy call (#{transport})", %{url: url} do
+      target =
+        case unquote(transport) do
+          :http -> url
+          :stdio -> SakeTest.StdioScript.server()
+          :local -> {:local, Sake.Test.Endpoint.new(SakeDev.Server, [])}
+        end
+
+      on_input = fn _requests, _session -> throw(:abandoned) end
+      assert {:ok, session} = Client.connect(target, era: :legacy, on_input: on_input)
+
+      assert :abandoned = catch_throw(Client.call_tool(session, "confirm", %{}))
+
+      # The session carries on: the abandoned call's answer never turns up
+      # as another's.
+      assert {:ok, %{text: "after"}, session} =
+               Client.call_tool(session, "echo", %{"text" => "after"})
+
+      assert :ok = Client.close(session)
+    end
+  end
+
   test "log_level: and set_log_level/2 ask for log messages, on both eras" do
     url = HTTP.start(__MODULE__.ConformanceRouter) <> "/mcp"
     parent = self()

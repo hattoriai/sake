@@ -151,6 +151,41 @@ First release.
   `[:sake, :middleware, :halt]` and mark the request's span. The
   development server logs its tool calls with one. See
   `guides/middleware.md`.
+- Composing servers: `mount MyApp.MCP.Billing, prefix: "billing", scope:
+  "billing"` makes another `Sake.Server`'s tools, resources and prompts
+  the server's own, at any depth. Names take the prefix and an underscore
+  (`billing_create_invoice`), URIs take it after the scheme
+  (`invoice://billing/{id}`, `ui://billing/board`, with the linking
+  tool's `_meta.ui` renamed too); names are checked for duplicates
+  across all mounted servers at compile time. Instructions, scopes,
+  extensions and capabilities merge; a mounted server's `ttl` bounds its
+  components. Its middleware still runs around its components, inside
+  the parent's (outermost first before a call, innermost first after
+  it), and sees them by the names it gave them; its components see
+  their own server in `ctx.server`, and its broadcasts reach the
+  parent's clients with renamed URIs. See `guides/composing.md`.
+- `Sake.Proxy`: another MCP server's tools, resources and prompts,
+  served (or mounted) as the server's own and forwarded with
+  `Sake.Client`, over HTTP or to a stdio subprocess, to and from either
+  era. Upstream sessions per principal and credential, with a fixed
+  token, the client's own authorization, or a `credentials/1` callback
+  that lets each user act as themselves upstream; a refused session is
+  opened again once. `only`/`except` filters, a `scope` and a per-name
+  `scopes` map, and middleware decide what each principal sees. Lists
+  cached by the upstream's `ttlMs`; progress and log messages, and
+  elicitation, sampling and roots requests forwarded in every era
+  combination, with the upstream's `requestState` carried inside the
+  proxy's own, signed and bound to the principal; an upstream's task
+  re-issued as the proxy's own; list changes and subscribed resource
+  updates followed upstream and broadcast, renamed under a mount's
+  prefix. Upstream names never shadow local ones, and upstream
+  definitions are validated. See `guides/composing.md`.
+- `Sake.Client.request/4` returns a result as the server sent it (an
+  input-required result, a task), and `Sake.Client.listen/3` follows a
+  server's list changes and resource updates on both eras. An answering
+  function may throw to abandon a legacy call; a stdio session's
+  requests go out under ids of the transport's own. A legacy GET stream
+  sends a comment as soon as it opens.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the

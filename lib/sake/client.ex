@@ -256,7 +256,7 @@ defmodule Sake.Client do
     do: legacy_connect(session, legacy_version)
 
   defp modern_connect(session, opts \\ []) do
-    case request(session, "server/discover", %{}, opts) do
+    case rpc(session, "server/discover", %{}, opts) do
       {:ok, result, session} ->
         supported = result["supportedVersions"] || [Protocol.modern()]
 
@@ -290,7 +290,7 @@ defmodule Sake.Client do
       "clientInfo" => session.client_info
     }
 
-    with {:ok, result, session} <- request(session, "initialize", params),
+    with {:ok, result, session} <- rpc(session, "initialize", params),
          {:ok, :accepted, session} <-
            post(session, JSONRPC.notification("notifications/initialized"), []),
          session = %{
@@ -314,18 +314,18 @@ defmodule Sake.Client do
 
   defp initial_log_level(session) do
     with {:ok, _, session} <-
-           request(session, "logging/setLevel", %{"level" => session.log_level}),
+           rpc(session, "logging/setLevel", %{"level" => session.log_level}),
          do: {:ok, session}
   end
 
   # ---- calls
 
   @spec discover(Session.t()) :: {:ok, map(), Session.t()} | {:error, term(), Session.t()}
-  def discover(session), do: request(session, "server/discover", %{})
+  def discover(session), do: rpc(session, "server/discover", %{})
 
   @spec ping(Session.t()) :: {:ok, Session.t()} | {:error, term(), Session.t()}
   def ping(%Session{era: :legacy} = session) do
-    with {:ok, _, session} <- request(session, "ping", %{}), do: {:ok, session}
+    with {:ok, _, session} <- rpc(session, "ping", %{}), do: {:ok, session}
   end
 
   def ping(session) do
@@ -343,7 +343,7 @@ defmodule Sake.Client do
   def set_log_level(%Session{era: :legacy} = session, level) do
     level = to_string(level)
 
-    with {:ok, _, session} <- request(session, "logging/setLevel", %{"level" => level}),
+    with {:ok, _, session} <- rpc(session, "logging/setLevel", %{"level" => level}),
          do: {:ok, %{session | log_level: level}}
   end
 
@@ -402,25 +402,25 @@ defmodule Sake.Client do
   @doc "The task as the server has it now: its status, and `inputRequests`, `result` or `error`."
   @spec get_task(Session.t(), String.t()) ::
           {:ok, map(), Session.t()} | {:error, term(), Session.t()}
-  def get_task(session, task_id), do: request(session, "tasks/get", %{"taskId" => task_id})
+  def get_task(session, task_id), do: rpc(session, "tasks/get", %{"taskId" => task_id})
 
   @doc "Answers some or all of a task's `inputRequests`, by key."
   @spec update_task(Session.t(), String.t(), map()) ::
           {:ok, Session.t()} | {:error, term(), Session.t()}
   def update_task(session, task_id, responses) do
     params = %{"taskId" => task_id, "inputResponses" => responses}
-    with {:ok, _, session} <- request(session, "tasks/update", params), do: {:ok, session}
+    with {:ok, _, session} <- rpc(session, "tasks/update", params), do: {:ok, session}
   end
 
   @doc "Asks the server to cancel a task. Cancellation is cooperative: the task may still end otherwise."
   @spec cancel_task(Session.t(), String.t()) :: {:ok, Session.t()} | {:error, term(), Session.t()}
   def cancel_task(session, task_id) do
-    with {:ok, _, session} <- request(session, "tasks/cancel", %{"taskId" => task_id}),
+    with {:ok, _, session} <- rpc(session, "tasks/cancel", %{"taskId" => task_id}),
          do: {:ok, session}
   end
 
   defp tools_call(session, name, arguments) do
-    request(session, "tools/call", %{"name" => name, "arguments" => arguments},
+    rpc(session, "tools/call", %{"name" => name, "arguments" => arguments},
       tool: session.tools[name]
     )
   end
@@ -454,7 +454,7 @@ defmodule Sake.Client do
   @spec read_resource(Session.t(), String.t()) ::
           {:ok, [Content.t()], Session.t()} | {:error, term(), Session.t()}
   def read_resource(session, uri) do
-    with {:ok, result, session} <- request(session, "resources/read", %{"uri" => uri}) do
+    with {:ok, result, session} <- rpc(session, "resources/read", %{"uri" => uri}) do
       # The `_meta` of each contents item (an MCP App's CSP, say) becomes
       # the embedded resource's.
       contents =
@@ -475,7 +475,7 @@ defmodule Sake.Client do
   @spec get_prompt(Session.t(), String.t(), map()) ::
           {:ok, map(), Session.t()} | {:error, term(), Session.t()}
   def get_prompt(session, name, arguments),
-    do: request(session, "prompts/get", %{"name" => name, "arguments" => arguments})
+    do: rpc(session, "prompts/get", %{"name" => name, "arguments" => arguments})
 
   @spec complete(
           Session.t(),
@@ -491,12 +491,79 @@ defmodule Sake.Client do
       end
 
     with {:ok, result, session} <-
-           request(session, "completion/complete", %{
+           rpc(session, "completion/complete", %{
              "ref" => ref,
              "argument" => %{"name" => argument, "value" => value}
            }) do
       {:ok, result["completion"] || %{}, session}
     end
+  end
+
+  @doc """
+  Sends one request and returns its result as the server sent it. Unlike
+  the calls above, an input-required result (`"resultType" =>
+  "input_required"`) or a task (`"task"`) comes back as it is, to answer
+  or follow yourself: `Sake.Proxy` forwards both this way. A question a
+  legacy server asks during the call is still answered with the
+  session's `on_input:`, `sampling:` and `roots:`. Options: `tool:` (the
+  `Sake.Tool.Spec` of a `tools/call`, for its `Mcp-Param-*` headers) and
+  `timeout:` (ms).
+  """
+  @spec request(Session.t(), String.t(), map(), keyword()) ::
+          {:ok, map(), Session.t()} | {:error, term(), Session.t()}
+  def request(session, method, params, opts \\ []) do
+    traced(session, method, params, fn ->
+      exchange(session, method, params, opts, @max_retries)
+    end)
+  end
+
+  @doc """
+  Follows the server's own notifications until it ends the stream:
+  `fun` gets the method and params of each list change
+  (`"notifications/tools/list_changed"` and the like) and resource update
+  (`"notifications/resources/updated"`). `filter` names what to follow,
+  as a `subscriptions/listen` request's `notifications` does:
+  `"toolsListChanged"`, `"promptsListChanged"` and
+  `"resourcesListChanged"` (`true`), and `"resourceSubscriptions"` (a list
+  of URIs).
+
+  On the modern protocol this is a `subscriptions/listen` request; on a
+  legacy session, the session's GET stream (over stdio, the notifications
+  the server sends between calls), with a `resources/subscribe` for each
+  URI, sent before the stream opens and again once it is open (a server
+  may keep the session's subscriptions on its stream, as Sake does). It
+  blocks until the stream ends, so call it from a process of its own, and
+  stop that process to stop listening. Returns `{:ok, session}` when the
+  server ended the stream.
+  """
+  @spec listen(Session.t(), map(), (String.t(), map() -> any())) ::
+          {:ok, Session.t()} | {:error, term(), Session.t()}
+  def listen(%Session{era: :legacy} = session, filter, fun) do
+    uris = filter["resourceSubscriptions"] || []
+
+    with {:ok, session} <- subscribe_all(session, uris) do
+      opened = fn -> subscribe_all(session, uris) end
+
+      case Transport.listen(session, fun, opened) do
+        :ok -> {:ok, session}
+        {:error, reason} -> {:error, reason, session}
+      end
+    end
+  end
+
+  def listen(session, filter, fun) do
+    params = %{"notifications" => filter}
+
+    with {:ok, _result, session} <-
+           rpc(%{session | on_notification: fun}, "subscriptions/listen", params, timeout: 60_000),
+         do: {:ok, session}
+  end
+
+  defp subscribe_all(session, []), do: {:ok, session}
+
+  defp subscribe_all(session, [uri | rest]) do
+    with {:ok, _, session} <- rpc(session, "resources/subscribe", %{"uri" => uri}),
+         do: subscribe_all(session, rest)
   end
 
   @spec close(Session.t()) :: :ok
@@ -517,7 +584,7 @@ defmodule Sake.Client do
   defp paged(session, method, key, cursor \\ nil, acc \\ [], page \\ 0) do
     params = if cursor, do: %{"cursor" => cursor}, else: %{}
 
-    with {:ok, result, session} <- request(session, method, params) do
+    with {:ok, result, session} <- rpc(session, method, params) do
       items = acc ++ List.wrap(result[key])
       next_page(result["nextCursor"], cursor, page, session, method, key, items)
     end
@@ -535,7 +602,7 @@ defmodule Sake.Client do
   defp next_page(next, _cursor, page, session, method, key, items),
     do: paged(session, method, key, next, items, page + 1)
 
-  defp request(session, method, params, opts \\ []),
+  defp rpc(session, method, params, opts \\ []),
     do: traced(session, method, params, fn -> exchange(session, method, params, opts) end)
 
   # Each request has its span (`Sake.Trace.client/4`) and its telemetry
@@ -752,7 +819,12 @@ defmodule Sake.Client do
 
   # ---- tool definitions from the wire
 
-  defp tool_spec(%{"name" => name} = t) do
+  @doc false
+  # A tool definition from the wire as a `Sake.Tool.Spec`, or `nil` for one
+  # that is not a tool or has unusable `x-mcp-header`s. Shared with
+  # `Sake.Proxy`.
+  @spec tool_spec(term()) :: Sake.Tool.Spec.t() | nil
+  def tool_spec(%{"name" => name} = t) when is_binary(name) do
     schema = t["inputSchema"] || %{"type" => "object"}
 
     case check_headers(schema, Schema.header_entries(schema)) do
@@ -781,7 +853,7 @@ defmodule Sake.Client do
     end
   end
 
-  defp tool_spec(_), do: nil
+  def tool_spec(_), do: nil
 
   # `_meta.ui.resourceUri`, or the extension's deprecated flat key.
   defp ui_uri(%{"ui" => %{"resourceUri" => uri}}) when is_binary(uri), do: uri

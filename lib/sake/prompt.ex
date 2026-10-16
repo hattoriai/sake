@@ -15,7 +15,15 @@ defmodule Sake.Prompt do
   @optional_callbacks complete: 3
 
   defmodule Spec do
-    @moduledoc "The compiled definition of a prompt."
+    @moduledoc """
+    The compiled definition of a prompt.
+
+    `mount` is `nil` for a prompt the server declares itself, and
+    `{server, prefix, spec}` for one it mounted (`Sake.Server.mount/2`):
+    the server it came from, the mount's prefix, and the spec as that
+    server has it. `proxy` is the `Sake.Proxy` whose upstream serves a
+    proxied prompt; it has no `module`.
+    """
     @type t :: %__MODULE__{}
     defstruct [
       :module,
@@ -26,7 +34,9 @@ defmodule Sake.Prompt do
       icons: [],
       scopes: [],
       args: [],
-      ttl: nil
+      ttl: nil,
+      mount: nil,
+      proxy: nil
     ]
 
     @spec to_wire(t(), String.t()) :: map()

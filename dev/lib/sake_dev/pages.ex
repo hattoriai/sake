@@ -23,6 +23,7 @@ defmodule SakeDev.Pages do
       <li><code>/acme/mcp</code> — protected, tenant "acme"</li>
       <li><code>/beta/mcp</code> — protected, tenant "beta"</li>
       <li><code>/open/mcp</code> — no authorization (a browser Origin still needs to be allowed on purpose)</li>
+      <li><code>/gateway/mcp</code> — protected: the example server under <code>dev_</code>, and <code>/open/mcp</code> proxied under <code>open_</code></li>
     </ul>
     <h2>Try it</h2>
     <pre>claude mcp add --transport http sake-dev http://localhost:4000/acme/mcp</pre>

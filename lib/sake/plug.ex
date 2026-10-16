@@ -267,27 +267,26 @@ defmodule Sake.Plug do
     end
   end
 
+  # The tool's spec, for its `Mcp-Param-*` headers, is looked up with the
+  # request's context: a proxied tool is one the principal's upstream lists.
   defp modern_request(conn, opts, {:request, id, method, params} = parsed, version, meta) do
-    spec = tool_spec(opts.server, method, params)
+    ctx = modern_context(conn, opts, version, meta)
+    spec = tool_spec(opts.server, method, params, ctx)
 
     case Headers.validate(conn, parsed, spec) do
-      {:error, message} ->
-        send_error(conn, 400, id, JSONRPC.code(:header_mismatch), message)
-
-      :ok ->
-        ctx = modern_context(conn, opts, version, meta)
-        respond(conn, opts, parsed, ctx, &Dispatch.handle/3)
+      {:error, message} -> send_error(conn, 400, id, JSONRPC.code(:header_mismatch), message)
+      :ok -> respond(conn, opts, parsed, ctx, &Dispatch.handle/3)
     end
   end
 
-  defp tool_spec(server, "tools/call", params) do
-    case Sake.Server.tool(server, params["name"] || "") do
+  defp tool_spec(server, "tools/call", params, ctx) do
+    case Sake.Server.tool(server, params["name"] || "", ctx) do
       {:ok, spec} -> spec
       :error -> nil
     end
   end
 
-  defp tool_spec(_server, _method, _params), do: nil
+  defp tool_spec(_server, _method, _params, _ctx), do: nil
 
   defp modern_context(conn, opts, version, meta) do
     Context.new(
