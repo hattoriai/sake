@@ -34,6 +34,14 @@ defmodule Sake do
   servers whose tokens endpoints take (see `Sake.Auth.External`); without
   either only the stream registry and tasks run. `tasks:` takes the
   `Sake.Tasks` options (`false` turns tasks off).
+
+  `replay:` is the `Sake.Auth.Store` that remembers the single-use JWTs
+  already seen (client assertions, JWT grants, DPoP proofs), as
+  `{module, options}`; by default the `auth:` store. On several nodes it
+  must be shared, `{Sake.Auth.Store.Ecto, repo: MyApp.Repo}`, for a JWT
+  used on one node to be refused on the others; a deployment with only
+  `external_auth:` and DPoP sets it to have that. Without either, each
+  node remembers on its own.
   """
   def child_spec(opts) do
     %{id: __MODULE__, type: :supervisor, start: {__MODULE__, :start_link, [opts]}}
@@ -53,6 +61,7 @@ defmodule Sake do
       end
 
     external = Sake.Auth.External.new_all(opts[:external_auth] || [], auth)
+    Sake.Auth.Replay.configure(replay_store(opts[:replay], auth))
 
     :persistent_term.put({Sake, :auth}, auth)
     :persistent_term.put({Sake, :external_auth}, external)
@@ -75,6 +84,13 @@ defmodule Sake do
   end
 
   defp store_children(nil), do: []
+
+  defp replay_store({module, opts}, _auth), do: {module, module.init(opts)}
+
+  defp replay_store(nil, %Sake.Auth.Config{store: {module, _}, store_state: state}),
+    do: {module, state}
+
+  defp replay_store(nil, nil), do: nil
 
   defp tasks_children(false), do: []
   defp tasks_children(opts), do: [{Sake.Tasks, opts}]

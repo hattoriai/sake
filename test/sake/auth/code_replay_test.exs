@@ -44,6 +44,8 @@ defmodule Sake.Auth.CodeReplayTest.PauseStore do
   def revoke_token({m, s}, id), do: m.revoke_token(s, id)
   def revoke_family({m, s}, family_id), do: m.revoke_family(s, family_id)
   def tokens_for_subject({m, s}, subject_id), do: m.tokens_for_subject(s, subject_id)
+  def once({m, s}, key, expires_at), do: m.once(s, key, expires_at)
+  def prune_once({m, s}, now), do: m.prune_once(s, now)
   def put_consent({m, s}, c), do: m.put_consent(s, c)
 
   def get_consent({m, s}, sub, client_id, resource),

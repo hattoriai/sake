@@ -26,6 +26,17 @@ defmodule Sake.Auth.StoreEctoTest do
     assert :error = mod.get_token(state, :access, a.hash)
   end
 
+  test "prune_once forgets the keys that expired, so their row is free again", %{config: config} do
+    {mod, state} = store(config)
+    now = System.system_time(:second)
+
+    assert :ok = mod.once(state, "old", now - 10)
+    assert :ok = mod.once(state, "live", now + 60)
+    assert :ok = mod.prune_once(state, now)
+    assert :ok = mod.once(state, "old", now + 60)
+    assert :replayed = mod.once(state, "live", now + 60)
+  end
+
   test "put_token never resurrects a revoked or consumed token", %{config: config} do
     {mod, state} = store(config)
 

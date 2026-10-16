@@ -10,6 +10,7 @@ defmodule SakeTest.StoreCases do
       unquote(record_cases())
       unquote(code_replay_cases())
       unquote(consent_and_prune_cases())
+      unquote(once_cases())
     end
   end
 
@@ -197,6 +198,23 @@ defmodule SakeTest.StoreCases do
 
         assert {:ok, %TokenRecord{revoked_at: %DateTime{}}} =
                  mod.get_token(state, :refresh, r.hash)
+      end
+    end
+  end
+
+  defp once_cases do
+    quote do
+      test "once records a key until it expires", %{config: config} do
+        {mod, state} = store(config)
+        now = System.system_time(:second)
+
+        assert :ok = mod.once(state, "k1", now + 60)
+        assert :replayed = mod.once(state, "k1", now + 60)
+        assert :ok = mod.once(state, "k2", now + 60)
+
+        assert :ok = mod.once(state, "old", now - 10)
+        assert :ok = mod.prune_once(state, now)
+        assert :replayed = mod.once(state, "k1", now + 60)
       end
     end
   end

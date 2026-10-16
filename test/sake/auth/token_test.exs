@@ -34,6 +34,8 @@ defmodule Sake.Auth.TokenTest.RaceStore do
   def revoke_token(s, id), do: ETS.revoke_token(s, id)
   def revoke_family(s, family_id), do: ETS.revoke_family(s, family_id)
   def tokens_for_subject(s, subject_id), do: ETS.tokens_for_subject(s, subject_id)
+  def once(s, key, expires_at), do: ETS.once(s, key, expires_at)
+  def prune_once(s, now), do: ETS.prune_once(s, now)
   def put_consent(s, c), do: ETS.put_consent(s, c)
   def get_consent(s, sub, client_id, resource), do: ETS.get_consent(s, sub, client_id, resource)
 
