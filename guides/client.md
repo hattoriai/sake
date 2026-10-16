@@ -21,7 +21,7 @@ returning `{:ok, session}` (no prior session to update).
 ## Calls
 
 `list_tools/1`, `call_tool/3`, `call_tool_async/3`, `get_task/2`,
-`update_task/3`, `cancel_task/2`, `list_resources/1`,
+`update_task/3`, `cancel_task/2`, `set_log_level/2`, `list_resources/1`,
 `list_resource_templates/1`, `read_resource/2`, `list_prompts/1`,
 `get_prompt/3`, `complete/4` (`{:prompt, name}` or `{:resource, uri}`, an
 argument name, and the partial value), `ping/1`, `discover/1` (the modern
@@ -168,6 +168,12 @@ The function sees every notification the server sends during a call: its
 progress (the client then asks for progress on every request, with the
 request's id as the token) and log messages. Its return value is
 ignored, and it runs in the calling process while the call waits.
+
+Log messages come only from a server that was asked for them: pass
+`log_level:` (`"debug"` to `"emergency"`) to `connect/2`, or change it
+later with `set_log_level/2`. On the modern protocol the level travels in
+every request's `_meta`; on a legacy session the client sends
+`logging/setLevel`, right after the handshake for `log_level:`.
 
 ## Authorization
 

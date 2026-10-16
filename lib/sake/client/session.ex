@@ -13,6 +13,7 @@ defmodule Sake.Client.Session do
     :sampling,
     :roots,
     :on_notification,
+    :log_level,
     :stdio,
     :auth,
     headers: [],

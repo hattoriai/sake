@@ -13,7 +13,9 @@ defmodule Sake.Client do
   error} end`), `roots:` to share roots (a list of `%{"uri" => ...,
   "name" => ...}` maps, or a function of the session that returns one),
   `on_notification:` (a function of a method and its params) to see the
-  progress and log notifications of a call, and `auth:` to have the client
+  progress and log notifications of a call, `log_level:` (a level name
+  such as `"info"`) to have the server send log messages at or above it
+  (see `set_log_level/2`), and `auth:` to have the client
   run the MCP authorization flow itself on a 401 (see `Sake.Client.Auth`);
   without it, a 401 comes back as
   `{:error, {:unauthorized, %Sake.Client.Challenge{}}}`.
@@ -123,6 +125,7 @@ defmodule Sake.Client do
       sampling: opts[:sampling],
       roots: opts[:roots],
       on_notification: opts[:on_notification],
+      log_level: opts[:log_level] && to_string(opts[:log_level]),
       tasks: Keyword.get(opts, :tasks, true),
       task_timeout: opts[:task_timeout] || 300_000,
       # There is no HTTP authorization on stdio: the server takes its
@@ -281,19 +284,30 @@ defmodule Sake.Client do
 
     with {:ok, result, session} <- request(session, "initialize", params),
          {:ok, :accepted, session} <-
-           post(session, JSONRPC.notification("notifications/initialized"), []) do
-      {:ok,
-       %{
-         session
-         | revision: result["protocolVersion"],
-           server_capabilities: result["capabilities"] || %{},
-           server_info: result["serverInfo"],
-           instructions: result["instructions"]
-       }}
+           post(session, JSONRPC.notification("notifications/initialized"), []),
+         session = %{
+           session
+           | revision: result["protocolVersion"],
+             server_capabilities: result["capabilities"] || %{},
+             server_info: result["serverInfo"],
+             instructions: result["instructions"]
+         },
+         {:ok, session} <- initial_log_level(session) do
+      {:ok, session}
     else
       {:error, reason, _} -> {:error, reason}
       {:ok, _other, _} -> {:error, :bad_initialized_ack}
     end
+  end
+
+  # A legacy session's log level belongs to the session: the client sets
+  # it once the handshake is done.
+  defp initial_log_level(%Session{log_level: nil} = session), do: {:ok, session}
+
+  defp initial_log_level(session) do
+    with {:ok, _, session} <-
+           request(session, "logging/setLevel", %{"level" => session.log_level}),
+         do: {:ok, session}
   end
 
   # ---- calls
@@ -309,6 +323,23 @@ defmodule Sake.Client do
   def ping(session) do
     with {:ok, _, session} <- discover(session), do: {:ok, session}
   end
+
+  @doc """
+  Asks the server for log messages at `level` or above (`"debug"` to
+  `"emergency"`), which then reach `on_notification:` during a call. On
+  the modern protocol the level travels in every request's `_meta`; on a
+  legacy session the client sends `logging/setLevel`.
+  """
+  @spec set_log_level(Session.t(), String.t() | atom()) ::
+          {:ok, Session.t()} | {:error, term(), Session.t()}
+  def set_log_level(%Session{era: :legacy} = session, level) do
+    level = to_string(level)
+
+    with {:ok, _, session} <- request(session, "logging/setLevel", %{"level" => level}),
+         do: {:ok, %{session | log_level: level}}
+  end
+
+  def set_log_level(session, level), do: {:ok, %{session | log_level: to_string(level)}}
 
   @spec list_tools(Session.t()) ::
           {:ok, [Sake.Tool.Spec.t()], Session.t()} | {:error, term(), Session.t()}
@@ -622,11 +653,15 @@ defmodule Sake.Client do
     do: Map.update(params, "_meta", %{"progressToken" => id}, &Map.put(&1, "progressToken", id))
 
   defp meta(session) do
-    %{
+    meta = %{
       Protocol.meta(:protocol_version) => session.revision || Protocol.modern(),
       Protocol.meta(:client_info) => session.client_info,
       Protocol.meta(:client_capabilities) => modern_capabilities(session)
     }
+
+    if session.log_level,
+      do: Map.put(meta, Protocol.meta(:log_level), session.log_level),
+      else: meta
   end
 
   # The tasks extension is modern only, so it is declared per request

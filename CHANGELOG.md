@@ -71,7 +71,8 @@ First release.
   settings page and `Sake.Auth.prune/1` for expired rows.
 - `Sake.Client`: a functional client for both protocol eras, with era
   probing, elicitation via `on_input`, sampling and roots via `sampling:`
-  and `roots:`, tool calls followed through tasks (and
+  and `roots:`, log messages at `log_level:` (and `set_log_level/2`),
+  tool calls followed through tasks (and
   `call_tool_async/3`, `get_task/2`, `update_task/3`, `cancel_task/2`),
   MCP Apps via `ui: true`, and a parsed `WWW-Authenticate` challenge on a 401.
 - `Sake.Client.Auth`: with `auth:`, the client runs the MCP authorization
