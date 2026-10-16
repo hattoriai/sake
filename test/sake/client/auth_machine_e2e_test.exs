@@ -3,6 +3,14 @@ defmodule Sake.Client.AuthMachineE2ETest.IdP do
   # An enterprise identity provider: OpenID Connect metadata, its JWK Set,
   # and a token endpoint that exchanges an ID token (`id-token-<email>`)
   # for a real ID-JAG signed with its key, to the client the agent names.
+  #
+  # It takes SAML too (draft-ietf-oauth-identity-assertion-authz-grant
+  # §4.5): a base64url-encoded assertion whose NameID is the person's
+  # email is traded for a refresh token, which is then exchanged for the
+  # ID-JAG. A client that authenticates with a client_secret_jwt
+  # assertion has its HMAC checked against the agent's `:hmac_secret`.
+  # Every exchange is sent to the agent's `:test` process as
+  # `{:idp, subject_token_type, client_authentication}`.
   @behaviour Plug
   import Plug.Conn
 
@@ -13,57 +21,120 @@ defmodule Sake.Client.AuthMachineE2ETest.IdP do
 
   @impl true
   def call(conn, agent) do
-    %{key: key, base: base, client_id: client_id} = Agent.get(agent, & &1)
+    %{key: key, base: base} = Agent.get(agent, & &1)
 
     case {conn.method, conn.request_path} do
       {"GET", "/.well-known/openid-configuration"} ->
-        json(conn, %{
+        json(conn, 200, %{
           "issuer" => base,
           "token_endpoint" => base <> "/token",
-          "jwks_uri" => base <> "/jwks"
+          "jwks_uri" => base <> "/jwks",
+          "token_endpoint_auth_methods_supported" => Agent.get(agent, & &1.auth_methods)
         })
 
       {"GET", "/jwks"} ->
-        json(conn, %{"keys" => [Map.put(JWT.public_jwk(key), "kid", "idp-1")]})
+        json(conn, 200, %{"keys" => [Map.put(JWT.public_jwk(key), "kid", "idp-1")]})
 
       {"POST", "/token"} ->
         {:ok, body, conn} = read_body(conn)
         p = URI.decode_query(body)
-        "id-token-" <> email = p["subject_token"]
-        now = System.system_time(:second)
+        state = Agent.get(agent, & &1)
+        send(state.test, {:idp, p["subject_token_type"], client_auth(p, state)})
 
-        jag =
-          JWT.sign(
-            %{
-              "iss" => base,
-              "sub" => "idp|" <> email,
-              "email" => email,
-              "aud" => p["audience"],
-              "client_id" => client_id,
-              "resource" => p["resource"],
-              "scope" => "issues:read",
-              "jti" => Base.encode16(:crypto.strong_rand_bytes(8)),
-              "iat" => now,
-              "exp" => now + 300
-            },
-            key,
-            "ES256",
-            %{"typ" => "oauth-id-jag+jwt", "kid" => "idp-1"}
-          )
-
-        json(conn, %{
-          "access_token" => jag,
-          "issued_token_type" => "urn:ietf:params:oauth:token-type:id-jag",
-          "token_type" => "N_A"
-        })
+        if client_auth(p, state) == :bad_assertion,
+          do: json(conn, 401, %{"error" => "invalid_client"}),
+          else: exchange(conn, p, agent)
 
       _other ->
         send_resp(conn, 404, "")
     end
   end
 
-  defp json(conn, body) do
-    conn |> put_resp_content_type("application/json") |> send_resp(200, JSON.encode!(body))
+  defp exchange(
+         conn,
+         %{"subject_token_type" => "urn:ietf:params:oauth:token-type:saml2"} = p,
+         agent
+       ) do
+    xml = Base.url_decode64!(p["subject_token"], padding: false)
+    [_, email] = Regex.run(~r{<saml:NameID>([^<]+)</saml:NameID>}, xml)
+    refresh = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
+    Agent.update(agent, &put_in(&1, [:refresh, refresh], email))
+
+    json(conn, 200, %{
+      "access_token" => "N_A",
+      "refresh_token" => refresh,
+      "issued_token_type" => "urn:ietf:params:oauth:token-type:refresh_token",
+      "token_type" => "N_A",
+      "expires_in" => 3600
+    })
+  end
+
+  defp exchange(
+         conn,
+         %{"subject_token_type" => "urn:ietf:params:oauth:token-type:refresh_token"} = p,
+         agent
+       ) do
+    case Agent.get(agent, &get_in(&1, [:refresh, p["subject_token"]])) do
+      nil -> json(conn, 400, %{"error" => "invalid_grant"})
+      email -> id_jag(conn, email, p, agent)
+    end
+  end
+
+  defp exchange(conn, %{"subject_token" => "id-token-" <> email} = p, agent),
+    do: id_jag(conn, email, p, agent)
+
+  defp id_jag(conn, email, p, agent) do
+    %{key: key, base: base, client_id: client_id} = Agent.get(agent, & &1)
+    now = System.system_time(:second)
+
+    jag =
+      JWT.sign(
+        %{
+          "iss" => base,
+          "sub" => "idp|" <> email,
+          "email" => email,
+          "aud" => p["audience"],
+          "client_id" => client_id,
+          "resource" => p["resource"],
+          "scope" => "issues:read",
+          "jti" => Base.encode16(:crypto.strong_rand_bytes(8)),
+          "iat" => now,
+          "exp" => now + 300
+        },
+        key,
+        "ES256",
+        %{"typ" => "oauth-id-jag+jwt", "kid" => "idp-1"}
+      )
+
+    json(conn, 200, %{
+      "access_token" => jag,
+      "issued_token_type" => "urn:ietf:params:oauth:token-type:id-jag",
+      "token_type" => "N_A"
+    })
+  end
+
+  # A client_secret_jwt assertion: HS256 with the secret, the client as
+  # issuer and subject, this provider as the audience, unexpired.
+  defp client_auth(%{"client_assertion" => jwt}, %{hmac_secret: secret, base: base}) do
+    with [h, c, mac] <- String.split(jwt, "."),
+         %{"alg" => "HS256"} <- JSON.decode!(Base.url_decode64!(h, padding: false)),
+         true <-
+           Base.url_decode64!(mac, padding: false) ==
+             :crypto.mac(:hmac, :sha256, secret, h <> "." <> c),
+         %{"iss" => id, "sub" => id, "aud" => ^base, "exp" => exp} <-
+           JSON.decode!(Base.url_decode64!(c, padding: false)),
+         true <- exp > System.system_time(:second) do
+      :client_secret_jwt
+    else
+      _ -> :bad_assertion
+    end
+  end
+
+  defp client_auth(%{"client_secret" => _}, _state), do: :client_secret_post
+  defp client_auth(_params, _state), do: :other
+
+  defp json(conn, status, body) do
+    conn |> put_resp_content_type("application/json") |> send_resp(status, JSON.encode!(body))
   end
 end
 
@@ -82,7 +153,21 @@ defmodule Sake.Client.AuthMachineE2ETest do
 
   setup do
     {idp_key, _} = Keys.key(:ec)
-    {:ok, idp} = Agent.start_link(fn -> %{key: idp_key, base: nil, client_id: nil} end)
+    test = self()
+
+    {:ok, idp} =
+      Agent.start_link(fn ->
+        %{
+          key: idp_key,
+          base: nil,
+          client_id: nil,
+          test: test,
+          refresh: %{},
+          hmac_secret: nil,
+          auth_methods: ["client_secret_post"]
+        }
+      end)
+
     idp_base = HTTP.start({__MODULE__.IdP, idp})
     Agent.update(idp, &%{&1 | base: idp_base})
 
@@ -206,6 +291,61 @@ defmodule Sake.Client.AuthMachineE2ETest do
     auth = Keyword.put(auth, :id_token, "id-token-stranger@example.com")
 
     assert {:error, {:auth, {:token_failed, 400, %{"error" => "invalid_grant"}}}} =
+             Client.connect(ctx.url, auth: auth)
+  end
+
+  test "enterprise-managed with SAML: the IdP's refresh token, then an ID-JAG", ctx do
+    {:ok, client, nil} = Clients.create(ctx.config, %{name: "Agent", grant_types: [@jwt_bearer]})
+    hmac_secret = Base.url_encode64(:crypto.strong_rand_bytes(32))
+
+    # The provider takes the client's secret only as an HMAC key.
+    Agent.update(
+      ctx.idp,
+      &%{&1 | client_id: client.id, hmac_secret: hmac_secret, auth_methods: ["client_secret_jwt"]}
+    )
+
+    saml = fn email ->
+      Base.url_encode64(
+        ~s(<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion">) <>
+          "<saml:Subject><saml:NameID>#{email}</saml:NameID></saml:Subject></saml:Assertion>",
+        padding: false
+      )
+    end
+
+    auth = [
+      grant: :enterprise,
+      client_id: client.id,
+      saml_assertion: saml.("ana@example.com"),
+      idp: [issuer: ctx.idp_base, client_id: "agent-at-idp", client_secret: hmac_secret]
+    ]
+
+    assert {:ok, session} = Client.connect(ctx.url, auth: auth)
+    assert_received {:idp, "urn:ietf:params:oauth:token-type:saml2", :client_secret_jwt}
+    assert_received {:idp, "urn:ietf:params:oauth:token-type:refresh_token", :client_secret_jwt}
+
+    assert session.auth.token["scopes"] == ["issues:read"]
+    assert {:ok, %{text: "hi"}, session} = Client.call_tool(session, "echo", %{"text" => "hi"})
+
+    {module, state} = Sake.Auth.store(ctx.config)
+    assert [%{client_id: id, resource: resource}] = module.tokens_for_subject(state, "u1")
+    assert id == client.id and resource == ctx.url
+
+    # The token expires: a new ID-JAG comes from the kept refresh token,
+    # and the SAML assertion is not presented again.
+    session = put_in(session.auth.token["expires_at"], System.system_time(:second))
+    old = session.auth.token["access_token"]
+
+    assert {:ok, %{text: "again"}, session} =
+             Client.call_tool(session, "echo", %{"text" => "again"})
+
+    assert session.auth.token["access_token"] != old
+    assert_received {:idp, "urn:ietf:params:oauth:token-type:refresh_token", :client_secret_jwt}
+    refute_received {:idp, "urn:ietf:params:oauth:token-type:saml2", _}
+
+    # A wrong secret never gets past the provider.
+    auth = put_in(auth[:idp][:client_secret], String.reverse(hmac_secret))
+
+    assert {:error, {:auth, {:saml_exchange_failed, 401, %{"error" => "invalid_client"}}}} =
              Client.connect(ctx.url, auth: auth)
   end
 

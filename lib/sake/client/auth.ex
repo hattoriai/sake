@@ -69,7 +69,18 @@ defmodule Sake.Client.Auth do
       is confidential there), `:id_token` (the ID token, or a function
       like `:assertion`'s), and `:idp`: `token_endpoint:` or `issuer:` (to
       read it from the provider's metadata), and the client's
-      `client_id:` and `client_secret:` at the provider.
+      `client_id:` and `client_secret:` at the provider
+      (`token_endpoint_auth_method:` overrides the method its metadata
+      suggests, `"client_secret_jwt"` included).
+
+      With SAML single sign-on, `:saml_assertion` (the base64url-encoded
+      assertion, or a function like `:assertion`'s) replaces `:id_token`,
+      and `:idp` needs `issuer:`. The assertion is first exchanged at the
+      provider for a refresh token, which is then exchanged for the
+      ID-JAG (draft-ietf-oauth-identity-assertion-authz-grant §4.5). The
+      refresh token is kept, in the session and the `:store`, and used for
+      the next ID-JAGs until it expires or the provider refuses it; only
+      then is an assertion asked for again.
 
   DPoP (RFC 9449) binds the tokens to a key the client holds, so a token
   that leaks is useless without it:
@@ -97,7 +108,11 @@ defmodule Sake.Client.Auth do
   another algorithm than its default (RS256 for RSA, ES256 for P-256):
   the client then authenticates with `private_key_jwt` (RFC 7523 §2.2),
   signing a short-lived assertion for every token request. It needs the
-  optional `jose` dependency. Machine grants get no refresh token: an
+  optional `jose` dependency. `token_endpoint_auth_method:
+  "client_secret_jwt"` signs the same assertion with HS256 over
+  `:client_secret` instead (at least 32 bytes), which needs no `jose`;
+  it is also chosen for a server that lists it as its only secret
+  method. Machine grants get no refresh token: an
   expired token is replaced by running the grant again.
 
   Without `auth:`, a 401 is returned as
@@ -125,6 +140,7 @@ defmodule Sake.Client.Auth do
     :private_key,
     :assertion,
     :id_token,
+    :saml_assertion,
     :idp,
     :redirect_uri,
     :client_id,
@@ -137,6 +153,7 @@ defmodule Sake.Client.Auth do
     :token,
     :static,
     :proof_key,
+    :idp_token,
     grant: :authorization_code,
     dpop: :auto,
     clients: %{},
@@ -162,6 +179,7 @@ defmodule Sake.Client.Auth do
       private_key: private_key(opts[:private_key]),
       assertion: opts[:assertion],
       id_token: opts[:id_token],
+      saml_assertion: opts[:saml_assertion],
       idp: idp(opts[:idp]),
       token_endpoint_auth_method: opts[:token_endpoint_auth_method],
       client_issuer: opts[:issuer],
@@ -176,6 +194,7 @@ defmodule Sake.Client.Auth do
     }
 
     check_grant!(auth)
+    check_secret_jwt!(auth.token_endpoint_auth_method, auth.client_secret, "auth:")
     token = fetch(auth, {:token, auth.url})
     %{auth | token: token, proof_key: proof_key(token)}
   end
@@ -255,26 +274,59 @@ defmodule Sake.Client.Auth do
   end
 
   defp check_grant!(%__MODULE__{grant: :enterprise} = auth) do
+    unless is_binary(auth.client_id),
+      do: raise(ArgumentError, "grant: :enterprise needs :client_id")
+
+    check_identity_assertion!(auth)
+    check_idp!(auth)
+  end
+
+  defp check_grant!(_auth), do: :ok
+
+  defp check_identity_assertion!(auth) do
     cond do
-      not is_binary(auth.client_id) ->
-        raise ArgumentError, "grant: :enterprise needs :client_id"
+      auth.id_token != nil and auth.saml_assertion != nil ->
+        raise ArgumentError, "grant: :enterprise takes :id_token or :saml_assertion, not both"
 
-      not provided?(auth.id_token) ->
-        raise ArgumentError, "grant: :enterprise needs :id_token (an ID token or a function)"
-
-      not (is_map(auth.idp) and
-               (is_binary(auth.idp[:token_endpoint]) or is_binary(auth.idp[:issuer]))) ->
+      not (provided?(auth.id_token) or provided?(auth.saml_assertion)) ->
         raise ArgumentError,
-              "grant: :enterprise needs idp: [token_endpoint: url] or idp: [issuer: url]"
+              "grant: :enterprise needs :id_token or :saml_assertion (a token or a function)"
 
       true ->
         :ok
     end
   end
 
-  defp check_grant!(_auth), do: :ok
+  defp check_idp!(auth) do
+    cond do
+      not (is_map(auth.idp) and
+               (is_binary(auth.idp[:token_endpoint]) or is_binary(auth.idp[:issuer]))) ->
+        raise ArgumentError,
+              "grant: :enterprise needs idp: [token_endpoint: url] or idp: [issuer: url]"
+
+      # The SAML exchange names the identity provider as its audience.
+      auth.saml_assertion != nil and not is_binary(auth.idp[:issuer]) ->
+        raise ArgumentError, "grant: :enterprise with :saml_assertion needs idp: [issuer: url]"
+
+      true ->
+        check_secret_jwt!(auth.idp[:token_endpoint_auth_method], auth.idp[:client_secret], "idp:")
+    end
+  end
 
   defp provided?(value), do: is_binary(value) or is_function(value, 1)
+
+  # client_secret_jwt keys an HMAC with the secret, which RFC 7518 §3.2
+  # wants at least as long as the hash.
+  defp check_secret_jwt!("client_secret_jwt", secret, where) do
+    unless Grant.hmac_key?(secret),
+      do:
+        raise(
+          ArgumentError,
+          "#{where} client_secret_jwt needs a :client_secret of at least 32 bytes"
+        )
+  end
+
+  defp check_secret_jwt!(_method, _secret, _where), do: :ok
 
   # draft-ietf-oauth-client-id-metadata-document: an https URL with a path.
   defp metadata_url(nil), do: nil
@@ -524,10 +576,10 @@ defmodule Sake.Client.Auth do
     dpop = proofs(auth, pem, server.metadata["token_endpoint"])
 
     case machine_token(auth, server, registration, scopes, dpop) do
-      {:ok, body} ->
+      {:ok, body, auth} ->
         {:ok, put(auth, {:token, auth.url}, token(body, server, registration, scopes, pem))}
 
-      {:error, reason} ->
+      {:error, reason, auth} ->
         {:error, reason, auth}
     end
   end
@@ -539,21 +591,103 @@ defmodule Sake.Client.Auth do
          scopes,
          dpop
        ),
-       do: Grant.client_credentials(server, registration, scopes, auth.req, dpop)
+       do: with_auth(Grant.client_credentials(server, registration, scopes, auth.req, dpop), auth)
 
   defp machine_token(%__MODULE__{grant: :jwt_bearer} = auth, server, registration, scopes, dpop) do
-    with {:ok, jwt} <- provide(auth.assertion, server),
-         do: Grant.jwt_bearer(server, registration, jwt, scopes, auth.req, dpop)
+    result =
+      with {:ok, jwt} <- provide(auth.assertion, server),
+           do: Grant.jwt_bearer(server, registration, jwt, scopes, auth.req, dpop)
+
+    with_auth(result, auth)
   end
 
   # The token exchange at the identity provider carries no proof: the
   # ID-JAG it returns is not presented to anyone but the authorization
   # server, whose own token is the one bound.
   defp machine_token(%__MODULE__{grant: :enterprise} = auth, server, registration, scopes, dpop) do
-    with {:ok, id_token} <- provide(auth.id_token, server),
-         {:ok, jag} <- Enterprise.exchange(auth.idp, id_token, server, scopes, auth.req),
-         do: Grant.jwt_bearer(server, registration, jag, scopes, auth.req, dpop)
+    with {:ok, idp} <- Enterprise.resolve(auth.idp, auth.req),
+         {:ok, jag, auth} <- id_jag(auth, idp, server, scopes) do
+      with_auth(Grant.jwt_bearer(server, registration, jag, scopes, auth.req, dpop), auth)
+    else
+      {:error, reason, auth} -> {:error, reason, auth}
+      {:error, reason} -> {:error, reason, auth}
+    end
   end
+
+  defp with_auth({:ok, body}, auth), do: {:ok, body, auth}
+  defp with_auth({:error, reason}, auth), do: {:error, reason, auth}
+
+  # An ID token is exchanged for the ID-JAG as it is.
+  defp id_jag(%__MODULE__{saml_assertion: nil} = auth, idp, server, scopes) do
+    result =
+      with {:ok, id_token} <- provide(auth.id_token, server),
+           do: Enterprise.exchange(idp, {:id_token, id_token}, server, scopes, auth.req)
+
+    with_auth(result, auth)
+  end
+
+  # A SAML assertion goes through the identity provider's refresh token
+  # (draft-ietf-oauth-identity-assertion-authz-grant §4.5), which is kept
+  # (in the session and the store): later authorizations, a renewal or a
+  # step-up, exchange it again for a new ID-JAG while it lasts, and need
+  # no assertion. One the provider no longer takes (`invalid_grant`, RFC
+  # 8693 §2.2.2) is dropped and the assertion traded again, once.
+  defp id_jag(auth, idp, server, scopes) do
+    case idp_token(auth) do
+      nil ->
+        saml(auth, idp, server, scopes)
+
+      %{"refresh_token" => refresh} = token ->
+        case Enterprise.exchange(idp, {:refresh_token, refresh}, server, scopes, auth.req) do
+          {:ok, jag} ->
+            {:ok, jag, auth}
+
+          {:error, {:token_exchange_failed, 400, %{"error" => "invalid_grant"}}} ->
+            auth = put(auth, {:idp, idp.issuer}, Map.delete(token, "refresh_token"))
+            saml(auth, idp, server, scopes)
+
+          {:error, reason} ->
+            {:error, reason, auth}
+        end
+    end
+  end
+
+  defp saml(auth, idp, server, scopes) do
+    with {:ok, assertion} <- provide(auth.saml_assertion, server),
+         {:ok, idp_token} <- Enterprise.saml(idp, assertion, auth.req) do
+      auth = put(auth, {:idp, idp.issuer}, idp_token)
+
+      with_auth(
+        Enterprise.exchange(
+          idp,
+          {:refresh_token, idp_token["refresh_token"]},
+          server,
+          scopes,
+          auth.req
+        ),
+        auth
+      )
+    else
+      {:error, reason} -> {:error, reason, auth}
+    end
+  end
+
+  # The identity provider's refresh token, while it has not expired, and
+  # only for the provider and the client at it that it was issued to.
+  defp idp_token(auth) do
+    case fetch(auth, {:idp, auth.idp.issuer}) do
+      %{"refresh_token" => refresh, "client_id" => client_id} = token
+      when is_binary(refresh) ->
+        if client_id == auth.idp[:client_id] and not expired?(token["expires_at"]),
+          do: token
+
+      _ ->
+        nil
+    end
+  end
+
+  defp expired?(at) when is_integer(at), do: System.system_time(:second) >= at - @expiry_margin
+  defp expired?(_at), do: false
 
   defp provide(value, _server) when is_binary(value), do: {:ok, value}
 
@@ -739,6 +873,7 @@ defmodule Sake.Client.Auth do
   def fetch(%__MODULE__{clients: clients} = auth, {:client, issuer} = key),
     do: clients[issuer] || stored(auth, key)
 
+  def fetch(%__MODULE__{idp_token: %{"issuer" => issuer} = token}, {:idp, issuer}), do: token
   def fetch(auth, key), do: stored(auth, key)
 
   defp stored(%__MODULE__{store: {module, arg}}, key) do
@@ -760,6 +895,11 @@ defmodule Sake.Client.Auth do
   def put(auth, {:token, _url} = key, value) do
     persist(auth, key, value)
     %{auth | token: value, proof_key: proof_key(value)}
+  end
+
+  def put(auth, {:idp, _issuer} = key, value) do
+    persist(auth, key, value)
+    %{auth | idp_token: value}
   end
 
   defp persist(%__MODULE__{store: {module, arg}}, key, value),

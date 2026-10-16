@@ -216,28 +216,23 @@ defmodule Sake.Client.Auth.Grant do
   @spec authenticate(keyword(), map()) :: {keyword(), [{String.t(), String.t()}]}
   def authenticate(params, registration)
 
-  # RFC 7523 §2.2 and §3: the client names itself as issuer and subject,
-  # for this authorization server (its issuer identifier, as
-  # draft-ietf-oauth-rfc7523bis asks), with a short expiry and a unique
-  # `jti`. No client_id parameter is needed: the assertion carries it.
+  # private_key_jwt (RFC 7523 §2.2): an assertion signed with the client's
+  # own key.
   def authenticate(
         params,
         %{"token_endpoint_auth_method" => "private_key_jwt", "private_key" => {key, alg}} = reg
-      ) do
-    now = System.system_time(:second)
+      ),
+      do: {params ++ client_assertion(JWT.sign(assertion_claims(reg), key, alg)), []}
 
-    claims = %{
-      "iss" => reg["client_id"],
-      "sub" => reg["client_id"],
-      "aud" => reg["issuer"],
-      "iat" => now,
-      "exp" => now + @assertion_lifetime,
-      "jti" => 18 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
-    }
-
-    {params ++
-       [client_assertion_type: @assertion_type, client_assertion: JWT.sign(claims, key, alg)], []}
-  end
+  # client_secret_jwt (RFC 7523 §2.2 with an HMAC, OpenID Connect Core
+  # §9): the same assertion, signed with the client secret, so the secret
+  # itself never goes on the wire.
+  def authenticate(
+        params,
+        %{"token_endpoint_auth_method" => "client_secret_jwt", "client_secret" => secret} = reg
+      )
+      when is_binary(secret),
+      do: {params ++ client_assertion(hs256(assertion_claims(reg), secret)), []}
 
   # RFC 6749 §2.3.1: the id and secret are form-encoded before they are
   # joined for HTTP Basic, so a colon in either survives the trip.
@@ -262,4 +257,41 @@ defmodule Sake.Client.Auth.Grant do
   # JWT grant) sends none.
   def authenticate(params, %{"client_id" => nil}), do: {params, []}
   def authenticate(params, reg), do: {params ++ [client_id: reg["client_id"]], []}
+
+  defp client_assertion(jwt), do: [client_assertion_type: @assertion_type, client_assertion: jwt]
+
+  # RFC 7523 §2.2 and §3: the client names itself as issuer and subject,
+  # for this authorization server (its issuer identifier, as
+  # draft-ietf-oauth-rfc7523bis asks), with a short expiry and a unique
+  # `jti`. No client_id parameter is needed: the assertion carries it.
+  defp assertion_claims(reg) do
+    now = System.system_time(:second)
+
+    %{
+      "iss" => reg["client_id"],
+      "sub" => reg["client_id"],
+      "aud" => reg["issuer"],
+      "iat" => now,
+      "exp" => now + @assertion_lifetime,
+      "jti" => 18 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
+    }
+  end
+
+  # HS256 (RFC 7518 §3.2), for client_secret_jwt alone and by hand: Sake
+  # signs with an HMAC but never verifies one (`Sake.Auth.JWT` refuses the
+  # whole family, against algorithm confusion), so this stays out of the
+  # general JWT code, and needs no `jose`.
+  defp hs256(claims, secret) do
+    input = segment(%{"alg" => "HS256"}) <> "." <> segment(claims)
+    input <> "." <> Base.url_encode64(:crypto.mac(:hmac, :sha256, secret, input), padding: false)
+  end
+
+  defp segment(map), do: map |> JSON.encode!() |> Base.url_encode64(padding: false)
+
+  @doc """
+  Whether `secret` can key client_secret_jwt: RFC 7518 §3.2 asks for an
+  HS256 key at least as long as the hash, 256 bits.
+  """
+  @spec hmac_key?(term()) :: boolean()
+  def hmac_key?(secret), do: is_binary(secret) and byte_size(secret) >= 32
 end

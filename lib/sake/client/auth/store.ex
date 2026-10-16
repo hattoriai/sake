@@ -4,7 +4,7 @@ defmodule Sake.Client.Auth.Store do
   `store: {module, arg}` in `Sake.Client.connect/2`'s `auth:` options;
   `arg` is handed to every callback.
 
-  Two kinds of keys:
+  Three kinds of keys:
 
     * `{:token, url}` — the token for one MCP endpoint (its canonical URL),
       with its refresh token, expiry, scopes, and the authorization server
@@ -12,6 +12,11 @@ defmodule Sake.Client.Auth.Store do
     * `{:client, issuer}` — a dynamic registration (client id and secret)
       with one authorization server. Registrations are bound to their
       server: one is never presented to another.
+    * `{:idp, issuer}` — the enterprise identity provider's refresh token
+      from a SAML exchange (`grant: :enterprise` with `saml_assertion:`),
+      with its expiry and the client at the provider it was issued to. It
+      stands for the person's single sign-on until it expires: guard it
+      like the tokens.
 
   Values are maps with string keys and JSON values, so a store can write
   them as JSON. They hold credentials: keep them where only the person
@@ -40,7 +45,10 @@ defmodule Sake.Client.Auth.Store do
       end
   """
 
-  @type key :: {:token, url :: String.t()} | {:client, issuer :: String.t()}
+  @type key ::
+          {:token, url :: String.t()}
+          | {:client, issuer :: String.t()}
+          | {:idp, issuer :: String.t()}
 
   @callback fetch(arg :: term(), key()) :: {:ok, map()} | :error
   @callback put(arg :: term(), key(), map()) :: :ok

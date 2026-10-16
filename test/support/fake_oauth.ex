@@ -31,7 +31,20 @@ defmodule SakeTest.FakeOAuth do
   #   * `:idp_error` — an error code the identity provider's token
   #     exchange (at /idp/token, metadata at the RFC 8414 URL of the
   #     issuer `/idp`) answers with; otherwise it returns `jag-` and the
-  #     subject token as the ID-JAG.
+  #     subject token as the ID-JAG. A SAML assertion (subject token type
+  #     `saml2`) gets a refresh token `idp-refresh-<n>`, in the
+  #     `refresh_token` member (or `access_token` with `saml_in:
+  #     :access_token`), good for `:idp_refresh_expires_in` seconds when
+  #     given; that refresh token then gets `jag-` and the assertion it
+  #     came from, until the test deletes it from the state's
+  #     `:idp_refresh`.
+  #   * `:idp_auth_methods` — the identity provider's
+  #     `token_endpoint_auth_methods_supported` (default
+  #     `["client_secret_post"]`).
+  #   * `:hmac_secret` — the client secret a client_secret_jwt assertion
+  #     is checked against, at both token endpoints: HS256, the client as
+  #     `iss` and `sub`, the issuer or the endpoint as `aud`, a `jti`, and an
+  #     unexpired `exp`. Any other assertion is `invalid_client`.
   #   * `:state` — the Agent with the issued codes and tokens (required).
 
   @behaviour Plug
@@ -75,11 +88,20 @@ defmodule SakeTest.FakeOAuth do
 
   defp route(conn, "GET", path, _params, opts) do
     cond do
-      path == "/.well-known/oauth-authorization-server/idp" -> json(conn, 200, idp_metadata(conn))
-      resource_metadata?(path, opts) -> resource_metadata(conn, opts)
-      path == metadata_path(opts) -> json(conn, 200, metadata(conn, opts))
-      path == issuer_path(opts) <> "/authorize" -> authorize(conn, opts)
-      true -> send_resp(conn, 404, "")
+      path == "/.well-known/oauth-authorization-server/idp" ->
+        json(conn, 200, idp_metadata(conn, opts))
+
+      resource_metadata?(path, opts) ->
+        resource_metadata(conn, opts)
+
+      path == metadata_path(opts) ->
+        json(conn, 200, metadata(conn, opts))
+
+      path == issuer_path(opts) <> "/authorize" ->
+        authorize(conn, opts)
+
+      true ->
+        send_resp(conn, 404, "")
     end
   end
 
@@ -228,6 +250,15 @@ defmodule SakeTest.FakeOAuth do
     |> send_resp(302, "")
   end
 
+  defp token(conn, %{"client_assertion" => jwt} = p, %{hmac_secret: _} = opts)
+       when not is_map_key(opts, :assertion_checked) do
+    issuer = base(conn) <> issuer_path(opts)
+
+    if hmac_ok?(jwt, opts.hmac_secret, [issuer, issuer <> "/token"]),
+      do: token(conn, p, Map.put(opts, :assertion_checked, true)),
+      else: json(conn, 401, %{"error" => "invalid_client"})
+  end
+
   defp token(conn, %{"grant_type" => "authorization_code"} = p, opts) do
     request = Agent.get(opts.state, &get_in(&1, [:codes, p["code"]]))
 
@@ -261,25 +292,85 @@ defmodule SakeTest.FakeOAuth do
 
   # ---- the enterprise identity provider
 
-  defp idp_metadata(conn) do
+  defp idp_metadata(conn, opts) do
     %{
       "issuer" => base(conn) <> "/idp",
       "token_endpoint" => base(conn) <> "/idp/token",
-      "token_endpoint_auth_methods_supported" => ["client_secret_post"]
+      "token_endpoint_auth_methods_supported" => opts[:idp_auth_methods] || ["client_secret_post"]
     }
   end
 
-  defp token_exchange(conn, p, opts) do
-    case opts[:idp_error] do
-      nil ->
-        json(conn, 200, %{
-          "access_token" => "jag-" <> p["subject_token"],
-          "issued_token_type" => "urn:ietf:params:oauth:token-type:id-jag",
-          "token_type" => "N_A"
-        })
+  defp token_exchange(conn, %{"client_assertion" => jwt} = p, %{hmac_secret: secret} = opts)
+       when not is_map_key(opts, :assertion_checked) do
+    if hmac_ok?(jwt, secret, [base(conn) <> "/idp", base(conn) <> "/idp/token"]),
+      do: token_exchange(conn, p, Map.put(opts, :assertion_checked, true)),
+      else: json(conn, 401, %{"error" => "invalid_client"})
+  end
 
-      error ->
-        json(conn, 400, %{"error" => error})
+  defp token_exchange(conn, p, opts) do
+    cond do
+      opts[:idp_error] ->
+        json(conn, 400, %{"error" => opts.idp_error})
+
+      p["subject_token_type"] == "urn:ietf:params:oauth:token-type:saml2" ->
+        saml_exchange(conn, p["subject_token"], opts)
+
+      p["subject_token_type"] == "urn:ietf:params:oauth:token-type:refresh_token" ->
+        case Agent.get(opts.state, &get_in(&1, [:idp_refresh, p["subject_token"]])) do
+          nil -> json(conn, 400, %{"error" => "invalid_grant"})
+          assertion -> id_jag(conn, assertion)
+        end
+
+      true ->
+        id_jag(conn, p["subject_token"])
+    end
+  end
+
+  defp id_jag(conn, subject) do
+    json(conn, 200, %{
+      "access_token" => "jag-" <> subject,
+      "issued_token_type" => "urn:ietf:params:oauth:token-type:id-jag",
+      "token_type" => "N_A"
+    })
+  end
+
+  defp saml_exchange(conn, assertion, opts) do
+    refresh = "idp-refresh-" <> Integer.to_string(System.unique_integer([:positive]))
+    Agent.update(opts.state, &put_in(&1, [:idp_refresh, refresh], assertion))
+
+    body =
+      case opts[:saml_in] do
+        :access_token -> %{"access_token" => refresh}
+        _ -> %{"access_token" => "N_A", "refresh_token" => refresh}
+      end
+
+    json(
+      conn,
+      200,
+      body
+      |> Map.merge(%{
+        "issued_token_type" => "urn:ietf:params:oauth:token-type:refresh_token",
+        "token_type" => "N_A"
+      })
+      |> put_present("expires_in", opts[:idp_refresh_expires_in])
+    )
+  end
+
+  # A client_secret_jwt assertion (RFC 7523 §2.2, HS256), checked the
+  # way an identity provider or authorization server that takes them
+  # would.
+  defp hmac_ok?(jwt, secret, audiences) do
+    with [h, c, mac] <- String.split(jwt, "."),
+         {:ok, header} <- Base.url_decode64(h, padding: false),
+         %{"alg" => "HS256"} <- JSON.decode!(header),
+         expected = :crypto.mac(:hmac, :sha256, secret, h <> "." <> c),
+         {:ok, ^expected} <- Base.url_decode64(mac, padding: false),
+         {:ok, json} <- Base.url_decode64(c, padding: false),
+         %{"iss" => iss, "sub" => iss, "aud" => aud, "jti" => jti, "exp" => exp}
+         when is_binary(jti) <- JSON.decode!(json) do
+      aud in audiences and exp > System.system_time(:second)
+    else
+      _ -> false
     end
   end
 
@@ -320,7 +411,9 @@ defmodule SakeTest.FakeOAuth do
 
   @doc "A fresh state Agent for the issued codes and tokens."
   def state do
-    {:ok, agent} = Agent.start_link(fn -> %{codes: %{}, tokens: %{}, refresh: %{}} end)
+    {:ok, agent} =
+      Agent.start_link(fn -> %{codes: %{}, tokens: %{}, refresh: %{}, idp_refresh: %{}} end)
+
     agent
   end
 
