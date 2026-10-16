@@ -36,10 +36,10 @@ def deps do
     {:sake, "~> 0.1"},
     {:opentelemetry_api, "~> 1.5"},
     {:opentelemetry, "~> 1.7"},
-    {:opentelemetry_exporter, "~> 1.0"},
+    {:opentelemetry_exporter, "~> 1.11"},
     {:opentelemetry_phoenix, "~> 2.0"},
-    {:opentelemetry_bandit, "~> 0.2"},
-    {:opentelemetry_ecto, "~> 1.0"}
+    {:opentelemetry_bandit, "~> 0.3"},
+    {:opentelemetry_ecto, "~> 1.2"}
   ]
 end
 ```
