@@ -40,7 +40,6 @@ defmodule Sake.Stdio do
   """
 
   use GenServer
-  require Logger
 
   alias Sake.{Context, JSONRPC, Protocol, Trace}
   alias Sake.Plug.{Stream, Streams}
@@ -238,11 +237,11 @@ defmodule Sake.Stdio do
         {:noreply, state}
 
       {id, pids} ->
-        Logger.error("Sake.Stdio request failed: #{inspect(reason)}")
+        error = Stream.failure(:exit, reason, [])
         state = %{state | pids: pids, requests: Map.delete(state.requests, id)}
 
         unless match?({:batch, _}, id),
-          do: write(state, JSONRPC.error(id, JSONRPC.code(:internal), "The request failed"))
+          do: write(state, JSONRPC.error(id, error["code"], error["message"], error["data"]))
 
         stop_when_idle(state)
     end
@@ -602,11 +601,7 @@ defmodule Sake.Stdio do
         {Stream.response(id, Trace.outcome(outcome)), false}
 
       {:DOWN, ^task_ref, :process, _pid, reason} ->
-        error = %{
-          "code" => JSONRPC.code(:internal),
-          "message" => "The request failed: #{inspect(reason)}"
-        }
-
+        error = Stream.failure(:exit, reason, [])
         {Stream.response(id, Trace.outcome({:error, error})), false}
     end
   end

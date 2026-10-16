@@ -218,6 +218,19 @@ if they would otherwise look like a plausible answer: the handler starts
 over and asks its question again, so there is no unsigned path back into a
 handler that is already mid-flow.
 
+## Failures
+
+A component that raises, throws or exits never tells the client why: an
+exception's message may carry anything (a query, a credential, a path).
+The client gets `-32603` "The request failed." with an `errorId` in the
+error's `data`, on both eras and every transport. The same ID is in the
+server's log line, next to the exception and its stack trace, and, with
+OpenTelemetry, on the exception event of the request's span
+(`sake.error_id`), so a client's report leads to the cause. A tool that
+raises gives an `isError` result that says only "The tool failed.", and
+a failing middleware plug a `-32603` "The request failed." (see
+`guides/middleware.md`); both log the exception.
+
 ## Tasks
 
 A task ID carries 144 random bits, and every task is bound to the

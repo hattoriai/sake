@@ -43,16 +43,24 @@ defmodule Sake.PlugTest do
 
         assert %{
                  "id" => 1,
-                 "error" => %{"code" => -32_603, "message" => "The request failed: " <> _}
+                 "error" => %{
+                   "code" => -32_603,
+                   "message" => "The request failed.",
+                   "data" => %{"errorId" => _}
+                 }
                } =
                  ModernClient.json(conn)
+
+        refute conn.resp_body =~ "kaboom"
       end
 
       session = LegacyClient.initialize(opts, "2025-06-18")
       conn = LegacyClient.post(opts, session, "prompts/get", %{"name" => "boom"})
 
-      assert %{"error" => %{"code" => -32_603, "message" => "The request failed: kaboom"}} =
+      assert %{"error" => %{"code" => -32_603, "message" => "The request failed."}} =
                LegacyClient.json(conn)
+
+      refute conn.resp_body =~ "kaboom"
     end
 
     test "non-object arguments, _meta or inputResponses are -32602", %{opts: opts} do

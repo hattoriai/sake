@@ -119,32 +119,36 @@ defmodule Sake.Plug.Stream do
     loop(conn, opts, id, ctx, task)
   end
 
-  # A failing handler becomes a JSON-RPC error on both paths; the stack
-  # trace goes only to the log. On the stream path the task is linked (a
-  # dead connection must kill the handler), so its body must never exit
-  # abnormally: a raise or throw there would tear down the SSE connection
-  # via the link before the outcome could become a proper JSON-RPC error.
+  # A failing handler becomes a JSON-RPC error on both paths. On the
+  # stream path the task is linked (a dead connection must kill the
+  # handler), so its body must never exit abnormally: a raise or throw
+  # there would tear down the SSE connection via the link before the
+  # outcome could become a proper JSON-RPC error.
   @doc false
   def run_safely(parsed, ctx, handler) do
     run(parsed, ctx, handler)
-  rescue
-    e ->
-      Logger.error("stream handler failed: " <> Exception.format(:error, e, __STACKTRACE__))
-
-      {:error,
-       %{
-         "code" => JSONRPC.code(:internal),
-         "message" => "The request failed: " <> Exception.message(e)
-       }}
   catch
-    kind, reason ->
-      Logger.error("stream handler failed: " <> Exception.format(kind, reason, __STACKTRACE__))
+    kind, reason -> {:error, failure(kind, reason, __STACKTRACE__)}
+  end
 
-      {:error,
-       %{
-         "code" => JSONRPC.code(:internal),
-         "message" => "The request failed: #{inspect({kind, reason})}"
-       }}
+  @doc false
+  # The error a client gets for a failure inside the server. It says
+  # nothing of the failure: an exception's message may carry anything (a
+  # query, a credential, a path). Its `errorId` tags the log line, and the
+  # exception recorded on the request's span, that do.
+  @spec failure(:error | :exit | :throw, term(), Exception.stacktrace()) :: map()
+  def failure(kind, reason, stacktrace) do
+    id = Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
+
+    Logger.error("request failed (error #{id}): " <> Exception.format(kind, reason, stacktrace))
+
+    Trace.exception(kind, reason, stacktrace, id)
+
+    %{
+      "code" => JSONRPC.code(:internal),
+      "message" => "The request failed.",
+      "data" => %{"errorId" => id}
+    }
   end
 
   @spec loop(Plug.Conn.t(), map(), term(), Context.t(), Task.t()) :: Plug.Conn.t()
@@ -178,11 +182,7 @@ defmodule Sake.Plug.Stream do
           conn,
           id,
           ctx,
-          {:error,
-           %{
-             "code" => JSONRPC.code(:internal),
-             "message" => "The request failed: #{inspect(reason)}"
-           }}
+          {:error, failure(:exit, reason, [])}
         )
     after
       opts.keepalive ->
