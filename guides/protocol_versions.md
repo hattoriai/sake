@@ -71,6 +71,17 @@ gets `405 Method Not Allowed`, which the legacy revisions allow for a
 server that does not support explicit termination, and the ID keeps
 working until it expires.
 
+A legacy session can span the nodes of a cluster. Its subscriptions
+(`resources/subscribe` and `resources/unsubscribe`) and the client's
+answers to the server's requests (elicitation, sampling, roots) are POSTs
+that a load balancer may send to any node, while the session's `GET`
+stream and the handler waiting for the answer are open on one. With
+`{Sake, pubsub: MyApp.PubSub}` they reach that node wherever they land;
+without a pubsub, route a session's requests to one node (session
+affinity on `Mcp-Session-Id`), or a subscription is lost and an
+answered handler waits until it times out. The modern era keeps no
+session and needs neither.
+
 ## What is not supported
 
 - **2024-11-05** — the revision before the current three-legacy-revision

@@ -10,7 +10,10 @@ First release.
 - `Sake.Plug`: one endpoint serving the modern (2026-07-28), stateless
   protocol and the three handshake-era revisions (2025-11-25, 2025-06-18,
   2025-03-26) side by side, with Server-Sent Events streaming, progress
-  and log notifications, and Origin checking.
+  and log notifications, and Origin checking. With `pubsub:` on the
+  `Sake` child, notifications, and a legacy session's subscriptions and
+  answers to the server's requests, reach whichever node holds the
+  stream or the waiting handler.
 - `Sake.Elicit` and `Sake.Progress`: ask the person for input mid-call
   (form and URL modes) and report progress or log messages, on both
   protocol eras.
