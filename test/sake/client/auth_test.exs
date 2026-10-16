@@ -67,6 +67,65 @@ defmodule Sake.Client.AuthTest do
     end
   end
 
+  describe "DPoP" do
+    test "with a server that does not offer it, :auto sends no proofs", ctx do
+      {_base, url} = serve(ctx)
+      assert {:ok, session} = Client.connect(url, auth: @auth)
+      assert session.auth.token["token_type"] == "Bearer"
+      assert {_params, headers} = find(requests(), "POST", "/token")
+      refute Map.has_key?(headers, "dpop")
+    end
+
+    test "dpop: true sends a proof anyway, and a bearer answer is used as one", ctx do
+      {base, url} = serve(ctx)
+      assert {:ok, session} = Client.connect(url, auth: [{:dpop, true} | @auth])
+      requests = requests()
+
+      assert {_params, %{"dpop" => proof}} = find(requests, "POST", "/token")
+      assert {:ok, %{"typ" => "dpop+jwt", "jwk" => jwk}, claims} = Sake.Auth.JWT.peek(proof)
+      assert %{"htm" => "POST", "htu" => htu} = claims
+      assert htu == base <> "/token"
+      refute Map.has_key?(claims, "ath")
+
+      # The server bound nothing: the token goes as Bearer, with no proof.
+      assert session.auth.token["token_type"] == "Bearer"
+      assert {:ok, key} = Sake.Auth.JWT.private_key(session.auth.token["dpop_key"])
+      assert Sake.Auth.JWT.public_jwk(key) == jwk
+
+      {"POST", "/mcp", _params, sent} = requests |> Enum.reverse() |> List.keyfind("POST", 0)
+
+      assert [{"authorization", "Bearer " <> _}] =
+               for({k, _} = h <- sent, k in ~w(authorization dpop), do: h)
+    end
+
+    test "a resource that requires DPoP gets it, whatever the authorization server lists", ctx do
+      {_base, url} =
+        serve(ctx, resource_metadata: %{"dpop_bound_access_tokens_required" => true})
+
+      assert {:ok, _session} = Client.connect(url, auth: @auth)
+      assert {_params, %{"dpop" => _proof}} = find(requests(), "POST", "/token")
+    end
+
+    test "a resource that requires DPoP stops a client without it before anyone is asked", ctx do
+      {_base, url} =
+        serve(ctx, resource_metadata: %{"dpop_bound_access_tokens_required" => true})
+
+      assert {:error, {:auth, {:dpop_required, :dpop_off}}} =
+               Client.connect(url, auth: [{:dpop, false} | @auth])
+
+      requests = requests()
+      refute find(requests, "GET", "/authorize")
+      refute find(requests, "POST", "/token")
+      assert count(requests, "POST", "/mcp") == 1
+    end
+
+    test "a DPoP token in answer to no proof is refused", ctx do
+      {_base, url} = serve(ctx, token_type: "DPoP")
+
+      assert {:error, {:auth, {:token_type, "DPoP"}}} = Client.connect(url, auth: @auth)
+    end
+  end
+
   describe "the flow" do
     test "discovery, registration, PKCE, the token, then the request again with it", ctx do
       {base, url} = serve(ctx)

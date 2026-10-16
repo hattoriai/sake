@@ -172,5 +172,9 @@ client credentials grant with a secret and with `private_key_jwt`),
 `auth/wif-jwt-bearer` (a workload's JWT as the grant) and
 `auth/enterprise-managed-authorization` (the token exchange and the
 ID-JAG), with `conformance/client.exs` passing each scenario's
-credentials as `auth:` options. `auth/dpop` and `auth/dpop-nonce` fail:
-the client does not bind its tokens to a key with DPoP (RFC 9449).
+credentials as `auth:` options. `auth/dpop` and `auth/dpop-nonce` pass
+too: the client asks for tokens bound to a key with DPoP (RFC 9449)
+when the authorization server offers it, sends them with the `DPoP`
+scheme and a fresh proof on every request, and answers the nonce
+challenges of the authorization server and the MCP server (see
+`guides/client.md`'s "DPoP" section).

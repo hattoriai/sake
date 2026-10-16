@@ -95,6 +95,31 @@ First release.
   :enterprise` (the RFC 8693 token exchange of an ID token for an ID-JAG
   at the identity provider, then the JWT bearer grant), renewing an
   expiring token by running the grant again.
+- DPoP (RFC 9449, SEP-1932), sender-constrained tokens, on both sides and
+  both eras. The authorization server binds the tokens of a request that
+  carries a proof to the proof's key (`token_type: DPoP`, the key's
+  RFC 7638 thumbprint kept as the token's `jkt`, a new column of the Ecto
+  migration), on every grant; a public client's refresh token is bound
+  too, a confidential client's stays bound to its credentials. The MCP
+  endpoint takes a bound token only with the `DPoP` scheme and a proof
+  for that request (method, URL, token hash, key, age, single use), and
+  refuses it as a bearer token; its 401 challenges both schemes. With
+  `dpop: [nonce: true]` both require stateless server nonces
+  (`use_dpop_nonce`, `DPoP-Nonce`). The metadata lists
+  `dpop_signing_alg_values_supported`. The client (`dpop:` in `auth:`,
+  `:auto` by default) asks for bound tokens when the authorization server
+  offers DPoP, with one P-256 key per authorization kept with the token
+  (as PEM, in the store too), sends a proof with every token request and
+  every MCP request (POST, the legacy GET stream and DELETE), keeps a
+  refresh on the same key, and answers nonce challenges from both servers
+  without counting them as authorizations. `dpop: [required: true]` takes
+  bound tokens only (proof-less token requests and the Bearer scheme are
+  refused, the resource metadata says `dpop_bound_access_tokens_required`,
+  and a client that cannot use DPoP stops with `{:dpop_required, reason}`);
+  a client registered with `dpop_bound_access_tokens` (RFC 9449 §5.2, a new
+  client column) gets the same for itself. A `Sake.Proxy` gets it through
+  `connect: [auth: ...]`. DPoP needs the optional `jose` dependency; without
+  it the server neither offers nor accepts it and the client never uses it.
 - `Sake.Stdio` and `mix sake.stdio`: the same server over standard input
   and output, on both eras, with concurrent requests, cancellation,
   progress and log notifications, elicitation, sampling and roots,
@@ -194,5 +219,5 @@ First release.
   authorization server, and, as a separate step, the extension scenarios.
   Its baselines list the known, documented gaps (SSE resumability, the
   client's standalone GET stream); every `auth/*` client scenario, every
-  tasks extension scenario and every client auth extension scenario but
-  DPoP's passes.
+  tasks extension scenario and every client auth extension scenario
+  (DPoP's included) passes.

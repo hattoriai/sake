@@ -215,7 +215,8 @@ defmodule Sake.Auth.CIMD do
          client_uri: doc["client_uri"],
          logo_uri: doc["logo_uri"],
          scopes: if(is_binary(doc["scope"]), do: String.split(doc["scope"]), else: nil),
-         application_type: doc["application_type"] || "native"
+         application_type: doc["application_type"] || "native",
+         dpop_bound_access_tokens: doc["dpop_bound_access_tokens"] == true
        }}
     else
       _ -> {:error, :invalid_document}

@@ -36,8 +36,9 @@ defmodule Sake.RouterTest do
       )
 
     assert conn.status == 401
-    assert [challenge] = Plug.Conn.get_resp_header(conn, "www-authenticate")
-    assert challenge =~ "/.well-known/oauth-protected-resource/acme/mcp"
+    assert [bearer, dpop] = Plug.Conn.get_resp_header(conn, "www-authenticate")
+    assert bearer =~ "/.well-known/oauth-protected-resource/acme/mcp"
+    assert dpop =~ "/.well-known/oauth-protected-resource/acme/mcp"
   end
 
   test "the Plug router serves the API routes" do

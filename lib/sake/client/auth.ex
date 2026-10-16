@@ -71,6 +71,28 @@ defmodule Sake.Client.Auth do
       read it from the provider's metadata), and the client's
       `client_id:` and `client_secret:` at the provider.
 
+  DPoP (RFC 9449) binds the tokens to a key the client holds, so a token
+  that leaks is useless without it:
+
+    * `:dpop` — `:auto` (the default) uses DPoP with an authorization
+      server whose metadata lists ES256 in
+      `dpop_signing_alg_values_supported`; `true` sends proofs to any
+      server; `false` never does. It needs the optional `jose`
+      dependency: without it, `:auto` never uses DPoP, and `true` raises.
+
+  With DPoP, each authorization makes a new P-256 key, kept with the
+  token (as PEM, in the `:store` too: a bound token is useless without
+  it). Every token request carries a proof made with it, and every
+  request to the MCP server sends the token with the `DPoP` scheme and a
+  fresh proof bound to it. A resource whose metadata says
+  `dpop_bound_access_tokens_required` gets DPoP with `:auto` whatever the
+  authorization server's metadata lists; when the client cannot use it
+  (`dpop: false`, or no `jose`), the flow stops at once with
+  `{:dpop_required, :dpop_off | :no_jose}`. A server that asks for a nonce
+  (`use_dpop_nonce`) gets the request again with its nonce, which the
+  client then keeps sending; that retry does not count as an
+  authorization.
+
   `:private_key` is a PEM private key, or `{pem, alg}` to sign with
   another algorithm than its default (RS256 for RSA, ES256 for P-256):
   the client then authenticates with `private_key_jwt` (RFC 7523 §2.2),
@@ -83,7 +105,7 @@ defmodule Sake.Client.Auth do
   handles it. A failure inside the flow is `{:error, {:auth, reason}}`.
   """
 
-  alias Sake.Auth.JWT
+  alias Sake.Auth.{DPoP, JWT}
   alias Sake.Client.Auth.{Browser, Discovery, Enterprise, Grant, Registration}
   alias Sake.Client.Challenge
 
@@ -113,8 +135,12 @@ defmodule Sake.Client.Auth do
     :client_name,
     :store,
     :token,
+    :static,
+    :proof_key,
     grant: :authorization_code,
+    dpop: :auto,
     clients: %{},
+    nonces: %{},
     req: []
   ]
 
@@ -142,12 +168,28 @@ defmodule Sake.Client.Auth do
       client_metadata_url: metadata_url(opts[:client_metadata_url]),
       client_name: opts[:client_name] || defaults[:client_name] || "Sake",
       store: opts[:store],
-      req: defaults[:req] || []
+      dpop: dpop(Keyword.get(opts, :dpop, :auto)),
+      req: defaults[:req] || [],
+      # `Sake.Test`'s: the stored token is used as it is, and a 401 or a
+      # 403 comes back to the caller instead of running the flow.
+      static: opts[:static] == true
     }
 
     check_grant!(auth)
-    %{auth | token: fetch(auth, {:token, auth.url})}
+    token = fetch(auth, {:token, auth.url})
+    %{auth | token: token, proof_key: proof_key(token)}
   end
+
+  defp dpop(:auto), do: :auto
+  defp dpop(false), do: false
+
+  defp dpop(true) do
+    JWT.require!("auth: [dpop: true]")
+    true
+  end
+
+  defp dpop(other),
+    do: raise(ArgumentError, "auth: :dpop must be :auto, true or false, got #{inspect(other)}")
 
   defp grant(opts) do
     grant = Keyword.get(opts, :grant, :authorization_code)
@@ -233,15 +275,46 @@ defmodule Sake.Client.Auth do
   end
 
   @doc false
-  @spec headers(t() | nil, [{String.t(), String.t()}]) :: [{String.t(), String.t()}]
-  def headers(%__MODULE__{token: %{"access_token" => token}}, headers) do
-    [
-      {"authorization", "Bearer " <> token}
-      | Enum.reject(headers, fn {name, _} -> String.downcase(name) == "authorization" end)
-    ]
+  # The headers of one request to the MCP server, `method` to `url`: the
+  # token, and with a DPoP-bound one a proof for this request, bound to
+  # the token and with the server's latest nonce. A bound token whose key
+  # is gone (a store that lost it) goes as a bearer token, which the
+  # server refuses: the 401 runs the flow again, for a new token and key.
+  @spec headers(t() | nil, String.t(), String.t(), [{String.t(), String.t()}]) ::
+          [{String.t(), String.t()}]
+  def headers(%__MODULE__{token: %{"access_token" => token}} = auth, method, url, headers) do
+    case bound_key(auth) do
+      nil ->
+        [{"authorization", "Bearer " <> token} | without(headers, [])]
+
+      key ->
+        proof =
+          DPoP.proof(key, method, url, access_token: token, nonce: auth.nonces[origin(url)])
+
+        [{"authorization", "DPoP " <> token}, {"dpop", proof} | without(headers, ["dpop"])]
+    end
   end
 
-  def headers(_auth, headers), do: headers
+  def headers(_auth, _method, _url, headers), do: headers
+
+  defp without(headers, names) do
+    names = ["authorization" | names]
+    Enum.reject(headers, fn {name, _} -> String.downcase(name) in names end)
+  end
+
+  @doc false
+  # The server's latest DPoP nonce (RFC 9449 §8 and §9), from a challenge
+  # or a `DPoP-Nonce` header, kept per origin.
+  @spec put_nonce(t() | nil, String.t(), String.t() | nil) :: t() | nil
+  def put_nonce(%__MODULE__{} = auth, url, nonce) when is_binary(nonce),
+    do: %{auth | nonces: Map.put(auth.nonces, origin(url), nonce)}
+
+  def put_nonce(auth, _url, _nonce), do: auth
+
+  defp origin(url) do
+    uri = URI.parse(url)
+    "#{uri.scheme}://#{uri.host}:#{uri.port}"
+  end
 
   # ---- what Sake.Client calls
 
@@ -277,7 +350,10 @@ defmodule Sake.Client.Auth do
   def fresh(auth), do: auth
 
   @doc false
-  @spec unauthorized(t(), Challenge.t(), boolean()) :: {:ok, t()} | {:error, term(), t()}
+  @spec unauthorized(t(), Challenge.t(), boolean()) ::
+          {:ok, t()} | {:error, term(), t()} | :exhausted
+  def unauthorized(%__MODULE__{static: true}, _challenge, _refresh?), do: :exhausted
+
   def unauthorized(auth, challenge, refresh?) do
     case discover(auth, challenge) do
       {:ok, server} ->
@@ -293,6 +369,8 @@ defmodule Sake.Client.Auth do
 
   @doc false
   @spec insufficient_scope(t(), Challenge.t()) :: {:ok, t()} | {:error, term(), t()} | :exhausted
+  def insufficient_scope(%__MODULE__{static: true}, _challenge), do: :exhausted
+
   def insufficient_scope(auth, %Challenge{scope: challenged} = challenge) do
     # Asking again for scopes the token already has would only end in the
     # same 403: the server wants something the authorization server will
@@ -364,16 +442,33 @@ defmodule Sake.Client.Auth do
 
   # ---- the flow
 
-  defp authorize(%__MODULE__{grant: :authorization_code} = auth, server, scopes),
+  # A resource that takes DPoP-bound tokens only refuses every token a
+  # client without DPoP could get: the flow stops before anyone is asked.
+  defp authorize(auth, %{dpop_required: true}, _scopes)
+       when auth.dpop == false,
+       do: {:error, {:dpop_required, :dpop_off}, auth}
+
+  defp authorize(auth, %{dpop_required: true} = server, scopes) do
+    if DPoP.available?(),
+      do: authorize_granted(auth, server, scopes),
+      else: {:error, {:dpop_required, :no_jose}, auth}
+  end
+
+  defp authorize(auth, server, scopes), do: authorize_granted(auth, server, scopes)
+
+  defp authorize_granted(%__MODULE__{grant: :authorization_code} = auth, server, scopes),
     do: authorize_code(auth, server, scopes)
 
   # `offline_access` asks for a refresh token, which no machine grant gets.
-  defp authorize(auth, server, scopes) do
+  defp authorize_granted(auth, server, scopes) do
     scopes = scopes -- ["offline_access"]
 
     case machine_client(auth, server) do
-      {:ok, registration, auth} -> machine(auth, server, registration, scopes)
-      {:error, reason, auth} -> {:error, reason, auth}
+      {:ok, registration, auth} ->
+        machine(auth, server, registration, scopes, new_key(auth, server))
+
+      {:error, reason, auth} ->
+        {:error, reason, auth}
     end
   end
 
@@ -381,11 +476,20 @@ defmodule Sake.Client.Auth do
     case Registration.client(auth, server) do
       {:ok, registration, auth} ->
         {url, request} = Grant.request(server, registration, auth.redirect_uri, scopes)
+        pem = new_key(auth, server)
 
         with {:ok, params} <- interact(auth.authorize, url),
              {:ok, code} <- Grant.callback(params, request),
-             {:ok, body} <- Grant.exchange(server, registration, request, code, auth.req) do
-          {:ok, put(auth, {:token, auth.url}, token(body, server, registration, scopes))}
+             {:ok, body} <-
+               Grant.exchange(
+                 server,
+                 registration,
+                 request,
+                 code,
+                 auth.req,
+                 proofs(auth, pem, server.metadata["token_endpoint"])
+               ) do
+          {:ok, put(auth, {:token, auth.url}, token(body, server, registration, scopes, pem))}
         else
           {:error, reason} -> {:error, reason, auth}
         end
@@ -405,10 +509,12 @@ defmodule Sake.Client.Auth do
 
   defp machine_client(auth, server), do: Registration.client(auth, server)
 
-  defp machine(auth, server, registration, scopes) do
-    case machine_token(auth, server, registration, scopes) do
+  defp machine(auth, server, registration, scopes, pem) do
+    dpop = proofs(auth, pem, server.metadata["token_endpoint"])
+
+    case machine_token(auth, server, registration, scopes, dpop) do
       {:ok, body} ->
-        {:ok, put(auth, {:token, auth.url}, token(body, server, registration, scopes))}
+        {:ok, put(auth, {:token, auth.url}, token(body, server, registration, scopes, pem))}
 
       {:error, reason} ->
         {:error, reason, auth}
@@ -419,19 +525,23 @@ defmodule Sake.Client.Auth do
          %__MODULE__{grant: :client_credentials} = auth,
          server,
          registration,
-         scopes
+         scopes,
+         dpop
        ),
-       do: Grant.client_credentials(server, registration, scopes, auth.req)
+       do: Grant.client_credentials(server, registration, scopes, auth.req, dpop)
 
-  defp machine_token(%__MODULE__{grant: :jwt_bearer} = auth, server, registration, scopes) do
+  defp machine_token(%__MODULE__{grant: :jwt_bearer} = auth, server, registration, scopes, dpop) do
     with {:ok, jwt} <- provide(auth.assertion, server),
-         do: Grant.jwt_bearer(server, registration, jwt, scopes, auth.req)
+         do: Grant.jwt_bearer(server, registration, jwt, scopes, auth.req, dpop)
   end
 
-  defp machine_token(%__MODULE__{grant: :enterprise} = auth, server, registration, scopes) do
+  # The token exchange at the identity provider carries no proof: the
+  # ID-JAG it returns is not presented to anyone but the authorization
+  # server, whose own token is the one bound.
+  defp machine_token(%__MODULE__{grant: :enterprise} = auth, server, registration, scopes, dpop) do
     with {:ok, id_token} <- provide(auth.id_token, server),
          {:ok, jag} <- Enterprise.exchange(auth.idp, id_token, server, scopes, auth.req),
-         do: Grant.jwt_bearer(server, registration, jag, scopes, auth.req)
+         do: Grant.jwt_bearer(server, registration, jag, scopes, auth.req, dpop)
   end
 
   defp provide(value, _server) when is_binary(value), do: {:ok, value}
@@ -445,9 +555,9 @@ defmodule Sake.Client.Auth do
     end
   end
 
-  # The token remembers its authorization server, its token endpoint and
-  # the client it was issued to: enough to run a machine grant again
-  # without discovering anything.
+  # The token remembers its authorization server, its token endpoint, the
+  # client it was issued to and its DPoP key: enough to run a machine
+  # grant again without discovering anything.
   defp renew(auth, token) do
     server = %{
       issuer: token["issuer"],
@@ -456,8 +566,11 @@ defmodule Sake.Client.Auth do
     }
 
     case Registration.for_token(auth, token) do
-      %{} = registration -> machine(auth, server, registration, requested(token))
-      nil -> {:error, :no_client, auth}
+      %{} = registration ->
+        machine(auth, server, registration, requested(token), token["dpop_key"])
+
+      nil ->
+        {:error, :no_client, auth}
     end
   end
 
@@ -482,7 +595,9 @@ defmodule Sake.Client.Auth do
   defp maybe_refresh(auth, _server, _refresh?), do: {:error, auth}
 
   # A refresh token that failed once is dropped: the next 401 runs the
-  # whole flow instead of trying it again.
+  # whole flow instead of trying it again. A refresh keeps the token's
+  # DPoP key: the authorization server binds a public client's refresh
+  # token to it.
   defp refresh(auth, token, endpoint) do
     with %{} = registration <- Registration.for_token(auth, token),
          {:ok, body} <-
@@ -491,7 +606,8 @@ defmodule Sake.Client.Auth do
              registration,
              token["refresh_token"],
              token["resource"],
-             auth.req
+             auth.req,
+             proofs(auth, token["dpop_key"], endpoint)
            ) do
       {:ok, put(auth, {:token, auth.url}, refreshed(body, token))}
     else
@@ -499,9 +615,68 @@ defmodule Sake.Client.Auth do
     end
   end
 
-  defp token(body, server, registration, requested) do
+  # ---- DPoP keys
+
+  # A new authorization gets a new key, when the client uses DPoP with
+  # this server at all: when asked to, when the resource requires it (its
+  # authorization server must then bind tokens whatever its metadata
+  # says, and ES256 is the algorithm every DPoP server takes), or when
+  # the authorization server offers ES256.
+  defp new_key(%__MODULE__{dpop: false}, _server), do: nil
+
+  defp new_key(auth, server) do
+    cond do
+      not DPoP.available?() ->
+        nil
+
+      auth.dpop == true or Map.get(server, :dpop_required) == true ->
+        DPoP.generate_key()
+
+      "ES256" in List.wrap(server.metadata["dpop_signing_alg_values_supported"]) ->
+        DPoP.generate_key()
+
+      true ->
+        nil
+    end
+  end
+
+  defp proofs(auth, pem, endpoint) do
+    case key(auth, pem) do
+      nil -> nil
+      key -> %{key: key, nonce: auth.nonces[origin(endpoint)]}
+    end
+  end
+
+  # The key a token is sent with: a DPoP-bound token's own.
+  defp bound_key(%__MODULE__{token: %{"token_type" => "DPoP", "dpop_key" => pem}} = auth),
+    do: key(auth, pem)
+
+  defp bound_key(_auth), do: nil
+
+  # A key from its PEM, read once per token and kept in the session.
+  defp key(%__MODULE__{proof_key: {pem, key}}, pem), do: key
+
+  defp key(_auth, pem) do
+    case proof_key(%{"dpop_key" => pem}) do
+      {_pem, key} -> key
+      nil -> nil
+    end
+  end
+
+  defp proof_key(%{"dpop_key" => pem}) when is_binary(pem) do
+    case JWT.private_key(pem) do
+      {:ok, key} -> {pem, key}
+      {:error, :invalid_key} -> nil
+    end
+  end
+
+  defp proof_key(_token), do: nil
+
+  defp token(body, server, registration, requested, pem) do
     %{
       "access_token" => body["access_token"],
+      "token_type" => token_type(body),
+      "dpop_key" => pem,
       "refresh_token" => body["refresh_token"],
       "expires_at" => expires_at(body["expires_in"]),
       "scopes" => scope(body["scope"]) || requested,
@@ -517,13 +692,19 @@ defmodule Sake.Client.Auth do
   # RFC 6749 §6: a refresh answer without a new refresh token leaves the
   # old one valid, and one without `scope` keeps the scopes as they were.
   defp refreshed(body, token) do
-    %{
-      token
-      | "access_token" => body["access_token"],
-        "refresh_token" => body["refresh_token"] || token["refresh_token"],
-        "expires_at" => expires_at(body["expires_in"]),
-        "scopes" => scope(body["scope"]) || token["scopes"]
-    }
+    Map.merge(token, %{
+      "access_token" => body["access_token"],
+      "token_type" => token_type(body),
+      "refresh_token" => body["refresh_token"] || token["refresh_token"],
+      "expires_at" => expires_at(body["expires_in"]),
+      "scopes" => scope(body["scope"]) || token["scopes"]
+    })
+  end
+
+  # The scheme the token is sent with: what the token endpoint says it is
+  # (`Grant` accepts `DPoP` only in answer to a proof).
+  defp token_type(%{"token_type" => type}) when is_binary(type) do
+    if String.downcase(type) == "dpop", do: "DPoP", else: "Bearer"
   end
 
   defp expires_at(seconds) when is_integer(seconds), do: System.system_time(:second) + seconds
@@ -567,7 +748,7 @@ defmodule Sake.Client.Auth do
 
   def put(auth, {:token, _url} = key, value) do
     persist(auth, key, value)
-    %{auth | token: value}
+    %{auth | token: value, proof_key: proof_key(value)}
   end
 
   defp persist(%__MODULE__{store: {module, arg}}, key, value),

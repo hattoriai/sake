@@ -1,7 +1,11 @@
 defmodule Sake.Client.Challenge do
-  @moduledoc "A parsed `WWW-Authenticate` challenge."
+  @moduledoc """
+  A parsed `WWW-Authenticate` challenge. `nonce` is the response's
+  `DPoP-Nonce` header (RFC 9449 §9), which a `use_dpop_nonce` error asks
+  the next proof to carry.
+  """
   @type t :: %__MODULE__{}
-  defstruct [:scheme, :resource_metadata, :error, :error_description, :realm, scope: []]
+  defstruct [:scheme, :resource_metadata, :error, :error_description, :realm, :nonce, scope: []]
 
   @spec parse(String.t()) :: t()
   def parse(header) do

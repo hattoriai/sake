@@ -11,12 +11,20 @@ defmodule Sake.Auth.Token do
   JWT grant goes back through its issuer, so that the issuer's policy
   (a person removed from the directory, a revoked workload) applies at
   every renewal rather than only at the first.
+
+  A token request with a DPoP proof (RFC 9449) gets tokens bound to the
+  proof's key: `token_type` is `DPoP`, and the access token is accepted
+  only with a proof made with the same key. A public client's refresh
+  token is bound to it too, so refreshing needs a proof with that key;
+  a confidential client's is bound to its credentials already (RFC 9449
+  §5), and each refresh binds the new access token to whichever key the
+  proof that comes with it shows.
   """
   @behaviour Plug
   import Plug.Conn
 
   alias Sake.Auth
-  alias Sake.Auth.{Authorize, ClientAuth, Config, JWTGrant, PKCE, Subject, Tokens}
+  alias Sake.Auth.{Authorize, ClientAuth, Config, DPoP, JWTGrant, PKCE, Subject, Tokens}
 
   @jwt_bearer "urn:ietf:params:oauth:grant-type:jwt-bearer"
 
@@ -35,7 +43,7 @@ defmodule Sake.Auth.Token do
     case p["grant_type"] do
       grant_type when is_binary(grant_type) ->
         if grant_type in grant_types(config),
-          do: authenticate_and_grant(conn, config, p),
+          do: with_proof(conn, config, p),
           else:
             error(
               conn,
@@ -72,7 +80,44 @@ defmodule Sake.Auth.Token do
       if config.trusted_issuers == [], do: [], else: [@jwt_bearer]
   end
 
-  defp authenticate_and_grant(conn, config, p) do
+  # The proof is checked before anything else: before the client is
+  # authenticated and before a code or a refresh token is consumed, so a
+  # request refused for its nonce leaves them usable for the retry.
+  defp with_proof(conn, config, p) do
+    case proof(conn, config) do
+      {:ok, jkt} ->
+        authenticate_and_grant(DPoP.put_nonce(conn, config), config, p, jkt)
+
+      {:error, "use_dpop_nonce", description} ->
+        conn |> DPoP.put_nonce(config) |> error(400, "use_dpop_nonce", description)
+
+      {:error, code, description} ->
+        error(conn, 400, code, description)
+    end
+  end
+
+  # A server without DPoP ignores the header and issues bearer tokens
+  # (RFC 9449 §5), which a client sees from their `token_type`.
+  defp proof(_conn, %Config{dpop: false}), do: {:ok, nil}
+
+  defp proof(conn, config) do
+    case DPoP.from_conn(conn) do
+      :none ->
+        {:ok, nil}
+
+      {:ok, proof} ->
+        DPoP.verify(proof,
+          htm: "POST",
+          htu: [Config.token_url(config)],
+          nonce: DPoP.nonce_secret(config)
+        )
+
+      {:error, code, description} ->
+        {:error, code, description}
+    end
+  end
+
+  defp authenticate_and_grant(conn, config, p, jkt) do
     case ClientAuth.authenticate(config, conn, p) do
       {:error, :invalid_client} ->
         conn
@@ -81,11 +126,38 @@ defmodule Sake.Auth.Token do
 
       {:ok, client} ->
         with :ok <- client_grant(client, p["grant_type"]),
-             {:ok, response} <- grant(config, client, p) do
+             :ok <- proof_required(config, client, jkt),
+             {:ok, response} <- grant(config, client, p, jkt) do
           json(conn, 200, response)
         else
           {:error, code, description} -> error(conn, 400, code, description)
         end
+    end
+  end
+
+  # A server with `dpop: [required: true]`, and a client registered with
+  # `dpop_bound_access_tokens` (RFC 9449 §5.2: "the authorization server
+  # MUST reject token requests from this client that do not contain the
+  # DPoP header"), get bound tokens or none, on every grant. Neither RFC
+  # 9449 nor RFC 6749 names the error for a proof that is missing; it is
+  # `invalid_dpop_proof`, the code §5 gives a token request whose proof
+  # does not do, so that a client sees it is about DPoP. The check runs
+  # before the grant, so a code or refresh token is not spent on it.
+  defp proof_required(_config, _client, jkt) when is_binary(jkt), do: :ok
+
+  defp proof_required(config, client, nil) do
+    cond do
+      Config.dpop_required?(config) ->
+        {:error, "invalid_dpop_proof", "This server issues DPoP-bound tokens only: send a proof"}
+
+      client.dpop_bound_access_tokens and config.dpop == false ->
+        {:error, "invalid_client", "The client requires DPoP, which this server does not offer"}
+
+      client.dpop_bound_access_tokens ->
+        {:error, "invalid_dpop_proof", "The client's tokens must be DPoP-bound: send a proof"}
+
+      true ->
+        :ok
     end
   end
 
@@ -104,7 +176,8 @@ defmodule Sake.Auth.Token do
            "redirect_uri" => uri,
            "code_verifier" => verifier
          } =
-           p
+           p,
+         jkt
        )
        when is_binary(code) and is_binary(uri) and is_binary(verifier) do
     {module, state} = Auth.store(config)
@@ -123,16 +196,23 @@ defmodule Sake.Auth.Token do
              subject_id: record.subject_id,
              scopes: record.scopes,
              resource: record.resource,
-             family_id: hash
+             family_id: hash,
+             jkt: jkt,
+             refresh_jkt: refresh_binding(client, jkt)
            })}
         end
     end
   end
 
-  defp grant(_config, _client, %{"grant_type" => "authorization_code"}),
+  defp grant(_config, _client, %{"grant_type" => "authorization_code"}, _jkt),
     do: {:error, "invalid_request", "code, redirect_uri and code_verifier are required"}
 
-  defp grant(config, client, %{"grant_type" => "refresh_token", "refresh_token" => refresh} = p)
+  defp grant(
+         config,
+         client,
+         %{"grant_type" => "refresh_token", "refresh_token" => refresh} = p,
+         jkt
+       )
        when is_binary(refresh) do
     {module, state} = Auth.store(config)
     hash = Tokens.hash(refresh)
@@ -146,18 +226,18 @@ defmodule Sake.Auth.Token do
         {:error, "invalid_grant", "The refresh token was already used"}
 
       {:ok, record} ->
-        with {:ok, attrs} <- rotate(client, record, p) do
+        with {:ok, attrs} <- rotate(client, record, p, jkt) do
           issued_unless_revoked(config, {module, state}, hash, attrs)
         end
     end
   end
 
-  defp grant(_config, _client, %{"grant_type" => "refresh_token"}),
+  defp grant(_config, _client, %{"grant_type" => "refresh_token"}, _jkt),
     do: {:error, "invalid_request", "refresh_token is required"}
 
   # RFC 6749 §4.4: confidential clients only. The host's subject module
   # names the principal the client acts as, or refuses it.
-  defp grant(config, client, %{"grant_type" => "client_credentials"} = p) do
+  defp grant(config, client, %{"grant_type" => "client_credentials"} = p, jkt) do
     with :ok <- confidential(client),
          {:ok, principal} <- machine_principal(config, client),
          {:ok, scopes} <- granted_scopes(config, p["scope"], [client.scopes]),
@@ -168,12 +248,13 @@ defmodule Sake.Auth.Token do
          client_id: client.id,
          subject_id: nil,
          scopes: scopes,
-         resource: resource
+         resource: resource,
+         jkt: jkt
        })}
     end
   end
 
-  defp grant(config, client, %{"grant_type" => @jwt_bearer, "assertion" => assertion} = p)
+  defp grant(config, client, %{"grant_type" => @jwt_bearer, "assertion" => assertion} = p, jkt)
        when is_binary(assertion) do
     with {:ok, grant} <- JWTGrant.verify(config, client, assertion),
          {:ok, scopes} <- granted_scopes(config, p["scope"], JWTGrant.scope_limits(client, grant)),
@@ -184,12 +265,13 @@ defmodule Sake.Auth.Token do
          client_id: client.id,
          subject_id: config.subject.id(grant.principal),
          scopes: scopes,
-         resource: resource
+         resource: resource,
+         jkt: jkt
        })}
     end
   end
 
-  defp grant(_config, _client, %{"grant_type" => @jwt_bearer}),
+  defp grant(_config, _client, %{"grant_type" => @jwt_bearer}, _jkt),
     do: {:error, "invalid_request", "assertion is required"}
 
   defp confidential(%{token_endpoint_auth_method: "none"}),
@@ -252,17 +334,18 @@ defmodule Sake.Auth.Token do
 
     %{
       "access_token" => access,
-      "token_type" => "Bearer",
+      "token_type" => token_type(attrs),
       "expires_in" => config.access_token_ttl,
       "scope" => Enum.join(attrs.scopes, " ")
     }
   end
 
-  defp rotate(client, record, p) do
+  defp rotate(client, record, p, jkt) do
     with :ok <- fresh(record),
          true <-
            record.client_id == client.id ||
              {:error, "invalid_grant", "The refresh token belongs to another client"},
+         :ok <- same_key(record, jkt),
          {:ok, scopes} <- narrowed(record.scopes, p["scope"]),
          true <-
            p["resource"] in [nil, record.resource] ||
@@ -273,7 +356,9 @@ defmodule Sake.Auth.Token do
          subject_id: record.subject_id,
          scopes: scopes,
          resource: record.resource,
-         family_id: record.family_id
+         family_id: record.family_id,
+         jkt: jkt,
+         refresh_jkt: refresh_binding(client, jkt)
        }}
     else
       {:error, code, description} -> {:error, code, description}
@@ -299,6 +384,25 @@ defmodule Sake.Auth.Token do
         {:ok, response}
     end
   end
+
+  # RFC 9449 §5: a public client's refresh token is bound to its DPoP key,
+  # the only thing that tells its holder from a thief; a confidential
+  # client's is bound to the client's credentials already.
+  defp refresh_binding(%{token_endpoint_auth_method: "none"}, jkt), do: jkt
+  defp refresh_binding(_client, _jkt), do: nil
+
+  defp same_key(%{jkt: nil}, _jkt), do: :ok
+  defp same_key(%{jkt: jkt}, jkt), do: :ok
+
+  defp same_key(_record, nil),
+    do:
+      {:error, "invalid_grant", "The refresh token is bound to a DPoP key: send a proof with it"}
+
+  defp same_key(_record, _jkt),
+    do: {:error, "invalid_grant", "The refresh token is bound to another DPoP key"}
+
+  defp token_type(%{jkt: jkt}) when is_binary(jkt), do: "DPoP"
+  defp token_type(_attrs), do: "Bearer"
 
   defp check_code(record, client, uri, verifier, resource) do
     cond do
@@ -343,7 +447,7 @@ defmodule Sake.Auth.Token do
 
     %{
       "access_token" => access,
-      "token_type" => "Bearer",
+      "token_type" => token_type(attrs),
       "expires_in" => config.access_token_ttl,
       "refresh_token" => refresh,
       "scope" => Enum.join(attrs.scopes, " ")

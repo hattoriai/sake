@@ -31,6 +31,8 @@ if Code.ensure_loaded?(Ecto.Migration) do
         add(:jwks, :map)
         add(:jwks_uri, :text)
         add(:application_type, :string)
+        # RFC 9449 §5.2: the client's token requests must carry a DPoP proof.
+        add(:dpop_bound_access_tokens, :boolean, null: false, default: false)
         timestamps(type: :utc_datetime)
       end
 
@@ -63,6 +65,9 @@ if Code.ensure_loaded?(Ecto.Migration) do
         add(:revoked_at, :utc_datetime)
         add(:used_at, :utc_datetime)
         add(:inserted_at, :utc_datetime, null: false)
+        # The thumbprint of the DPoP key a token is bound to (RFC 9449
+        # `cnf.jkt`); a bearer token has none.
+        add(:jkt, :string)
       end
 
       create(unique_index(:sake_oauth_tokens, [:hash], prefix: prefix))

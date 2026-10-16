@@ -33,8 +33,10 @@ replace or extend.
    the client with an authorization code.
 6. The client exchanges the code (with its PKCE verifier) for an access
    token and a refresh token at `/oauth/token`.
-7. The access token is a bearer token on every MCP request from then on;
-   the refresh token gets a new pair when the access token expires.
+7. The access token goes with every MCP request from then on — bound to
+   a key the client holds, when the client uses DPoP (below), or as a
+   bearer token — and the refresh token gets a new pair when the access
+   token expires.
 
 ## The three client kinds
 
@@ -186,6 +188,92 @@ client goes back to the identity provider for a new grant, so a person
 removed from the directory loses access within one access token
 lifetime.
 
+## DPoP: tokens bound to the client's key
+
+A bearer token works for whoever holds it: one that leaks from a log, a
+proxy or a compromised machine can be used anywhere until it expires.
+With DPoP (RFC 9449, SEP-1932) the client holds a private key, and
+every token is bound to it; whoever steals the token without the key
+gets nothing.
+
+It is on by default when the optional `jose` dependency is there, and
+costs a client that does not use it nothing:
+
+- **Asking for a bound token.** A token request with a `DPoP` header (a
+  proof: a short JWT signed with the client's key, carrying the public
+  key, the request's method and URL, a unique `jti` and the time) gets
+  tokens bound to that key: `token_type` is `DPoP` and the access token
+  record keeps the key's RFC 7638 thumbprint (its `cnf.jkt`). Every
+  grant does this: the authorization code, refresh, client credentials
+  and JWT bearer grants. A request without a proof gets a bearer token
+  as before.
+- **Refreshing.** A public client's refresh token is bound to the key
+  too, so a refresh needs a proof with that same key. A confidential
+  client's refresh token is already bound to its credentials, and each
+  refresh binds the new access token to whichever key its proof shows
+  (RFC 9449 §5).
+- **Using the token.** The MCP endpoint takes a bound token only with
+  `Authorization: DPoP <token>` and a fresh proof for that request,
+  signed with the bound key and carrying the token's hash (`ath`). The
+  same token sent as `Bearer`, a proof made for another method or URL,
+  for another token or with another key, one older than five minutes,
+  and a proof seen before (the `jti`, kept per key for as long as the
+  proof would be accepted) are all refused with a 401.
+- **Challenges.** A 401 carries two `WWW-Authenticate` challenges: the
+  `Bearer` one as before, and a `DPoP` one with the accepted algorithms
+  (`algs`). The one for the scheme the request used comes first, with
+  the error: `invalid_token`, `invalid_dpop_proof` or `use_dpop_nonce`.
+  A 403 for missing scopes uses the scheme the token came with, so a
+  client steps up with DPoP as it would with a bearer token.
+
+```elixir
+auth: [
+  ...,
+  dpop: true,                # the default: DPoP when jose is loaded
+  dpop: [nonce: true],       # require a server nonce in every proof
+  dpop: [required: true],    # DPoP-bound tokens only (combines with nonce:)
+  dpop: false                # bearer tokens only; the DPoP scheme is refused
+]
+```
+
+**DPoP required.** With `required: true` the server deals in bound
+tokens only:
+
+- the token endpoint refuses a request without a proof, on every grant,
+  with `invalid_dpop_proof` (before a code or a refresh token is spent);
+- the MCP endpoint refuses the `Bearer` scheme, even for an unbound token
+  it issued itself, and its 401 carries the `DPoP` challenge alone: a
+  challenge names a scheme the server would accept;
+- the protected resource metadata says `dpop_bound_access_tokens_required:
+  true` (RFC 9728 §2), so a client knows before it asks for a token.
+
+Turning it on is a cut-over: every bearer token issued before stops
+working at once, and their clients must authorize again (with DPoP).
+Clients that cannot use DPoP cannot use the server at all; Sake's own
+client stops with `{:dpop_required, reason}` instead of trying.
+
+A single client can ask for the same (RFC 9449 §5.2): one registered
+with `dpop_bound_access_tokens: true` — in its dynamic registration, its
+Client ID Metadata Document, or `Sake.Auth.Clients.create/2` — gets its
+token requests without a proof refused, whatever the server's setting.
+A server with `dpop: false` refuses such a client's token requests with
+`invalid_client`, since it cannot bind them.
+
+**Nonces.** A proof's time comes from the client's clock, and a stolen
+proof can be replayed to another node of a cluster within its five
+minutes. With `nonce: true` the token endpoint and the MCP endpoint
+answer a proof without the current nonce with `use_dpop_nonce` and a
+`DPoP-Nonce` header (400 at the token endpoint, 401 at the MCP
+endpoint), and send the latest nonce on every DPoP answer. A nonce is a
+MAC of the time under the Sake secret: nothing is stored, every node
+with the same secret accepts it, and it is good for five to ten minutes.
+It costs a client one extra round trip now and then.
+
+Without `jose`, the metadata does not offer DPoP, the token endpoint
+ignores proofs and issues bearer tokens, and the MCP endpoint refuses the
+`DPoP` scheme with `invalid_request`. Asking for it by name (`dpop:
+[...]`, `required:` included) without `jose` fails when Sake starts.
+
 ## What the metadata says
 
 `/.well-known/oauth-authorization-server` lists only what is configured:
@@ -195,7 +283,11 @@ trusted (and `authorization_grant_profiles_supported` with the ID-JAG
 profile when one of them is an identity provider), and `private_key_jwt`
 in `token_endpoint_auth_methods_supported`, with
 `token_endpoint_auth_signing_alg_values_supported` (RS256, PS256,
-ES256, ES384), when `jose` is there.
+ES256, ES384), when `jose` is there. With DPoP on, both documents (the
+authorization server's and the protected resource's) list
+`dpop_signing_alg_values_supported`, the same four algorithms, and with
+`required: true` the protected resource's says
+`dpop_bound_access_tokens_required`.
 
 ## CIMD trust policies
 
@@ -310,8 +402,9 @@ end
 ```
 
 Both take `prefix:`. It creates `sake_oauth_clients`, `sake_oauth_codes`,
-`sake_oauth_tokens` and a consents table — string primary keys throughout
-(hashes and generated IDs, never the raw secrets). Point the auth config
+`sake_oauth_tokens` (with the thumbprint of a token's DPoP key in `jkt`)
+and a consents table — string primary keys throughout (hashes and
+generated IDs, never the raw secrets). Point the auth config
 at it with `store: {Sake.Auth.Store.Ecto, repo: MyApp.Repo}`.
 
 The Ecto store's `put_token` never resurrects a token: it upserts on the

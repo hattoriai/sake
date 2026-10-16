@@ -7,7 +7,9 @@ defmodule Sake.Client.Auth.Discovery do
   # The result is a map: `resource` (the identifier to send as RFC 8707's
   # `resource` parameter), `scopes_supported` (from the resource metadata,
   # or nil), `issuer` (the validated issuer, recorded for RFC 9207's `iss`
-  # check) and `metadata` (the authorization server's document).
+  # check), `metadata` (the authorization server's document) and
+  # `dpop_required` (the resource metadata's
+  # `dpop_bound_access_tokens_required`, RFC 9728 §2).
 
   alias Sake.Client.Auth.HTTP
   alias Sake.Client.Challenge
@@ -20,7 +22,8 @@ defmodule Sake.Client.Auth.Discovery do
           resource: String.t(),
           scopes_supported: [String.t()] | nil,
           issuer: String.t(),
-          metadata: map()
+          metadata: map(),
+          dpop_required: boolean()
         }
 
   @doc """
@@ -44,7 +47,8 @@ defmodule Sake.Client.Auth.Discovery do
              resource: resource["resource"],
              scopes_supported: scopes(resource["scopes_supported"]),
              issuer: issuer,
-             metadata: metadata
+             metadata: metadata,
+             dpop_required: resource["dpop_bound_access_tokens_required"] == true
            }}
         end
 
@@ -235,7 +239,8 @@ defmodule Sake.Client.Auth.Discovery do
          resource: canonical(url),
          scopes_supported: nil,
          issuer: metadata["issuer"],
-         metadata: metadata
+         metadata: metadata,
+         dpop_required: false
        }}
     end
   end

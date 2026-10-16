@@ -259,7 +259,10 @@ principal from the request, so `scope:` does not apply. With `scopes:`,
 the client sends a real access token for `subject:` (the ID your subject
 module's `fetch/1` takes) and that endpoint's URL, issued in the
 `Sake.Auth` store by `access_token/1`, which a `Phoenix.ConnTest` test
-can use too:
+can use too. When the server takes DPoP-bound tokens only (`dpop:
+[required: true]`), the token is bound to a key instead, and the client
+signs a proof with it for every request; the in-memory client has no
+HTTP and no token to bind, and works as before:
 
 ```elixir
 token = Sake.Test.access_token(subject: user.id, scopes: ["issues:read"], resource: "http://www.example.com/acme/mcp")

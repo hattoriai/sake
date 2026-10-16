@@ -12,6 +12,7 @@ defmodule SakeTest.FakeOAuth do
   #   * `:in_header` — whether the 401 names the metadata URL (default true).
   #   * `:challenge_scope` — the 401's `scope`, if any.
   #   * `:scopes_supported` — the resource metadata's, if any.
+  #   * `:resource_metadata` — fields merged into the resource metadata.
   #   * `:issuer_path` — the authorization server's path ("" by default).
   #   * `:metadata_at` — where its metadata is served, by default the RFC 8414
   #     path-inserted URL.
@@ -23,6 +24,7 @@ defmodule SakeTest.FakeOAuth do
   #   * `:legacy` — answer as a 2025-06-18 server instead.
   #   * `:grant` — the scopes every token gets, whatever was asked for.
   #   * `:expires_in`, `:refresh` (default true) — the token answers.
+  #   * `:token_type` — the `token_type` they give (default "Bearer").
   #   * `:registration` — fields merged into the registration answer.
   #   * `:grant_error` — an error code every client credentials or JWT
   #     bearer request is answered with.
@@ -175,6 +177,7 @@ defmodule SakeTest.FakeOAuth do
     doc =
       %{"resource" => resource, "authorization_servers" => [base(conn) <> issuer_path(opts)]}
       |> put_present("scopes_supported", opts[:scopes_supported])
+      |> Map.merge(opts[:resource_metadata] || %{})
 
     json(conn, 200, doc)
   end
@@ -292,7 +295,11 @@ defmodule SakeTest.FakeOAuth do
     json(
       conn,
       200,
-      %{"access_token" => access, "token_type" => "Bearer", "scope" => Enum.join(scopes, " ")}
+      %{
+        "access_token" => access,
+        "token_type" => opts[:token_type] || "Bearer",
+        "scope" => Enum.join(scopes, " ")
+      }
       |> put_present("expires_in", opts[:expires_in])
       |> put_present("refresh_token", if(Map.get(opts, :refresh, true), do: refresh))
     )

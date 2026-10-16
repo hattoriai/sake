@@ -92,8 +92,10 @@ defmodule Sake.Auth.BearerTest do
     conn = ModernClient.post(opts(), "tools/list")
     assert conn.status == 401
 
+    # RFC 9449 §7.1: a server that takes DPoP challenges for both schemes.
     assert [
-             ~s(Bearer resource_metadata="http://www.example.com/.well-known/oauth-protected-resource/mcp", scope="issues:read issues:write")
+             ~s(Bearer resource_metadata="http://www.example.com/.well-known/oauth-protected-resource/mcp", scope="issues:read issues:write"),
+             ~s(DPoP resource_metadata="http://www.example.com/.well-known/oauth-protected-resource/mcp", scope="issues:read issues:write", algs="RS256 PS256 ES256 ES384")
            ] = get_resp_header(conn, "www-authenticate")
 
     assert %{"error" => %{"code" => -32_600, "message" => "Unauthorized"}, "id" => nil} =

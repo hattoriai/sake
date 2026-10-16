@@ -5,6 +5,9 @@ defmodule Sake.Auth.Client do
 
   A client registered for `private_key_jwt` authentication carries its
   public keys: a JWK Set in `jwks`, or the URL of one in `jwks_uri`.
+
+  `dpop_bound_access_tokens` (RFC 9449 §5.2) says the client always uses
+  DPoP: its token requests without a proof are refused.
   """
   @type t :: %__MODULE__{}
   defstruct [
@@ -20,6 +23,7 @@ defmodule Sake.Auth.Client do
     redirect_uris: [],
     grant_types: ["authorization_code", "refresh_token"],
     token_endpoint_auth_method: "none",
-    application_type: "native"
+    application_type: "native",
+    dpop_bound_access_tokens: false
   ]
 end
