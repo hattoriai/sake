@@ -180,6 +180,17 @@ defmodule Sake.Client.Auth do
     %{auth | token: token, proof_key: proof_key(token)}
   end
 
+  @doc false
+  # The authorization extension the grant belongs to, for the client's
+  # capabilities. A workload's JWT grant and DPoP define none: they are
+  # negotiated in the OAuth metadata alone.
+  @spec extensions(t() | nil) :: map()
+  def extensions(%__MODULE__{grant: :client_credentials}),
+    do: %{Sake.Auth.extension(:client_credentials) => %{}}
+
+  def extensions(%__MODULE__{grant: :enterprise}), do: %{Sake.Auth.extension(:enterprise) => %{}}
+  def extensions(_auth), do: %{}
+
   defp dpop(:auto), do: :auto
   defp dpop(false), do: false
 

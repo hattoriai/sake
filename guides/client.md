@@ -354,6 +354,14 @@ key, signing RS256, ES256 or ES384, or `{pem, alg}` for another algorithm
 Pre-registered credentials stay bound to their authorization server, as
 above.
 
+`grant: :client_credentials` and `grant: :enterprise` declare their
+extension (`io.modelcontextprotocol/oauth-client-credentials`,
+`io.modelcontextprotocol/enterprise-managed-authorization`) in the
+client's capabilities: in every request's `_meta` on 2026-07-28 and in
+`initialize` on the legacy revisions, next to the tasks and MCP Apps
+extensions. `grant: :jwt_bearer` declares none, since the workload
+identity grant has no extension identifier, and neither does DPoP.
+
 None of these grants returns a refresh token. An expiring token is
 replaced by running the grant again (straight at the token endpoint it
 came from), a 401 runs it after discovery, and a 403

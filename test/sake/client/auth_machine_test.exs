@@ -299,6 +299,73 @@ defmodule Sake.Client.AuthMachineTest do
     end
   end
 
+  describe "the authorization extension in the client's capabilities" do
+    @client_credentials "io.modelcontextprotocol/oauth-client-credentials"
+    @enterprise "io.modelcontextprotocol/enterprise-managed-authorization"
+
+    defp mcp_bodies(requests), do: for({"POST", "/mcp", body, _} <- requests, do: body)
+
+    defp declared(%{"params" => %{"_meta" => meta}}),
+      do: meta["io.modelcontextprotocol/clientCapabilities"]["extensions"] || %{}
+
+    test "client credentials are declared in every modern request's _meta", ctx do
+      {_base, url} = serve(ctx)
+
+      auth = [grant: :client_credentials, client_id: "svc", client_secret: "s3cret"]
+      assert {:ok, session} = Client.connect(url, auth: auth, ui: true)
+      assert {:ok, _result, _session} = Client.call_tool(session, "echo", %{})
+
+      bodies = mcp_bodies(requests())
+
+      assert Enum.map(bodies, & &1["method"]) == [
+               "server/discover",
+               "server/discover",
+               "tools/call"
+             ]
+
+      for body <- bodies do
+        ext = declared(body)
+        assert ext[@client_credentials] == %{}
+        refute Map.has_key?(ext, @enterprise)
+        # Next to MCP Apps and the tasks extension, not in place of them.
+        assert Map.has_key?(ext, Sake.UI.extension())
+        assert Map.has_key?(ext, Sake.Tasks.extension())
+      end
+    end
+
+    test "enterprise-managed authorization is declared in the legacy initialize", ctx do
+      {base, url} = serve(ctx, legacy: true)
+
+      auth = [
+        grant: :enterprise,
+        client_id: "agent",
+        id_token: "id.token.x",
+        idp: [token_endpoint: base <> "/idp/token", client_id: "idp-agent"]
+      ]
+
+      assert {:ok, session} = Client.connect(url, auth: auth)
+      assert session.era == :legacy
+
+      [initialize] = for %{"method" => "initialize"} = body <- mcp_bodies(requests()), do: body
+      assert initialize["params"]["capabilities"]["extensions"] == %{@enterprise => %{}}
+    end
+
+    test "a workload's JWT grant, and the authorization code flow, declare none", ctx do
+      {_base, url} = serve(ctx)
+
+      assertion = fn _target -> {:ok, "workload.jwt.value"} end
+
+      assert {:ok, _session} =
+               Client.connect(url, auth: [grant: :jwt_bearer, assertion: assertion])
+
+      for body <- mcp_bodies(requests()) do
+        assert Map.keys(declared(body)) == [Sake.Tasks.extension()]
+      end
+
+      assert Sake.Client.Auth.extensions(Sake.Client.Auth.new(url, [], [])) == %{}
+    end
+  end
+
   test "the options are checked when the session is built" do
     url = "https://mcp.example.com/mcp"
 
