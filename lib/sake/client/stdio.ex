@@ -13,6 +13,10 @@ defmodule Sake.Client.Stdio do
   # its response comes back under the caller's: callers that share a
   # session, or a caller that reuses an id after giving up on a call, never
   # get each other's responses.
+  #
+  # The notifications of a `subscriptions/listen` request carry its id (in
+  # `_meta`), and go to it. A legacy server's list changes and resource
+  # updates belong to no call: they go to the processes that `listen/2`.
 
   use GenServer
   require Logger
@@ -105,6 +109,34 @@ defmodule Sake.Client.Stdio do
       throw(value)
   end
 
+  @session_notifications [
+    "notifications/tools/list_changed",
+    "notifications/resources/list_changed",
+    "notifications/prompts/list_changed",
+    "notifications/resources/updated"
+  ]
+
+  @doc "Hands the server's notifications between calls to `fun`, until the server exits."
+  @spec listen(pid(), (String.t(), map() -> any())) :: :ok | {:error, :closed}
+  def listen(pid, fun) do
+    ref = Process.monitor(pid)
+
+    if call(pid, {:listen, self()}) == :ok,
+      do: listened(ref, pid, fun),
+      else: {:error, :closed}
+  end
+
+  defp listened(ref, pid, fun) do
+    receive do
+      {:sake_stdio_notification, method, params} ->
+        fun.(method, params)
+        listened(ref, pid, fun)
+
+      {:DOWN, ^ref, :process, ^pid, _reason} ->
+        :ok
+    end
+  end
+
   defp call(pid, message) do
     GenServer.call(pid, message, :infinity)
   catch
@@ -154,6 +186,7 @@ defmodule Sake.Client.Stdio do
        close_timeout: opts[:close_timeout] || @close_timeout,
        line: [],
        waiters: [],
+       listeners: [],
        wire_id: 0
      }}
   end
@@ -174,6 +207,11 @@ defmodule Sake.Client.Stdio do
     wire_id = state.wire_id + 1
     write(state, %{message | "id" => wire_id})
     {:reply, :ok, %{state | waiters: state.waiters ++ [{wire_id, id, from}], wire_id: wire_id}}
+  end
+
+  def handle_call({:listen, pid}, _from, state) do
+    Process.monitor(pid)
+    {:reply, :ok, %{state | listeners: [pid | state.listeners]}}
   end
 
   def handle_call({:send, message}, _from, state) do
@@ -232,6 +270,9 @@ defmodule Sake.Client.Stdio do
     {:stop, :normal, state}
   end
 
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, state),
+    do: {:noreply, %{state | listeners: List.delete(state.listeners, pid)}}
+
   # Exits are trapped only for the port's sake: the caller's exit still
   # ends this process (and so the server's input) unless it was normal.
   def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
@@ -263,13 +304,27 @@ defmodule Sake.Client.Stdio do
     end
   end
 
-  # A progress token is the caller's own id for its request.
+  # A listen stream's notifications carry its id; a progress token is the
+  # caller's own id for its request.
   defp route({:notification, method, params}, _message, state) do
-    waiter =
-      List.keyfind(state.waiters, params["progressToken"], 1) || List.first(state.waiters)
+    subscription = get_in(params, ["_meta", Sake.Protocol.meta(:subscription_id)])
 
-    with {_wire_id, id, pid} <- waiter,
-         do: send(pid, {:sake_stdio, id, {:notification, method, params}})
+    cond do
+      waiter = subscription && List.keyfind(state.waiters, subscription, 0) ->
+        notify_waiter(waiter, method, params)
+
+      method in @session_notifications ->
+        Enum.each(state.listeners, &send(&1, {:sake_stdio_notification, method, params}))
+
+      waiter = List.keyfind(state.waiters, params["progressToken"], 1) ->
+        notify_waiter(waiter, method, params)
+
+      waiter = List.first(state.waiters) ->
+        notify_waiter(waiter, method, params)
+
+      true ->
+        :ok
+    end
 
     state
   end
@@ -292,6 +347,9 @@ defmodule Sake.Client.Stdio do
   end
 
   defp route(_parsed, _message, state), do: state
+
+  defp notify_waiter({_wire_id, id, pid}, method, params),
+    do: send(pid, {:sake_stdio, id, {:notification, method, params}})
 
   # A port that already closed has its exit waiting in the mailbox.
   defp write(state, message) do

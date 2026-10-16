@@ -425,8 +425,13 @@ defmodule Sake.Plug.Stream do
   @spec legacy(Plug.Conn.t(), map(), Sake.Server.Session.session()) :: Plug.Conn.t()
   def legacy(conn, opts, session) do
     Streams.register_legacy(opts.server, session.nonce)
-    conn = SSE.start(conn)
-    legacy_loop(conn, opts, %{})
+
+    # A comment at once tells the client the stream is open: the session's
+    # subscriptions live on it, so a client subscribes once it is.
+    case conn |> SSE.start() |> SSE.comment() do
+      {:ok, conn} -> legacy_loop(conn, opts, %{})
+      {:error, _} -> conn
+    end
   end
 
   # `subscribed` is a set of URIs kept as a plain map (URI => true): a

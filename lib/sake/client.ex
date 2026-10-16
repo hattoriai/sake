@@ -517,6 +517,55 @@ defmodule Sake.Client do
     end)
   end
 
+  @doc """
+  Follows the server's own notifications until it ends the stream:
+  `fun` gets the method and params of each list change
+  (`"notifications/tools/list_changed"` and the like) and resource update
+  (`"notifications/resources/updated"`). `filter` names what to follow,
+  as a `subscriptions/listen` request's `notifications` does:
+  `"toolsListChanged"`, `"promptsListChanged"` and
+  `"resourcesListChanged"` (`true`), and `"resourceSubscriptions"` (a list
+  of URIs).
+
+  On the modern protocol this is a `subscriptions/listen` request; on a
+  legacy session, the session's GET stream (over stdio, the notifications
+  the server sends between calls), with a `resources/subscribe` for each
+  URI, sent before the stream opens and again once it is open (a server
+  may keep the session's subscriptions on its stream, as Sake does). It
+  blocks until the stream ends, so call it from a process of its own, and
+  stop that process to stop listening. Returns `{:ok, session}` when the
+  server ended the stream.
+  """
+  @spec listen(Session.t(), map(), (String.t(), map() -> any())) ::
+          {:ok, Session.t()} | {:error, term(), Session.t()}
+  def listen(%Session{era: :legacy} = session, filter, fun) do
+    uris = filter["resourceSubscriptions"] || []
+
+    with {:ok, session} <- subscribe_all(session, uris) do
+      opened = fn -> subscribe_all(session, uris) end
+
+      case Transport.listen(session, fun, opened) do
+        :ok -> {:ok, session}
+        {:error, reason} -> {:error, reason, session}
+      end
+    end
+  end
+
+  def listen(session, filter, fun) do
+    params = %{"notifications" => filter}
+
+    with {:ok, _result, session} <-
+           rpc(%{session | on_notification: fun}, "subscriptions/listen", params, timeout: 60_000),
+         do: {:ok, session}
+  end
+
+  defp subscribe_all(session, []), do: {:ok, session}
+
+  defp subscribe_all(session, [uri | rest]) do
+    with {:ok, _, session} <- rpc(session, "resources/subscribe", %{"uri" => uri}),
+         do: subscribe_all(session, rest)
+  end
+
   @spec close(Session.t()) :: :ok
   def close(%Session{stdio: pid}) when is_pid(pid), do: Sake.Client.Stdio.close(pid)
 

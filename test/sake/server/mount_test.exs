@@ -195,8 +195,8 @@ defmodule Sake.Server.MountTest do
       extensions: %{"example/shared" => %{"from" => "app"}}
 
     tools [SakeDev.Tools.Echo]
-    mount(Billing, prefix: "billing")
-    mount(Support, prefix: "support", scope: "support")
+    mount Billing, prefix: "billing"
+    mount Support, prefix: "support", scope: "support"
 
     middleware :before_call, [{Recorder, :app}]
     middleware :after_call, [{Tag, " [app]"}]
@@ -205,12 +205,12 @@ defmodule Sake.Server.MountTest do
 
   defmodule Outer do
     use Sake.Server, name: "outer", version: "1"
-    mount(App, prefix: "app")
+    mount App, prefix: "app"
   end
 
   defmodule Flat do
     use Sake.Server, name: "flat", version: "1"
-    mount(Support)
+    mount Support
   end
 
   defp scope(extra \\ []), do: Map.new([test: self()] ++ extra)
@@ -535,7 +535,7 @@ defmodule Sake.Server.MountTest do
       assert_raise ArgumentError, ~r/tool "create_invoice" is listed twice/, fn ->
         defmodule Twice do
           use Sake.Server, name: "twice", version: "1"
-          mount(Sake.Server.MountTest.Support)
+          mount Sake.Server.MountTest.Support
           tools [Sake.Server.MountTest.CreateInvoice]
         end
       end
@@ -543,8 +543,8 @@ defmodule Sake.Server.MountTest do
       assert_raise ArgumentError, ~r/tool "x_create_invoice" is listed twice/, fn ->
         defmodule SamePrefix do
           use Sake.Server, name: "same", version: "1"
-          mount(Sake.Server.MountTest.Support, prefix: "x")
-          mount(Sake.Server.MountTest.Billing, prefix: "x")
+          mount Sake.Server.MountTest.Support, prefix: "x"
+          mount Sake.Server.MountTest.Billing, prefix: "x"
         end
       end
     end
@@ -553,21 +553,21 @@ defmodule Sake.Server.MountTest do
       assert_raise ArgumentError, ~r/prefix .* must be/, fn ->
         defmodule BadPrefix do
           use Sake.Server, name: "bad", version: "1"
-          mount(Sake.Server.MountTest.Support, prefix: "a/b")
+          mount Sake.Server.MountTest.Support, prefix: "a/b"
         end
       end
 
       assert_raise ArgumentError, ~r/mount takes prefix: and scope:/, fn ->
         defmodule BadOption do
           use Sake.Server, name: "bad", version: "1"
-          mount(Sake.Server.MountTest.Support, name: "x")
+          mount Sake.Server.MountTest.Support, name: "x"
         end
       end
 
       assert_raise ArgumentError, ~r/mount needs a Sake.Server/, fn ->
         defmodule NotAServer do
           use Sake.Server, name: "bad", version: "1"
-          mount(Sake.Server.MountTest.Recorder)
+          mount Sake.Server.MountTest.Recorder
         end
       end
     end
@@ -588,7 +588,7 @@ defmodule Sake.Server.MountTest do
 
         defmodule UrnParent do
           use Sake.Server, name: "urn-parent", version: "1"
-          mount(UrnServer, prefix: "p")
+          mount UrnServer, prefix: "p"
         end
       end
     end

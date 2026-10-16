@@ -164,6 +164,12 @@ First release.
   it), and sees them by the names it gave them; its components see
   their own server in `ctx.server`, and its broadcasts reach the
   parent's clients with renamed URIs. See `guides/composing.md`.
+- `Sake.Client.request/4` returns a result as the server sent it (an
+  input-required result, a task), and `Sake.Client.listen/3` follows a
+  server's list changes and resource updates on both eras. An answering
+  function may throw to abandon a legacy call; a stdio session's
+  requests go out under ids of the transport's own. A legacy GET stream
+  sends a comment as soon as it opens.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the

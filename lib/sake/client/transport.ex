@@ -291,6 +291,55 @@ defmodule Sake.Client.Transport do
   end
 
   @doc false
+  # A legacy session's own notifications, until the server ends the
+  # stream: its GET stream on HTTP, what the server sends between calls on
+  # stdio. Keepalive comments arrive at least every few seconds, so a
+  # stream silent for a minute is gone.
+  # `opened` runs once the stream is open, on HTTP.
+  @spec listen(Session.t(), (String.t(), map() -> any()), (-> any())) :: :ok | {:error, term()}
+  def listen(%Session{stdio: pid}, fun, _opened) when is_pid(pid),
+    do: Sake.Client.Stdio.listen(pid, fun)
+
+  def listen(%Session{local: endpoint}, _fun, _opened) when endpoint != nil,
+    do: {:error, :unsupported}
+
+  def listen(session, fun, opened) do
+    headers =
+      [{"accept", "text/event-stream"}] ++
+        era_headers(session, %{}, []) ++ Auth.headers(session.auth, session.headers)
+
+    result =
+      Req.get(
+        session.url,
+        [headers: headers, retry: false, decode_body: false, receive_timeout: 60_000] ++
+          session.req ++ [into: &listened(&1, &2, fun, opened)]
+      )
+
+    case result do
+      {:ok, %Req.Response{status: 200}} -> :ok
+      {:ok, %Req.Response{status: 401} = resp} -> {:error, {:unauthorized, challenge(resp)}}
+      {:ok, %Req.Response{status: status, body: body}} -> {:error, {:http, status, body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp listened({:data, data}, {req, resp}, fun, opened) do
+    if resp.status == 200 do
+      if !resp.private[:sake_opened], do: opened.()
+      resp = put_in(resp.private[:sake_opened], true)
+      {events, buffer} = parse_sse((resp.private[:sake_buffer] || "") <> data)
+
+      for event <- events,
+          {:notification, method, params} <- [JSONRPC.parse(event)],
+          do: fun.(method, params)
+
+      {:cont, {req, put_in(resp.private[:sake_buffer], buffer)}}
+    else
+      {:cont, {req, %{resp | body: (resp.body || "") <> data}}}
+    end
+  end
+
+  @doc false
   def delete(session) do
     headers =
       [{"mcp-session-id", session.session_id}] ++ Auth.headers(session.auth, session.headers)
