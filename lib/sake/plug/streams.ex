@@ -140,13 +140,14 @@ defmodule Sake.Plug.Streams do
 
   # Compiled only when the host has Phoenix.PubSub: a host without it never
   # sets a pubsub, and must not see a warning for a module it does not have.
+  # Without it this clause never runs; it answers as the real one would.
   if Code.ensure_loaded?(Phoenix.PubSub) do
     defp relay_broadcast(pubsub, message) do
       Phoenix.PubSub.broadcast_from(pubsub, self(), topic(), message)
       :ok
     end
   else
-    defp relay_broadcast(_pubsub, _message), do: :none
+    defp relay_broadcast(_pubsub, _message), do: :ok
   end
 
   @doc false
