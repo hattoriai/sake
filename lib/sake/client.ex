@@ -668,30 +668,42 @@ defmodule Sake.Client do
   # authorization flow (the refresh token first, the first time), a 403
   # `insufficient_scope` a step-up; either way the same message is sent
   # again with the new token. The JSON-RPC id stays the same: the server
-  # refused the request at the HTTP level, so it never saw that id.
-  defp post(session, message, opts, authorizations \\ 0) do
+  # refused the request at the HTTP level, so it never saw that id. A
+  # DPoP nonce challenge is not a refusal of the token: the message goes
+  # again at once with the server's nonce, once per token, and is not
+  # counted as an authorization.
+  defp post(session, message, opts, authorizations \\ 0, nonced? \\ false) do
     session = if session.auth, do: %{session | auth: Auth.fresh(session.auth)}, else: session
 
     case Transport.post(session, message, opts) do
-      {:error, {:unauthorized, challenge} = error}
-      when session.auth != nil and authorizations < @max_authorizations ->
-        session
-        |> reauthorize(error, &Auth.unauthorized(&1, challenge, authorizations == 0))
-        |> retry(message, opts, authorizations)
+      {:error, {:unauthorized, %{error: "use_dpop_nonce", nonce: nonce}}}
+      when session.auth != nil and is_binary(nonce) and not nonced? ->
+        session = %{session | auth: Auth.put_nonce(session.auth, session.url, nonce)}
+        post(session, message, opts, authorizations, true)
 
-      {:error, {:insufficient_scope, challenge} = error}
-      when session.auth != nil and authorizations < @max_authorizations ->
-        session
-        |> reauthorize(error, &Auth.insufficient_scope(&1, challenge))
-        |> retry(message, opts, authorizations)
-
-      {:error, reason} ->
-        {:error, reason, session}
-
-      {:ok, result, session} ->
-        {:ok, result, session}
+      answer ->
+        authorize_on(answer, session, message, opts, authorizations)
     end
   end
+
+  defp authorize_on({:error, {:unauthorized, challenge} = error}, session, message, opts, n)
+       when session.auth != nil and n < @max_authorizations do
+    session
+    |> reauthorize(error, &Auth.unauthorized(&1, challenge, n == 0))
+    |> retry(message, opts, n)
+  end
+
+  defp authorize_on({:error, {:insufficient_scope, challenge} = error}, session, message, opts, n)
+       when session.auth != nil and n < @max_authorizations do
+    session
+    |> reauthorize(error, &Auth.insufficient_scope(&1, challenge))
+    |> retry(message, opts, n)
+  end
+
+  defp authorize_on({:error, reason}, session, _message, _opts, _n), do: {:error, reason, session}
+
+  defp authorize_on({:ok, result, session}, _session, _message, _opts, _n),
+    do: {:ok, result, session}
 
   defp reauthorize(session, error, fun) do
     case fun.(session.auth) do

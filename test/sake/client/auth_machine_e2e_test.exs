@@ -158,6 +158,10 @@ defmodule Sake.Client.AuthMachineE2ETest do
     auth = [grant: :client_credentials, client_id: client.id, private_key: pem]
     assert {:ok, session} = Client.connect(url, auth: auth)
 
+    # The token request carried a client assertion and a DPoP proof, two
+    # keys for two purposes: the token is bound to the second.
+    assert session.auth.token["token_type"] == "DPoP"
+
     assert {:ok, %{text: "counted to 1"}, _session} =
              Client.call_tool(session, "slow", %{"n" => 1})
 
@@ -166,9 +170,10 @@ defmodule Sake.Client.AuthMachineE2ETest do
 
     # A token that expired is replaced by running the grant again.
     session = put_in(session.auth.token["expires_at"], System.system_time(:second))
-    old = session.auth.token["access_token"]
+    old = session.auth.token
     assert {:ok, _result, session} = Client.call_tool(session, "echo", %{"text" => "y"})
-    assert session.auth.token["access_token"] != old
+    assert session.auth.token["access_token"] != old["access_token"]
+    assert session.auth.token["dpop_key"] == old["dpop_key"]
   end
 
   test "enterprise-managed: an ID token, an ID-JAG, then a token for the person", ctx do
@@ -189,8 +194,10 @@ defmodule Sake.Client.AuthMachineE2ETest do
 
     {module, state} = Sake.Auth.store(ctx.config)
 
-    assert [%{kind: :access, client_id: id, resource: resource}] =
+    assert [%{kind: :access, client_id: id, resource: resource, jkt: jkt}] =
              module.tokens_for_subject(state, "u1")
+
+    assert is_binary(jkt)
 
     assert id == client.id and resource == ctx.url
 

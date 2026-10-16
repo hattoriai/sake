@@ -34,11 +34,11 @@ defmodule Sake.Client.Auth.Enterprise do
       {params, headers} = Grant.authenticate(params, registration(idp, methods))
 
       case HTTP.post(endpoint, [form: params], headers, req) do
-        {:ok, 200, %{"access_token" => jag, "issued_token_type" => @id_jag}}
+        {:ok, 200, %{"access_token" => jag, "issued_token_type" => @id_jag}, _headers}
         when is_binary(jag) ->
           {:ok, jag}
 
-        {:ok, status, body} ->
+        {:ok, status, body, _headers} ->
           {:error, {:token_exchange_failed, status, body}}
 
         {:error, reason} ->

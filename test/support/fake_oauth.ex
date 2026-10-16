@@ -23,6 +23,7 @@ defmodule SakeTest.FakeOAuth do
   #   * `:legacy` — answer as a 2025-06-18 server instead.
   #   * `:grant` — the scopes every token gets, whatever was asked for.
   #   * `:expires_in`, `:refresh` (default true) — the token answers.
+  #   * `:token_type` — the `token_type` they give (default "Bearer").
   #   * `:registration` — fields merged into the registration answer.
   #   * `:grant_error` — an error code every client credentials or JWT
   #     bearer request is answered with.
@@ -292,7 +293,11 @@ defmodule SakeTest.FakeOAuth do
     json(
       conn,
       200,
-      %{"access_token" => access, "token_type" => "Bearer", "scope" => Enum.join(scopes, " ")}
+      %{
+        "access_token" => access,
+        "token_type" => opts[:token_type] || "Bearer",
+        "scope" => Enum.join(scopes, " ")
+      }
       |> put_present("expires_in", opts[:expires_in])
       |> put_present("refresh_token", if(Map.get(opts, :refresh, true), do: refresh))
     )

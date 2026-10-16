@@ -31,14 +31,22 @@ defmodule Sake.Client.Auth.HTTP do
     end
   end
 
-  @doc "POSTs `body` (`json:` or `form:`) and decodes the JSON answer, whatever its status."
+  @doc """
+  POSTs `body` (`json:` or `form:`) and decodes the JSON answer, whatever
+  its status. The answer's headers come back too (a DPoP nonce travels
+  in one), with lowercase names.
+  """
   @spec post(String.t(), keyword(), [{String.t(), String.t()}], keyword()) ::
-          {:ok, pos_integer(), map() | binary()} | {:error, term()}
+          {:ok, pos_integer(), map() | binary(), %{String.t() => [String.t()]}}
+          | {:error, term()}
   def post(url, body, headers, req) do
     with :ok <- check(url) do
       case Req.post(url, body ++ options(headers, req)) do
-        {:ok, %Req.Response{status: status, body: body}} -> {:ok, status, decoded(body)}
-        {:error, reason} -> {:error, reason}
+        {:ok, %Req.Response{status: status, body: body, headers: headers}} ->
+          {:ok, status, decoded(body), headers}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end

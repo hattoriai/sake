@@ -36,7 +36,8 @@ defmodule Sake.Client.Transport do
   def post(session, message, opts) do
     headers =
       [{"accept", @accept}] ++
-        era_headers(session, message, opts) ++ Auth.headers(session.auth, session.headers)
+        era_headers(session, message, opts) ++
+        Auth.headers(session.auth, "POST", session.url, session.headers)
 
     id = message["id"]
 
@@ -64,8 +65,8 @@ defmodule Sake.Client.Transport do
       {:ok, %Req.Response{status: 403} = resp} ->
         forbidden(resp)
 
-      {:ok, %Req.Response{status: 202}} ->
-        {:ok, :accepted, session}
+      {:ok, %Req.Response{status: 202} = resp} ->
+        {:ok, :accepted, capture_nonce(resp, session)}
 
       {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
         finish(resp, session, id)
@@ -181,7 +182,7 @@ defmodule Sake.Client.Transport do
         (Map.has_key?(event, "result") or Map.has_key?(event, "error"))
 
   defp finish(resp, session, id) do
-    session = capture_session(resp, session)
+    session = resp |> capture_session(session) |> then(&capture_nonce(resp, &1))
 
     case content_type(resp) do
       :sse ->
@@ -205,10 +206,41 @@ defmodule Sake.Client.Transport do
     end
   end
 
+  # A server that takes DPoP sends a challenge for each scheme (RFC 9449
+  # §7.1), the one with the error first; a nonce request is looked for in
+  # all of them, so a server that orders them otherwise is still heard.
   defp challenge(resp) do
-    case Map.get(resp.headers, "www-authenticate") do
-      [h | _] -> Challenge.parse(h)
-      _ -> %Challenge{scheme: "Bearer"}
+    challenges = Enum.map(Map.get(resp.headers, "www-authenticate", []), &Challenge.parse/1)
+    nonce = resp.headers |> Map.get("dpop-nonce", []) |> List.first()
+
+    challenge =
+      Enum.find(challenges, &(&1.error == "use_dpop_nonce")) || List.first(challenges) ||
+        %Challenge{scheme: "Bearer"}
+
+    %{challenge | nonce: nonce}
+  end
+
+  # The server's latest DPoP nonce, from any answer that carries one.
+  defp capture_nonce(resp, %Session{auth: auth} = session) when auth != nil do
+    case Map.get(resp.headers, "dpop-nonce") do
+      [nonce | _] -> %{session | auth: Auth.put_nonce(auth, session.url, nonce)}
+      _ -> session
+    end
+  end
+
+  defp capture_nonce(_resp, session), do: session
+
+  # The GET stream and the DELETE are not retried by `Sake.Client`'s own
+  # authorization loop; a DPoP nonce challenge on either gets the request
+  # once more here, with the nonce.
+  defp with_nonce(session, request) do
+    case request.(session) do
+      {:error, {:unauthorized, %Challenge{error: "use_dpop_nonce", nonce: nonce}}}
+      when is_binary(nonce) ->
+        session |> Map.update!(:auth, &Auth.put_nonce(&1, session.url, nonce)) |> request.()
+
+      other ->
+        other
     end
   end
 
@@ -303,10 +335,13 @@ defmodule Sake.Client.Transport do
   def listen(%Session{local: endpoint}, _fun, _opened) when endpoint != nil,
     do: {:error, :unsupported}
 
-  def listen(session, fun, opened) do
+  def listen(session, fun, opened), do: with_nonce(session, &get_stream(&1, fun, opened))
+
+  defp get_stream(session, fun, opened) do
     headers =
       [{"accept", "text/event-stream"}] ++
-        era_headers(session, %{}, []) ++ Auth.headers(session.auth, session.headers)
+        era_headers(session, %{}, []) ++
+        Auth.headers(session.auth, "GET", session.url, session.headers)
 
     result =
       Req.get(
@@ -341,10 +376,18 @@ defmodule Sake.Client.Transport do
 
   @doc false
   def delete(session) do
-    headers =
-      [{"mcp-session-id", session.session_id}] ++ Auth.headers(session.auth, session.headers)
-
-    _ = Req.delete(session.url, [headers: headers, retry: false] ++ session.req)
+    _ = with_nonce(session, &delete_once/1)
     :ok
+  end
+
+  defp delete_once(session) do
+    headers =
+      [{"mcp-session-id", session.session_id}] ++
+        Auth.headers(session.auth, "DELETE", session.url, session.headers)
+
+    case Req.delete(session.url, [headers: headers, retry: false] ++ session.req) do
+      {:ok, %Req.Response{status: 401} = resp} -> {:error, {:unauthorized, challenge(resp)}}
+      other -> other
+    end
   end
 end

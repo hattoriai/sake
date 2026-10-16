@@ -19,7 +19,7 @@ defmodule Sake.Proxy.CredentialsTest do
     use Sake.Proxy, name: "machine", version: "1", upstream: "http://127.0.0.1:1/mcp"
   end
 
-  setup do
+  setup tags do
     base = HTTP.start(SakeDev.Router)
 
     start_supervised!(
@@ -30,7 +30,8 @@ defmodule Sake.Proxy.CredentialsTest do
          allow_insecure: true,
          servers: [SakeDev.Server],
          resources: ["/mcp", "/acme/mcp", "/beta/mcp"],
-         store: {Sake.Auth.Store.ETS, []}
+         store: {Sake.Auth.Store.ETS, []},
+         dpop: Map.get(tags, :dpop, true)
        ],
        secret_key_base: SakeTest.ModernClient.secret(),
        streams: false,
@@ -60,7 +61,10 @@ defmodule Sake.Proxy.CredentialsTest do
              call_tool(client, "slow", %{"n" => 1, "delay_ms" => 0})
   end
 
-  test "the client's own machine authorization", %{url: url, config: config} do
+  # The upstream session is `Sake.Client`'s own, so DPoP comes with it:
+  # here the upstream asks for nonces too.
+  @tag dpop: [nonce: true]
+  test "the client's own machine authorization, with DPoP", %{url: url, config: config} do
     {:ok, machine, secret} =
       Clients.create(config, %{
         name: "Gateway",
@@ -76,6 +80,18 @@ defmodule Sake.Proxy.CredentialsTest do
 
     assert {:ok, %ToolResult{text: "counted to 1"}} =
              call_tool(client, "slow", %{"n" => 1, "delay_ms" => 0})
+
+    assert {:ok, %ToolResult{text: "again"}} = call_tool(client, "echo", %{"text" => "again"})
+
+    assert [_ | _] =
+             tokens =
+             for(
+               {_, %{client_id: id} = t} <- :ets.tab2list(Sake.Auth.Store.ETS.Tokens),
+               id == machine.id,
+               do: t
+             )
+
+    assert Enum.all?(tokens, &is_binary(&1.jkt))
   end
 
   test "no credentials: the upstream refuses, and the proxy lists nothing", %{url: url} do

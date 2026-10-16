@@ -5,8 +5,13 @@ defmodule Sake.Client.Auth.Grant do
   # back through the redirect URI, and the token endpoint (the code
   # exchange and refresh, the client credentials and JWT bearer grants,
   # with the client authentication the registration calls for).
+  #
+  # Every token request takes `dpop`: nil, or `%{key: key, nonce: nonce}`
+  # to send a DPoP proof (RFC 9449 §5) made with `key`, and so ask for a
+  # token bound to it, with the authorization server's latest nonce if
+  # the client has one.
 
-  alias Sake.Auth.JWT
+  alias Sake.Auth.{DPoP, JWT}
   alias Sake.Client.Auth.HTTP
 
   @jwt_bearer "urn:ietf:params:oauth:grant-type:jwt-bearer"
@@ -96,9 +101,13 @@ defmodule Sake.Client.Auth.Grant do
     end
   end
 
+  @typedoc "Whether a token request carries a DPoP proof, and with which key and nonce."
+  @type dpop :: %{key: JWT.key(), nonce: String.t() | nil} | nil
+
   @doc "Exchanges a code for a token."
-  @spec exchange(map(), map(), map(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def exchange(server, registration, request, code, req) do
+  @spec exchange(map(), map(), map(), String.t(), keyword(), dpop()) ::
+          {:ok, map()} | {:error, term()}
+  def exchange(server, registration, request, code, req, dpop \\ nil) do
     token(
       server.metadata["token_endpoint"],
       [
@@ -109,67 +118,96 @@ defmodule Sake.Client.Auth.Grant do
         resource: server.resource
       ],
       registration,
-      req
+      req,
+      dpop
     )
   end
 
   @doc "Uses a refresh token."
-  @spec refresh(String.t(), map(), String.t(), String.t(), keyword()) ::
+  @spec refresh(String.t(), map(), String.t(), String.t(), keyword(), dpop()) ::
           {:ok, map()} | {:error, term()}
-  def refresh(endpoint, registration, refresh_token, resource, req) do
+  def refresh(endpoint, registration, refresh_token, resource, req, dpop \\ nil) do
     token(
       endpoint,
       [grant_type: "refresh_token", refresh_token: refresh_token, resource: resource],
       registration,
-      req
+      req,
+      dpop
     )
   end
 
   @doc "The client credentials grant (RFC 6749 §4.4)."
-  @spec client_credentials(map(), map(), [String.t()], keyword()) ::
+  @spec client_credentials(map(), map(), [String.t()], keyword(), dpop()) ::
           {:ok, map()} | {:error, term()}
-  def client_credentials(server, registration, scopes, req) do
+  def client_credentials(server, registration, scopes, req, dpop \\ nil) do
     token(
       server.metadata["token_endpoint"],
       [grant_type: "client_credentials", resource: server.resource] ++ scope(scopes),
       registration,
-      req
+      req,
+      dpop
     )
   end
 
   @doc "The JWT bearer grant (RFC 7523 §2.1): `assertion` is the JWT."
-  @spec jwt_bearer(map(), map(), String.t(), [String.t()], keyword()) ::
+  @spec jwt_bearer(map(), map(), String.t(), [String.t()], keyword(), dpop()) ::
           {:ok, map()} | {:error, term()}
-  def jwt_bearer(server, registration, assertion, scopes, req) do
+  def jwt_bearer(server, registration, assertion, scopes, req, dpop \\ nil) do
     token(
       server.metadata["token_endpoint"],
       [grant_type: @jwt_bearer, assertion: assertion, resource: server.resource] ++
         scope(scopes),
       registration,
-      req
+      req,
+      dpop
     )
   end
 
   defp scope([]), do: []
   defp scope(scopes), do: [scope: Enum.join(scopes, " ")]
 
-  defp token(endpoint, params, registration, req) do
-    {params, headers} = authenticate(params, registration)
-
-    case HTTP.post(endpoint, [form: params], headers, req) do
-      {:ok, 200, %{"access_token" => access, "token_type" => type} = body}
+  # A DPoP token comes only in answer to a proof; a bearer one may come
+  # either way, from a server that does not bind tokens.
+  defp token(endpoint, params, registration, req, dpop) do
+    case post(endpoint, params, registration, req, dpop, false) do
+      {:ok, 200, %{"access_token" => access, "token_type" => type} = body, _headers}
       when is_binary(access) and is_binary(type) ->
-        if String.downcase(type) == "bearer",
-          do: {:ok, body},
-          else: {:error, {:token_type, type}}
+        case String.downcase(type) do
+          "bearer" -> {:ok, body}
+          "dpop" when dpop != nil -> {:ok, body}
+          _ -> {:error, {:token_type, type}}
+        end
 
-      {:ok, status, body} ->
+      {:ok, status, body, _headers} ->
         {:error, {:token_failed, status, body}}
 
       {:error, reason} ->
         {:error, {:token_failed, reason}}
     end
   end
+
+  # RFC 9449 §8: a server that wants a nonce in the proof refuses the
+  # first one with `use_dpop_nonce` and the nonce to use, and the request
+  # is made once more with it. The client authenticates afresh for the
+  # retry: a client assertion is single use, and the server may have
+  # recorded the first one before it looked at the proof.
+  defp post(endpoint, params, registration, req, dpop, retried?) do
+    {form, headers} = authenticate(params, registration)
+
+    case HTTP.post(endpoint, [form: form], proof(dpop, endpoint) ++ headers, req) do
+      {:ok, 400, %{"error" => "use_dpop_nonce"}, %{"dpop-nonce" => [nonce | _]}}
+      when dpop != nil and not retried? ->
+        post(endpoint, params, registration, req, %{dpop | nonce: nonce}, true)
+
+      other ->
+        other
+    end
+  end
+
+  defp proof(nil, _endpoint), do: []
+
+  defp proof(%{key: key, nonce: nonce}, endpoint),
+    do: [{"dpop", DPoP.proof(key, "POST", endpoint, nonce: nonce)}]
 
   @doc """
   Adds the client authentication a registration calls for to a token

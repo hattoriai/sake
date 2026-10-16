@@ -122,12 +122,12 @@ defmodule Sake.Client.Auth.Registration do
     }
 
     case HTTP.post(metadata["registration_endpoint"], [json: body], [], auth.req) do
-      {:ok, status, %{"client_id" => client_id} = response}
+      {:ok, status, %{"client_id" => client_id} = response, _headers}
       when status in 200..299 and is_binary(client_id) ->
         registered = registered(response, method, issuer)
         {:ok, registered, Auth.put(auth, {:client, issuer}, registered)}
 
-      {:ok, status, response} ->
+      {:ok, status, response, _headers} ->
         {:error, {:registration_failed, status, response}, auth}
 
       {:error, reason} ->
