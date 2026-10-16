@@ -42,6 +42,11 @@ defmodule Sake do
   used on one node to be refused on the others; a deployment with only
   `external_auth:` and DPoP sets it to have that. Without either, each
   node remembers on its own.
+
+  When a store, the replay table or the streams keep their state on this
+  node only (the ETS stores, no `replay:` store, no `pubsub:`), Sake logs
+  a warning once this node is connected to another, naming each and its
+  shared alternative. See the "Running on several nodes" guide.
   """
   def child_spec(opts) do
     %{id: __MODULE__, type: :supervisor, start: {__MODULE__, :start_link, [opts]}}
@@ -74,7 +79,8 @@ defmodule Sake do
         store_children(auth) ++
         if(auth || external != %{}, do: [Sake.Auth.CIMD.Cache, Sake.Auth.Replay], else: []) ++
         if(external != %{}, do: [Sake.Auth.External.Cache], else: []) ++
-        tasks_children(Keyword.get(opts, :tasks, []))
+        tasks_children(Keyword.get(opts, :tasks, [])) ++
+        cluster_children(Sake.Cluster.local_state(opts, auth, external))
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Sake.Supervisor)
   end
@@ -94,4 +100,7 @@ defmodule Sake do
 
   defp tasks_children(false), do: []
   defp tasks_children(opts), do: [{Sake.Tasks, opts}]
+
+  defp cluster_children([]), do: []
+  defp cluster_children(local), do: [{Sake.Cluster, local}]
 end
