@@ -125,7 +125,10 @@ RFC 7523) issues a token for a JWT that an issuer you trust signed:
   its people may use which client with your server. The client exchanges
   the person's single sign-on ID token at the identity provider for an
   Identity Assertion JWT Authorization Grant (ID-JAG), and presents it
-  here; the person never sees a consent page.
+  here; the person never sees a consent page. A client whose single
+  sign-on is SAML first trades the SAML assertion for a refresh token
+  at the identity provider, then that for the ID-JAG; nothing changes
+  here, where an ID-JAG arrives either way.
 - **Workload identity.** A CI system, a cloud or Kubernetes gives each
   workload a signed JWT naming it; the workload presents that JWT and
   needs no secret of its own.
@@ -307,6 +310,14 @@ authorization server's and the protected resource's) list
 `dpop_signing_alg_values_supported`, the same four algorithms, and with
 `required: true` the protected resource's says
 `dpop_bound_access_tokens_required`.
+
+`client_secret_jwt` is never listed, and the token endpoint refuses its
+assertions with `invalid_client`. It is an HMAC keyed with the client
+secret, and checking one needs the secret itself, while Sake keeps only
+a hash of each secret it issues (see the security guide). A client that
+can sign should use `private_key_jwt`; one with a secret sends it with
+`client_secret_basic` or `client_secret_post`. `Sake.Client` can still
+use `client_secret_jwt` with other servers and identity providers.
 
 ## CIMD trust policies
 

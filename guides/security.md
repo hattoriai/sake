@@ -90,6 +90,19 @@ Client ID Metadata Document (HTTPS, no redirects, 64 KB, five seconds),
 but without the public-address check: those URLs come from your own
 configuration and registrations, not from a stranger's request.
 
+There is no `client_secret_jwt` (RFC 7523 §2.2 with an HMAC) at Sake's
+token endpoint, on purpose. An HMAC can only be checked by someone who
+holds the key, here the client secret; Sake stores a SHA-256 hash of each
+secret instead (`secret_hash`), so a leaked database holds nothing a
+client could authenticate with. Offering the method would mean keeping
+every secret in a recoverable form for every host, a real loss for a
+method that adds little over `client_secret_basic` on TLS; and
+`private_key_jwt` already keeps the secret off the wire, with no shared
+secret at all. Its assertions are refused like any HMAC, and the
+metadata does not list it. Sake's *client* does sign `client_secret_jwt`
+assertions for servers and identity providers that want them, with a
+separate HS256 function that never touches the verification path above.
+
 Neither the token endpoint's errors nor Sake's logs ever contain an
 assertion, an ID token or a secret; an `error_description` names the
 check that failed and nothing else. Tokens from these grants carry no

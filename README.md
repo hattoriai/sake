@@ -97,7 +97,8 @@ Without a person at a browser, both sides also speak the official
 authorization extensions: the client credentials grant for a service
 acting as itself (with a secret, or a key and `private_key_jwt`), and
 the JWT bearer grant for an enterprise identity provider's ID-JAG
-(enterprise-managed authorization) or a workload's platform JWT, and
+(enterprise-managed authorization, from an OpenID Connect or a SAML
+sign-on) or a workload's platform JWT, and
 declare the extensions in their MCP capabilities. Signed
 JWTs, and DPoP, need the optional `jose` dependency:
 
@@ -105,7 +106,8 @@ JWTs, and DPoP, need the optional `jose` dependency:
 {:jose, "~> 1.11"}
 ```
 
-Client credentials with a secret work without it.
+Client credentials with a secret (and the client's `client_secret_jwt`)
+work without it.
 
 ## Guides
 
@@ -134,7 +136,8 @@ rotation, machine clients, trusted identity providers and workloads), and
 the client (HTTP and stdio), which runs the MCP authorization flow itself
 (discovery, CIMD or dynamic registration, PKCE, refresh, step-up, DPoP
 with its nonces, or a grant without a person: client credentials, a JWT
-bearer grant, enterprise-managed authorization) and follows tasks; OpenTelemetry traces run from the
+bearer grant, enterprise-managed authorization with an ID token or a
+SAML assertion; `client_secret_jwt` too) and follows tasks; OpenTelemetry traces run from the
 client's call through the server into the tool; `Sake.Test`, which
 tests a server through an in-memory client; middleware, the host's
 own code around every call; composing, one server mounted inside
