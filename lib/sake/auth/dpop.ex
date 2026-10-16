@@ -138,6 +138,21 @@ defmodule Sake.Auth.DPoP do
   """
   @spec verify(String.t(), keyword()) :: {:ok, String.t()} | {:error, String.t(), String.t()}
   def verify(proof, opts) do
+    with {:ok, checked} <- check(proof, opts),
+         :ok <- record(checked),
+         do: {:ok, checked.jkt}
+  end
+
+  @typedoc "A proof that passed `check/2`, not recorded as used yet."
+  @type checked :: %{jkt: String.t(), jti: String.t(), iat: integer()}
+
+  @doc """
+  Checks a proof as `verify/2` does, without recording it as used: for a
+  caller that has more to check first (the token endpoint authenticates
+  the client), and then calls `record/1`.
+  """
+  @spec check(String.t(), keyword()) :: {:ok, checked()} | {:error, String.t(), String.t()}
+  def check(proof, opts) do
     now = Keyword.get(opts, :now, System.system_time(:second))
 
     with :ok <- size(proof),
@@ -148,12 +163,16 @@ defmodule Sake.Auth.DPoP do
          :ok <- fresh(claims, now),
          :ok <- bound_to(claims, opts[:access_token]),
          :ok <- nonce(claims, opts[:nonce], now) do
-      jkt = JWT.thumbprint(jwk)
+      {:ok, %{jkt: JWT.thumbprint(jwk), jti: claims["jti"], iat: claims["iat"]}}
+    end
+  end
 
-      case Replay.once("dpop:" <> jkt, claims["jti"], claims["iat"] + @max_age) do
-        :ok -> {:ok, jkt}
-        {:error, :replayed} -> invalid("The DPoP proof was already used")
-      end
+  @doc "Records a checked proof as used; refuses one already used."
+  @spec record(checked()) :: :ok | {:error, String.t(), String.t()}
+  def record(%{jkt: jkt, jti: jti, iat: iat}) do
+    case Replay.once("dpop:" <> jkt, jti, iat + @max_age) do
+      :ok -> :ok
+      {:error, :replayed} -> invalid("The DPoP proof was already used")
     end
   end
 

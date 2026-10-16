@@ -82,11 +82,14 @@ defmodule Sake.Auth.Token do
 
   # The proof is checked before anything else: before the client is
   # authenticated and before a code or a refresh token is consumed, so a
-  # request refused for its nonce leaves them usable for the retry.
+  # request refused for its nonce leaves them usable for the retry. It is
+  # recorded as used only once the client is authenticated, and before
+  # anything is consumed: a request that cannot authenticate a client
+  # leaves nothing behind.
   defp with_proof(conn, config, p) do
     case proof(conn, config) do
-      {:ok, jkt} ->
-        authenticate_and_grant(DPoP.put_nonce(conn, config), config, p, jkt)
+      {:ok, checked} ->
+        authenticate_and_grant(DPoP.put_nonce(conn, config), config, p, checked)
 
       {:error, "use_dpop_nonce", description} ->
         conn |> DPoP.put_nonce(config) |> error(400, "use_dpop_nonce", description)
@@ -106,7 +109,7 @@ defmodule Sake.Auth.Token do
         {:ok, nil}
 
       {:ok, proof} ->
-        DPoP.verify(proof,
+        DPoP.check(proof,
           htm: "POST",
           htu: [Config.token_url(config)],
           nonce: DPoP.nonce_secret(config)
@@ -117,7 +120,7 @@ defmodule Sake.Auth.Token do
     end
   end
 
-  defp authenticate_and_grant(conn, config, p, jkt) do
+  defp authenticate_and_grant(conn, config, p, checked) do
     case ClientAuth.authenticate(config, conn, p) do
       {:error, :invalid_client} ->
         conn
@@ -125,7 +128,10 @@ defmodule Sake.Auth.Token do
         |> error(401, "invalid_client", "Client authentication failed")
 
       {:ok, client} ->
-        with :ok <- client_grant(client, p["grant_type"]),
+        jkt = checked && checked.jkt
+
+        with :ok <- recorded(checked),
+             :ok <- client_grant(client, p["grant_type"]),
              :ok <- proof_required(config, client, jkt),
              {:ok, response} <- grant(config, client, p, jkt) do
           json(conn, 200, response)
@@ -134,6 +140,9 @@ defmodule Sake.Auth.Token do
         end
     end
   end
+
+  defp recorded(nil), do: :ok
+  defp recorded(checked), do: DPoP.record(checked)
 
   # A server with `dpop: [required: true]`, and a client registered with
   # `dpop_bound_access_tokens` (RFC 9449 §5.2: "the authorization server
