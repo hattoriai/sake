@@ -5,9 +5,6 @@
 # skills extension, which the suite reports as not applicable.
 server: []
 
-client:
-  # The client runs the client credentials, JWT bearer and
-  # enterprise-managed grants, but not DPoP (SEP-1932): it neither binds
-  # its tokens to a key nor sends proofs.
-  - auth/dpop
-  - auth/dpop-nonce
+# Every client scenario passes: the client credentials, JWT bearer and
+# enterprise-managed grants, and DPoP (SEP-1932) with and without nonces.
+client: []

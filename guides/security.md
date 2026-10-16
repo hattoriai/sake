@@ -69,7 +69,9 @@ tried only with an algorithm of its own type, and only when its `kid`,
 `use` and `alg` (when the JWK names them) fit; RSA keys under 2048 bits
 and JWKs carrying private material are never used. The keys come only
 from the client's registration or the trusted issuer's configuration
-and metadata, never from the token's own header.
+and metadata, never from the token's own header (DPoP proofs, below,
+are the one exception, and why it is safe there is the point of that
+section).
 
 Every claim that binds the JWT is checked: `exp`, `nbf` and `iat` with
 30 seconds of leeway, `iss` exactly, `aud` (this authorization server's
@@ -93,6 +95,47 @@ assertion, an ID token or a secret; an `error_description` names the
 check that failed and nothing else. Tokens from these grants carry no
 refresh token, so a machine client's or an identity provider's say ends
 within one access token lifetime of being withdrawn.
+
+## DPoP proofs
+
+A DPoP proof (see `guides/authorization.md`) is the one JWT Sake verifies
+with a key from its own header: the proof's job is to show possession of
+*that* key. On its own, a valid signature then proves nothing about who
+sent it; what makes it count is the RFC 7638 thumbprint of the key,
+which the token endpoint binds the token to and the MCP endpoint compares
+with the token's binding, in constant time. The header's key must be a
+public one (a JWK with private material is refused), of a supported type
+and strength; the algorithms are the same four as above, under the same
+rules, and `typ` must be `dpop+jwt`.
+
+Each proof is tied to its request: the method (`htm`) and the URL
+(`htu`, compared without query or fragment, against the URL the request
+reached or the endpoint's canonical resource, so a TLS-terminating proxy
+in front does not break it), to the access token (`ath`, its SHA-256
+hash) at the MCP endpoint, and to a time: no more than 30 seconds in the
+future, nor more than five minutes (and 30 seconds) in the past. A proof
+over 8 KB is refused before it is decoded, and a request with several
+proofs is refused outright.
+
+Proofs are single use: their `jti` is remembered per key for as long as
+the proof would be accepted. Like the assertions', that memory is per
+node; a server nonce (`dpop: [nonce: true]`) closes the gap a cluster
+leaves, since a nonce is a MAC under the Sake secret that every node
+checks the same way, valid for five to ten minutes, and so is the proof
+that carries it. A proof refused only for its nonce is not recorded,
+so the client's retry goes through.
+
+A DPoP-bound token sent as a bearer token is refused, and so is an
+unbound one sent with the `DPoP` scheme: the token's binding, not the
+client, decides how it travels. A public client's refresh token is bound
+to the key as well, so a stolen refresh token is as useless as a stolen
+access token; trying one without the key still spends it, so the
+legitimate client's next refresh shows the reuse and revokes the family.
+
+The client keeps a token's private key next to the token, in the
+session and in its token store (as PEM). A proxy's `credentials/1`
+returns a bearer token or headers: a DPoP-bound token cannot be passed
+through it, only obtained by the proxy's own `auth:`.
 
 ## The CIMD fetch guard, and what it does not cover
 

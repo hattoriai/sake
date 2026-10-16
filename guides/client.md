@@ -246,8 +246,9 @@ On the 401, the client:
    `state` must match. A response from the wrong server is not acted on,
    not even to report its `error`;
 6. exchanges the code (with the PKCE verifier and the same `resource`)
-   for a token, and sends the original request again with
-   `Authorization: Bearer`.
+   for a token, and sends the original request again with it:
+   `Authorization: Bearer`, or `Authorization: DPoP` and a proof when the
+   token is bound to the client's key (below).
 
 Every later request carries the token. A token about to expire is
 refreshed before it is sent; on a 401 the refresh token is tried before
@@ -376,13 +377,47 @@ every challenged scope (asking again would end in the same 403), and one
 request runs the flow at most twice; past that, the 403 comes back as
 `{:error, {:insufficient_scope, challenge}, session}`.
 
+### DPoP
+
+With DPoP (RFC 9449, SEP-1932) the client's tokens are bound to a key it
+holds, and a token that leaks is useless without the key. The client
+uses it when the authorization server's metadata lists ES256 in
+`dpop_signing_alg_values_supported`, and when the optional `jose`
+dependency is there:
+
+```elixir
+auth: [..., dpop: :auto]    # the default
+auth: [..., dpop: true]     # send proofs to any server (raises without jose)
+auth: [..., dpop: false]    # bearer tokens only
+```
+
+Each authorization makes a new P-256 key. Every token request (the code
+exchange, a refresh, the machine grants) carries a proof made with it,
+and a token that comes back with `token_type` `DPoP` is bound to it;
+a server that binds nothing answers `Bearer`, and the token goes as a
+bearer token. Every request to the MCP server — the POSTs, a legacy
+session's GET stream and its DELETE — sends a bound token as
+`Authorization: DPoP <token>` with a fresh proof for that method and
+URL, carrying the token's hash. A refresh keeps the key: the
+authorization server may have bound the refresh token to it.
+
+A server that wants a nonce in its proofs answers `use_dpop_nonce` with
+a `DPoP-Nonce` header. The client sends the request again at once with
+the nonce, and keeps the latest one each server sends for its next
+proofs. A nonce retry is not an authorization: it does not count
+towards the two a request may run, and nobody is asked anything.
+
+The key is kept with the token, as PEM under `"dpop_key"`, in the session
+and in the `store:` when there is one.
+
 ### Keeping tokens across runs
 
 Tokens and dynamic registrations live in the session by default. To keep
 them across runs, pass `store: {module, arg}`, a module implementing
 `Sake.Client.Auth.Store` (`fetch/2` and `put/3`, with JSON-friendly maps);
-its documentation has a file-based example. The values hold credentials:
-store them where only the person running the client can read them.
+its documentation has a file-based example. The values hold credentials,
+and a DPoP-bound token's private key with it: store them where only the
+person running the client can read them.
 
 ### Errors
 
@@ -415,5 +450,6 @@ end
 ```
 
 `Sake.Client.Challenge` parses the `WWW-Authenticate` header (scheme,
-`resource_metadata`, `scope`, `error`, `error_description`, `realm`). A
+`resource_metadata`, `scope`, `error`, `error_description`, `realm`, and
+the `DPoP-Nonce` header as `nonce`). A
 bearer token you obtained some other way goes in `headers:`.
