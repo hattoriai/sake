@@ -66,7 +66,11 @@ First release.
   (`io.modelcontextprotocol/enterprise-managed-authorization`), verified
   for its type, issuer, audience, client, resource, expiry and single use,
   or a workload identity token, mapped to an account by the subject
-  module's `assertion_principal/2`. Neither grant issues a refresh token;
+  module's `assertion_principal/2`; a grant may stay valid for no longer
+  than its issuer's `max_lifetime:` (five minutes for an ID-JAG, an hour
+  for a workload token, by default), and a client assertion for no longer
+  than `max_assertion_lifetime:` (five minutes). Neither grant issues a
+  refresh token;
   key sets are fetched and cached, `jti`s are remembered against replay,
   and the metadata advertises only what is configured. An endpoint with
   `auth: true` advertises the extensions of the grants offered in the

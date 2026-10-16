@@ -12,7 +12,8 @@ defmodule Sake.Auth.JWTGrant do
   # authorization server (`resource`, when present), and usable once
   # (`jti`). A workload identity token (the `:workload` profile) carries
   # none of that: it must be for this authorization server, unexpired,
-  # and is single use when it has a `jti`.
+  # and is single use when it has a `jti`. Either may be valid for no
+  # longer than the issuer's `max_lifetime` from now.
 
   alias Sake.Auth.{Authorize, Config, JWKS, JWT, Replay, Subject, TrustedIssuer}
 
@@ -24,6 +25,7 @@ defmodule Sake.Auth.JWTGrant do
     with {:ok, issuer} <- trusted(config, assertion),
          :ok <- may_present(issuer, client),
          {:ok, claims} <- verified(config, issuer, assertion),
+         :ok <- short_lived(issuer, claims),
          :ok <- bound(issuer, claims, client),
          :ok <- once(issuer, claims),
          {:ok, principal} <- principal(config, claims, issuer) do
@@ -122,6 +124,13 @@ defmodule Sake.Auth.JWTGrant do
   defp describe(:no_key), do: "no key of the issuer verifies it"
   defp describe(:unreachable), do: "the issuer's keys could not be fetched"
   defp describe(reason), do: reason |> to_string() |> String.replace("_", " ")
+
+  # The clock leeway allows for an issuer whose clock is a little ahead.
+  defp short_lived(issuer, %{"exp" => exp}) do
+    if exp <= System.system_time(:second) + issuer.max_lifetime + JWT.leeway(),
+      do: :ok,
+      else: {:error, "invalid_grant", "The grant is valid for too long"}
+  end
 
   defp bound(%TrustedIssuer{profile: :id_jag}, %{"client_id" => id}, client) do
     if id == client.id,

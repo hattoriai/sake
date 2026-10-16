@@ -300,6 +300,46 @@ defmodule Sake.Auth.ClientCredentialsTest do
       )
     end
 
+    test "an assertion may stay valid for five minutes at most", %{config: config} do
+      {client, key} = key_client(config)
+
+      with_exp = fn exp ->
+        post(
+          grant(%{
+            "client_assertion_type" => @assertion_type,
+            "client_assertion" => assertion(client, key, %{"exp" => exp})
+          })
+        )
+      end
+
+      assert with_exp.(Keys.now(300)).status == 200
+      assert_invalid_client(with_exp.(Keys.now(600)))
+    end
+
+    @tag auth: [max_assertion_lifetime: 3_600]
+    test "max_assertion_lifetime: lets a client sign for longer", %{config: config} do
+      {client, key} = key_client(config)
+
+      conn =
+        post(
+          grant(%{
+            "client_assertion_type" => @assertion_type,
+            "client_assertion" => assertion(client, key, %{"exp" => Keys.now(1_800)})
+          })
+        )
+
+      assert conn.status == 200
+
+      assert_raise ArgumentError, ~r/max_assertion_lifetime/, fn ->
+        Sake.Auth.Config.new(
+          subject: SakeDev.Subject,
+          issuer: "http://www.example.com",
+          allow_insecure: true,
+          max_assertion_lifetime: 0
+        )
+      end
+    end
+
     test "an assertion is accepted once", %{config: config} do
       {client, key} = key_client(config)
       jwt = assertion(client, key)

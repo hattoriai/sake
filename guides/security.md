@@ -78,7 +78,12 @@ Every claim that binds the JWT is checked: `exp`, `nbf` and `iat` with
 issuer or token endpoint URL), and for an ID-JAG its `typ`, its
 `client_id` (the authenticated client) and its `resource`. A client
 assertion must name the client as both `iss` and `sub`, and may not
-claim to live longer than an hour.
+claim to stay valid for more than five minutes (`max_assertion_lifetime:`
+in the auth config, in seconds). A JWT grant may not stay valid for more
+than its issuer's `max_lifetime:` (five minutes for an ID-JAG, an hour
+for a workload token, by default): a workload token without a `jti`
+cannot be made single use, and that is how long it can be presented
+again.
 
 Assertions and ID-JAGs are single use: their `jti` is remembered, per
 issuer, until they expire, in the replay store (the `Sake` child's

@@ -180,6 +180,7 @@ defmodule Sake.Auth.JWTGrantTest do
             other_client: id_jag(key, other),
             expired: id_jag(key, client, %{"exp" => Keys.now(-60)}),
             future_iat: id_jag(key, client, %{"iat" => Keys.now(600)}),
+            too_long: id_jag(key, client, %{"exp" => Keys.now(600)}),
             no_jti: id_jag(key, client, %{"jti" => nil}),
             no_client_id: id_jag(key, client, %{"client_id" => nil}),
             no_sub: id_jag(key, client, %{"sub" => nil}),
@@ -354,6 +355,58 @@ defmodule Sake.Auth.JWTGrantTest do
       jwt = workload.(%{"jti" => "once"})
       assert post(grant(client, jwt, %{"resource" => @resource})).status == 200
       assert_error(post(grant(client, jwt, %{"resource" => @resource})), "invalid_grant")
+    end
+
+    test "a grant may stay valid for no longer than its issuer's max_lifetime" do
+      {key, jwk} = Keys.key(:ec)
+
+      workload = fn exp ->
+        Keys.sign(
+          %{
+            "iss" => "https://ci.example",
+            "sub" => "repo:acme/app:ref:refs/heads/main",
+            "email" => "bo@example.com",
+            "aud" => "http://www.example.com",
+            "exp" => exp
+          },
+          key
+        )
+      end
+
+      issuer = [
+        issuer: "https://ci.example",
+        profile: :workload,
+        jwks: %{"keys" => [jwk]},
+        clients: :any
+      ]
+
+      # A workload token may live an hour by default.
+      config = trust([issuer])
+      client = jag_client(config)
+
+      assert post(grant(client, workload.(Keys.now(3_000)), %{"resource" => @resource})).status ==
+               200
+
+      assert_error(
+        post(grant(client, workload.(Keys.now(7_200)), %{"resource" => @resource})),
+        "invalid_grant"
+      )
+
+      config = trust([Keyword.put(issuer, :max_lifetime, 60)])
+      client = jag_client(config)
+
+      assert post(grant(client, workload.(Keys.now(60)), %{"resource" => @resource})).status ==
+               200
+
+      conn = post(grant(client, workload.(Keys.now(300)), %{"resource" => @resource}))
+      assert_error(conn, "invalid_grant")
+      assert body(conn)["error_description"] == "The grant is valid for too long"
+
+      assert_raise ArgumentError, ~r/max_lifetime/, fn ->
+        Sake.Auth.TrustedIssuer.new(issuer: @idp, clients: :any, max_lifetime: 0)
+      end
+
+      assert %{max_lifetime: 300} = Sake.Auth.TrustedIssuer.new(issuer: @idp, clients: :any)
     end
 
     test "without trusted issuers the grant is unsupported", %{config: config} do

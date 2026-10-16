@@ -34,6 +34,13 @@ defmodule Sake.Auth.TrustedIssuer do
       authorization server's issuer and its token endpoint URL.
     * `:scopes` — the most its grants may ask for; by default anything
       the servers declare.
+    * `:max_lifetime` — the longest, in seconds, a grant may still be
+      valid when it is presented: one whose `exp` is further ahead is
+      refused. By default 300 for `:id_jag` (an identity provider issues
+      them for minutes) and 3600 for `:workload` (cloud and Kubernetes
+      identity tokens commonly live an hour). It also bounds how long a
+      workload token without a `jti`, which cannot be made single use,
+      can be presented again.
 
   The person or workload a grant stands for is the subject module's
   `c:Sake.Auth.Subject.assertion_principal/2`; without it, every grant
@@ -47,11 +54,21 @@ defmodule Sake.Auth.TrustedIssuer do
           jwks: map() | nil,
           jwks_uri: String.t() | nil,
           audiences: [String.t()] | nil,
-          scopes: [String.t()] | nil
+          scopes: [String.t()] | nil,
+          max_lifetime: pos_integer()
         }
 
   @enforce_keys [:issuer, :clients]
-  defstruct [:issuer, :clients, :jwks, :jwks_uri, :audiences, :scopes, profile: :id_jag]
+  defstruct [
+    :issuer,
+    :clients,
+    :jwks,
+    :jwks_uri,
+    :audiences,
+    :scopes,
+    :max_lifetime,
+    profile: :id_jag
+  ]
 
   @doc false
   @spec new(keyword() | map()) :: t()
@@ -69,7 +86,14 @@ defmodule Sake.Auth.TrustedIssuer do
         raise ArgumentError, "a trusted issuer needs clients: (a list of client IDs, or :any)"
 
       true ->
-        issuer
+        %{issuer | max_lifetime: max_lifetime(issuer.max_lifetime, issuer.profile)}
     end
   end
+
+  defp max_lifetime(nil, :id_jag), do: 300
+  defp max_lifetime(nil, :workload), do: 3_600
+  defp max_lifetime(seconds, _profile) when is_integer(seconds) and seconds > 0, do: seconds
+
+  defp max_lifetime(_other, _profile),
+    do: raise(ArgumentError, "a trusted issuer's max_lifetime: is a positive number of seconds")
 end
