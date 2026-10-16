@@ -132,6 +132,25 @@ First release.
   host's endpoint or router instead, with a real bearer token from
   `Sake.Test.access_token/1`. `Sake.Test.start/0` starts what Sake needs
   when the application does not. See `guides/testing.md`.
+- `Sake.Middleware`: host code around a server's calls, declared on the
+  server with `middleware event, plugs` (Plug-style modules with
+  `init/1` and `call/2`, after Lotus's middleware). Events
+  `:before_request` (every method), `:after_list` (the four lists),
+  `:before_call`/`:after_call` (tools, a task's when it ends),
+  `:before_read`/`:after_read` and `:before_get`/`:after_get`, with
+  documented payloads; a `before_` plug may rewrite the arguments or
+  parameters and an `after_` plug the result, and `:assigns` carries a
+  decision to the later plugs and to the component (`ctx.assigns`). An
+  `:after_list` plug that hides a component hides it from calls, reads,
+  prompts, completions and subscriptions too, and makes lists
+  `cacheScope: "private"`. A halt's reason maps to a small vocabulary
+  (`:not_found`, `:forbidden`, `{:forbidden, scopes}` with its 403 and
+  challenge, `{:error, message}`, `{:tool_error, message}`); any other
+  reason is refused without saying why, and a plug that raises halts as
+  a logged `-32603`. Both eras, every transport. Halts emit
+  `[:sake, :middleware, :halt]` and mark the request's span. The
+  development server logs its tool calls with one. See
+  `guides/middleware.md`.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the

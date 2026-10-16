@@ -14,6 +14,7 @@ one trace.
 | Event | Around | Metadata |
 |---|---|---|
 | `[:sake, :server, :request, :start \| :stop \| :exception]` | every request `Sake.Plug` or `Sake.Stdio` dispatches | `method`, `component` (the tool or prompt name, or the resource URI), `era`, `protocol_version`, `client_name`; `cancelled` on `:stop` |
+| `[:sake, :middleware, :halt]` | a server's middleware refusing a request (see `guides/middleware.md`) | `event`, `plug`, `reason`, `failed`, `server`, `method`, `component`, `era`, `protocol_version`, `client_name` |
 | `[:sake, :task, :start \| :stop \| :exception]` | a task's run in the background (see `guides/tasks.md`) | `task_id`, `tool`, `server`; `status` on `:stop` |
 | `[:sake, :client, :request, :start \| :stop \| :exception]` | every request `Sake.Client` sends | `method`, `era`, `protocol_version`, `transport` (`:http` or `:stdio`); `error_type` on `:stop`, `nil` on success |
 
@@ -140,6 +141,11 @@ not the server's errors and leave the status alone. A tool result with
 A client request that fails without an answer (a refused connection, a
 timeout) has `error.type` set to the exception's module or the reason,
 like `Req.TransportError` or `timeout`.
+
+**Middleware.** A request the server's middleware refused (see
+`guides/middleware.md`) has `sake.middleware.event` and
+`sake.middleware.plug` on its span, the event and the module that
+halted; its status follows the error the client got, as above.
 
 ### Configuration
 
