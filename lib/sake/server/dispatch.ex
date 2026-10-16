@@ -7,7 +7,7 @@ defmodule Sake.Server.Dispatch do
   require Logger
 
   alias Sake.{Context, JSONRPC, Protocol, Server}
-  alias Sake.Server.{Cursor, Middleware, Results, Tasks, UI}
+  alias Sake.Server.{Cursor, Middleware, Mount, Results, Tasks, UI}
 
   @type outcome ::
           {:reply, map()}
@@ -144,13 +144,20 @@ defmodule Sake.Server.Dispatch do
 
   defp resource_entries(spec, ctx) do
     if Code.ensure_loaded?(spec.module) and function_exported?(spec.module, :list, 1) do
-      Enum.map(
-        spec.module.list(ctx),
-        &{spec.ttl, Sake.Resource.Spec.listed_to_wire(spec, &1, ctx.protocol_version)}
-      )
+      for item <- spec.module.list(Mount.component_ctx(spec, ctx)),
+          {:ok, item} <- [listed_uri(spec, item)],
+          do: {spec.ttl, Sake.Resource.Spec.listed_to_wire(spec, item, ctx.protocol_version)}
     else
       []
     end
+  end
+
+  # A mounted template lists its resources by the URIs its server knows;
+  # the client knows them under the mount's prefix.
+  defp listed_uri(spec, uri) when is_binary(uri), do: Mount.outer_uri(spec, uri)
+
+  defp listed_uri(spec, %{uri: uri} = item) do
+    with {:ok, uri} <- Mount.outer_uri(spec, uri), do: {:ok, %{item | uri: uri}}
   end
 
   @doc false
@@ -321,7 +328,7 @@ defmodule Sake.Server.Dispatch do
   end
 
   defp execute(spec, args, ctx) do
-    case spec.module.execute(args, ctx) do
+    case spec.module.execute(args, Mount.component_ctx(spec, ctx)) do
       {:error, {:missing_capability, caps}} -> missing_capability(caps)
       result -> after_call(result, spec, args, ctx)
     end
@@ -331,7 +338,7 @@ defmodule Sake.Server.Dispatch do
   # error result too; a task's goes through it when the task ends (see
   # `Sake.Tasks.Worker`).
   defp after_call(value, spec, args, ctx) do
-    result = Results.tool(value, spec, ctx)
+    result = value |> Results.tool(spec, ctx) |> Mount.outer_result(spec)
     payload = %{tool: spec, arguments: args, result: result}
 
     case Middleware.after_result(:after_call, payload, ctx) do
@@ -351,7 +358,7 @@ defmodule Sake.Server.Dispatch do
 
   defp prepare(spec, args, ctx) do
     if Code.ensure_loaded?(spec.module) and function_exported?(spec.module, :prepare, 2),
-      do: spec.module.prepare(args, ctx),
+      do: spec.module.prepare(args, Mount.component_ctx(spec, ctx)),
       else: {:ok, args}
   end
 
@@ -387,10 +394,16 @@ defmodule Sake.Server.Dispatch do
   end
 
   # A result that read middleware rewrote or redacted may be one
-  # principal's, so it is private.
+  # principal's, so it is private. A mounted resource reads as its server
+  # knows it, and its contents go out under the mount's prefix.
   defp read_spec(spec, uri_params, uri, server, ctx) do
-    case Results.resource(spec.module.read(uri_params, ctx), spec, uri, ctx) do
+    {:ok, inner} = Mount.inner_uri(spec, uri)
+    value = spec.module.read(uri_params, Mount.component_ctx(spec, ctx))
+
+    case Results.resource(value, spec, inner, ctx) do
       {:ok, result} ->
+        result = Mount.outer_result(result, spec)
+
         with {:ok, result} <- after_read(result, spec, uri_params, uri, ctx) do
           {:ok,
            result
@@ -463,7 +476,7 @@ defmodule Sake.Server.Dispatch do
   end
 
   defp render_prompt(spec, args, ctx) do
-    case Results.prompt(spec.module.get(args, ctx), spec, ctx) do
+    case Results.prompt(spec.module.get(args, Mount.component_ctx(spec, ctx)), spec, ctx) do
       {:ok, result} -> after_get(result, spec, args, ctx)
       {:error, {:missing_capability, caps}} -> missing_capability(caps)
       {:error, text} -> {:error, JSONRPC.code(:invalid_params), text}
@@ -592,7 +605,7 @@ defmodule Sake.Server.Dispatch do
     cond do
       not Server.allowed?(spec, ctx) -> {:forbidden, spec.scopes}
       not completable?(spec.module) -> {:ok, completion([], [])}
-      true -> complete_with(spec.module, arg, value, ctx)
+      true -> complete_with(spec.module, arg, value, Mount.component_ctx(spec, ctx))
     end
   end
 

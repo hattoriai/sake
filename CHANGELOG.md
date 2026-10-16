@@ -151,6 +151,19 @@ First release.
   `[:sake, :middleware, :halt]` and mark the request's span. The
   development server logs its tool calls with one. See
   `guides/middleware.md`.
+- Composing servers: `mount MyApp.MCP.Billing, prefix: "billing", scope:
+  "billing"` makes another `Sake.Server`'s tools, resources and prompts
+  the server's own, at any depth. Names take the prefix and an underscore
+  (`billing_create_invoice`), URIs take it after the scheme
+  (`invoice://billing/{id}`, `ui://billing/board`, with the linking
+  tool's `_meta.ui` renamed too); names are checked for duplicates
+  across all mounted servers at compile time. Instructions, scopes,
+  extensions and capabilities merge; a mounted server's `ttl` bounds its
+  components. Its middleware still runs around its components, inside
+  the parent's (outermost first before a call, innermost first after
+  it), and sees them by the names it gave them; its components see
+  their own server in `ctx.server`, and its broadcasts reach the
+  parent's clients with renamed URIs. See `guides/composing.md`.
 - A development server (`mix dev`) and an end-to-end test driving the
   whole OAuth-to-tool-call flow through it.
 - The official MCP conformance suite (0.2.0-alpha.12) wired into CI: the

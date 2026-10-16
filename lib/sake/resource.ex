@@ -18,7 +18,14 @@ defmodule Sake.Resource do
   @optional_callbacks list: 1, complete: 3
 
   defmodule Spec do
-    @moduledoc "The compiled definition of a resource."
+    @moduledoc """
+    The compiled definition of a resource.
+
+    `mount` is `nil` for a resource the server declares itself, and
+    `{server, prefix, spec}` for one it mounted (`Sake.Server.mount/2`):
+    the server it came from, the mount's prefix, and the spec as that
+    server has it.
+    """
     @type t :: %__MODULE__{}
     defstruct [
       :module,
@@ -36,7 +43,8 @@ defmodule Sake.Resource do
       subscribe: false,
       annotations: %{},
       ttl: nil,
-      ui: false
+      ui: false,
+      mount: nil
     ]
 
     @spec match(t(), String.t()) :: {:ok, map()} | :error
@@ -49,6 +57,14 @@ defmodule Sake.Resource do
         values -> {:ok, params |> Enum.zip(values) |> Map.new()}
       end
     end
+
+    @doc """
+    The spec at another URI, with its template pattern compiled again:
+    a mounted server's resources move under the mount's prefix.
+    """
+    @spec put_uri(t(), String.t()) :: t()
+    def put_uri(%__MODULE__{template: false} = s, uri), do: %{s | uri: uri}
+    def put_uri(%__MODULE__{} = s, uri), do: %{s | uri: uri, regex: Sake.Resource.pattern(uri)}
 
     @spec to_wire(t(), String.t()) :: map()
     def to_wire(%__MODULE__{} = s, revision), do: entry(s, "uri", s.uri, revision)
@@ -91,6 +107,18 @@ defmodule Sake.Resource do
     defp maybe_put(m, k, v), do: Map.put(m, k, v)
   end
 
+  @doc false
+  # The pattern a template's URIs match: each `{name}` one path segment.
+  @spec pattern(String.t()) :: Regex.t()
+  def pattern(uri) do
+    source =
+      uri
+      |> Regex.escape()
+      |> String.replace(~r/\\\{[a-zA-Z_][a-zA-Z0-9_]*\\\}/, "([^/]+)")
+
+    Regex.compile!("^" <> source <> "$")
+  end
+
   defmacro __using__(opts) do
     quote do
       @behaviour Sake.Resource
@@ -111,21 +139,11 @@ defmodule Sake.Resource do
 
     template = params != []
 
-    regex_source =
-      if template do
-        source =
-          uri
-          |> Regex.escape()
-          |> String.replace(~r/\\\{[a-zA-Z_][a-zA-Z0-9_]*\\\}/, "([^/]+)")
-
-        "^" <> source <> "$"
-      end
-
     spec = %Spec{
       module: env.module,
       uri: uri,
       template: template,
-      regex: regex_source && Regex.compile!(regex_source),
+      regex: if(template, do: pattern(uri)),
       params: params,
       name: opts[:name] || Sake.Tool.default_name(env.module),
       title: opts[:title],

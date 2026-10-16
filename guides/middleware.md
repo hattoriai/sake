@@ -59,8 +59,10 @@ changes at runtime, such as application configuration, in `call/2`.
 Middleware belongs to the server, not to the endpoint, so it runs
 whatever carries the request: `Sake.Plug` (with or without an SSE
 stream), `Sake.Stdio` and `Sake.Test`, on the modern protocol and on
-the handshake-era revisions alike. An application that mounts several
-servers gives each its own middleware.
+the handshake-era revisions alike. An application that serves several
+servers gives each its own middleware; a server mounted inside another
+keeps its middleware around its own components, inside the parent's
+(see `guides/composing.md`).
 
 ## Events
 

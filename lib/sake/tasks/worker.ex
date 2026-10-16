@@ -9,7 +9,7 @@ defmodule Sake.Tasks.Worker do
 
   require Logger
 
-  alias Sake.Server.{Middleware, Results}
+  alias Sake.Server.{Middleware, Mount, Results}
   alias Sake.{Tasks, Trace}
   alias Sake.Tasks.Record
 
@@ -65,13 +65,16 @@ defmodule Sake.Tasks.Worker do
   end
 
   defp execute(spec, args, ctx) do
-    case spec.module.execute(args, ctx) do
+    case spec.module.execute(args, Mount.component_ctx(spec, ctx)) do
       {:error, {:missing_capability, caps}} ->
         {_, code, message, data} = Sake.Server.Dispatch.missing_capability(caps)
         {:failed, %{"code" => code, "message" => message, "data" => data}}
 
       result ->
-        result |> Results.tool(spec, ctx) |> after_call(spec, args, ctx)
+        result
+        |> Results.tool(spec, ctx)
+        |> Mount.outer_result(spec)
+        |> after_call(spec, args, ctx)
     end
   rescue
     exception ->

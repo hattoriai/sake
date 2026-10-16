@@ -26,6 +26,19 @@ defmodule Sake.Server do
   plugs run in the order declared:
 
       middleware :before_call, [MyApp.MCP.Audit, {MyApp.MCP.Tenant, field: :org_id}]
+
+  `mount server, opts` makes another server's tools, resources and prompts
+  this server's, so that each team or context can own its part of a large
+  server:
+
+      mount MyApp.MCP.Billing, prefix: "billing", scope: "billing"
+
+  With `prefix:`, tool and prompt names take the prefix and an underscore
+  (`billing_create_invoice`) and resource URIs take it as the first
+  segment after the scheme (`invoice://billing/{id}`, `ui://billing/board`);
+  `scope:` (one or many) adds required scopes to every component mounted.
+  See `guides/composing.md` for what the mounted server's own middleware,
+  instructions, scopes and settings become.
   """
 
   @callback __sake__(atom()) :: term()
@@ -39,7 +52,11 @@ defmodule Sake.Server do
       @sake_prompts []
       Module.register_attribute(__MODULE__, :sake_scopes, accumulate: true)
       Module.register_attribute(__MODULE__, :sake_middleware, accumulate: true)
-      import Sake.Server, only: [scope: 2, tools: 1, resources: 1, prompts: 1, middleware: 2]
+      Module.register_attribute(__MODULE__, :sake_mounts, accumulate: true)
+
+      import Sake.Server,
+        only: [scope: 2, tools: 1, resources: 1, prompts: 1, middleware: 2, mount: 1, mount: 2]
+
       @before_compile Sake.Server
     end
   end
@@ -54,13 +71,29 @@ defmodule Sake.Server do
   defmacro middleware(event, plugs),
     do: quote(do: @sake_middleware({unquote(event), unquote(plugs)}))
 
+  @doc """
+  Mounts another server's tools, resources and prompts in this one.
+  Options: `prefix:` and `scope:` (see the module documentation).
+  """
+  defmacro mount(server, opts \\ []),
+    do: quote(do: @sake_mounts({unquote(server), unquote(opts)}))
+
   defmacro __before_compile__(env) do
     opts = Module.get_attribute(env.module, :sake_opts)
     name = required!(opts, :name, env.module)
     version = required!(opts, :version, env.module)
 
     quote do
-      @sake_specs Sake.Server.compile!(__MODULE__, @sake_tools, @sake_resources, @sake_prompts)
+      @sake_mounted Sake.Server.compile_mounts!(__MODULE__, Enum.reverse(@sake_mounts))
+
+      @sake_specs Sake.Server.compile!(
+                    __MODULE__,
+                    @sake_tools,
+                    @sake_resources,
+                    @sake_prompts,
+                    @sake_mounted
+                  )
+
       @sake_pipelines Sake.Server.compile_middleware!(__MODULE__, Enum.reverse(@sake_middleware))
 
       @impl Sake.Server
@@ -78,7 +111,9 @@ defmodule Sake.Server do
   def info_defs(name, version, opts) do
     quote do
       def __sake__(:info), do: %{name: unquote(name), version: unquote(version)}
-      def __sake__(:instructions), do: unquote(opts[:instructions])
+
+      def __sake__(:instructions),
+        do: unquote(__MODULE__).instructions(unquote(opts[:instructions]), @sake_mounted)
     end
   end
 
@@ -88,8 +123,12 @@ defmodule Sake.Server do
       def __sake__(:tools), do: elem(@sake_specs, 0)
       def __sake__(:resources), do: elem(@sake_specs, 1)
       def __sake__(:prompts), do: elem(@sake_specs, 2)
-      def __sake__(:scopes), do: Enum.reverse(@sake_scopes)
+
+      def __sake__(:scopes),
+        do: unquote(__MODULE__).scopes(Enum.reverse(@sake_scopes), @sake_mounted)
+
       def __sake__(:middleware), do: @sake_pipelines
+      def __sake__(:mounts), do: @sake_mounted
     end
   end
 
@@ -99,21 +138,83 @@ defmodule Sake.Server do
       def __sake__(:ttl), do: unquote(opts[:ttl] || 300_000)
       def __sake__(:cache_scope), do: unquote(opts[:cache_scope])
       def __sake__(:page_size), do: unquote(opts[:page_size] || 100)
-      def __sake__(:extensions), do: unquote(Macro.escape(opts[:extensions] || %{}))
+
+      def __sake__(:extensions),
+        do:
+          unquote(__MODULE__).extensions(
+            unquote(Macro.escape(opts[:extensions] || %{})),
+            @sake_mounted
+          )
     end
   end
 
   @doc false
-  def compile!(server, tools, resources, prompts) do
-    t = Enum.map(tools, & &1.spec())
-    r = Enum.map(resources, & &1.spec())
-    p = Enum.map(prompts, & &1.spec())
+  # The servers mounted, each with its checked options.
+  def compile_mounts!(parent, mounts) do
+    Enum.map(mounts, fn {server, opts} ->
+      if not (is_atom(server) and Code.ensure_compiled(server) == {:module, server} and
+                function_exported?(server, :__sake__, 1)) do
+        raise ArgumentError,
+              "#{inspect(parent)}: mount needs a Sake.Server, got #{inspect(server)}"
+      end
+
+      {server, Sake.Server.Mount.options!(parent, server, opts)}
+    end)
+  end
+
+  @doc false
+  # The server's own components, then each mounted server's under its
+  # prefix, checked together: a name may be listed once in all of them.
+  def compile!(server, tools, resources, prompts, mounts \\ []) do
+    t = Enum.map(tools, & &1.spec()) ++ mounted(mounts, :tools)
+    r = Enum.map(resources, & &1.spec()) ++ mounted(mounts, :resources)
+    p = Enum.map(prompts, & &1.spec()) ++ mounted(mounts, :prompts)
     check_unique!(server, "tool", Enum.map(t, & &1.name))
     check_unique!(server, "resource", Enum.map(r, & &1.uri))
     check_unique!(server, "prompt", Enum.map(p, & &1.name))
     check_uis!(server, t, r)
     {t, r, p}
   end
+
+  defp mounted(mounts, kind) do
+    for {server, opts} <- mounts,
+        spec <- server.__sake__(kind),
+        do: Sake.Server.Mount.wrap(spec, server, opts)
+  end
+
+  @doc false
+  # The server's instructions, then each mounted server's, under a heading
+  # that names its prefix: a mounted server's instructions speak of its
+  # components by the names it gave them.
+  def instructions(own, mounts) do
+    mounted =
+      for {server, opts} <- mounts, text = server.__sake__(:instructions), text != nil do
+        if opts[:prefix], do: "## #{opts[:prefix]}\n\n" <> text, else: text
+      end
+
+    case Enum.reject([own | mounted], &is_nil/1) do
+      [] -> nil
+      parts -> Enum.join(parts, "\n\n")
+    end
+  end
+
+  @doc false
+  # The server's scopes and those of the servers it mounts: a scope
+  # declared twice keeps its first description.
+  def scopes(own, mounts) do
+    mounted = for {server, _opts} <- mounts, scope <- server.__sake__(:scopes), do: scope
+    extra = for {_server, opts} <- mounts, name <- opts[:scopes], do: {name, name}
+    Enum.uniq_by(own ++ mounted ++ extra, &elem(&1, 0))
+  end
+
+  @doc false
+  # The server's `extensions:`, with what the mounted servers declare
+  # where it says nothing.
+  def extensions(own, mounts),
+    do:
+      Enum.reduce(mounts, own, fn {server, _opts}, acc ->
+        Map.merge(server.__sake__(:extensions), acc)
+      end)
 
   @doc false
   # The middleware by event, each plug with what its `init/1` returned:

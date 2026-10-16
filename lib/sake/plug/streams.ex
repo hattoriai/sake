@@ -4,7 +4,12 @@ defmodule Sake.Plug.Streams do
   streams, legacy GET streams, and handlers waiting for a legacy client's
   answer to a server request (elicitation, sampling, roots). Started by the `Sake` supervisor. With a `pubsub:`
   option (a `Phoenix.PubSub` name) notifications reach every node.
+
+  A stream of a server that mounts others (`Sake.Server.mount/2`) also
+  follows their broadcasts, with resource URIs under the mount's prefix.
   """
+
+  alias Sake.Server.Mount
 
   @registry __MODULE__
 
@@ -31,13 +36,21 @@ defmodule Sake.Plug.Streams do
   defp relay(pubsub), do: [{__MODULE__.Relay, pubsub}]
 
   @doc "Registers the calling process as a modern listen stream."
-  def register_listen(server, subscription_id, filter),
-    do: register({server, :listen}, {subscription_id, filter})
+  def register_listen(server, subscription_id, filter) do
+    for {server, prefixes} <- Mount.tree(server),
+        do: register({server, :listen}, {subscription_id, filter, prefixes})
+
+    :ok
+  end
 
   @doc false
   # A listen stream that has sent its final result leaves the registry.
   def unregister_listen(server) do
-    if Process.whereis(@registry), do: Registry.unregister(@registry, {server, :listen})
+    if Process.whereis(@registry) do
+      for {server, _prefixes} <- Mount.tree(server),
+          do: Registry.unregister(@registry, {server, :listen})
+    end
+
     :ok
   end
 
@@ -45,13 +58,22 @@ defmodule Sake.Plug.Streams do
   # Every listen stream on this node, of any server.
   def listen_pids do
     if Process.whereis(@registry),
-      do: Registry.select(@registry, [{{{:_, :listen}, :"$1", :_}, [], [:"$1"]}]),
+      do:
+        @registry |> Registry.select([{{{:_, :listen}, :"$1", :_}, [], [:"$1"]}]) |> Enum.uniq(),
       else: []
   end
 
-  @doc "Registers the calling process as a legacy GET stream for the session (by its nonce)."
-  def register_legacy(server, session_nonce),
-    do: register({server, :legacy, session_nonce}, nil)
+  @doc """
+  Registers the calling process as a legacy GET stream for the session (by
+  its nonce). The session's subscriptions reach it under the server's own
+  key only.
+  """
+  def register_legacy(server, session_nonce) do
+    for {server, prefixes} <- Mount.tree(server),
+        do: register({server, :legacy, session_nonce}, prefixes)
+
+    :ok
+  end
 
   @doc false
   # Registers the calling process as a test's listener (`Sake.Test`): it
@@ -59,12 +81,19 @@ defmodule Sake.Plug.Streams do
   # `owner` or by a process `owner` started (its `$callers`), so tests
   # running concurrently do not see each other's. An `owner` of `:any`
   # gets every broadcast of the server.
-  def register_test(server, owner, tag), do: register({server, :test, owner}, tag)
+  def register_test(server, owner, tag) do
+    for {server, prefixes} <- Mount.tree(server),
+        do: register({server, :test, owner}, {tag, prefixes})
+
+    :ok
+  end
 
   @doc false
   def unregister_test(server, owner, tag) do
-    if Process.whereis(@registry),
-      do: Registry.unregister_match(@registry, {server, :test, owner}, tag)
+    if Process.whereis(@registry) do
+      for {server, _prefixes} <- Mount.tree(server),
+          do: Registry.unregister_match(@registry, {server, :test, owner}, {tag, :_})
+    end
 
     :ok
   end
@@ -130,8 +159,10 @@ defmodule Sake.Plug.Streams do
 
   defp notify_legacy_streams(server, event) do
     @registry
-    |> Registry.select([{{{server, :legacy, :_}, :"$1", :_}, [], [:"$1"]}])
-    |> Enum.each(&send(&1, {:sake_notify, event}))
+    |> Registry.select([{{{server, :legacy, :_}, :"$1", :"$2"}, [], [{{:"$1", :"$2"}}]}])
+    |> Enum.each(fn {pid, prefixes} ->
+      send_translated(pid, event, prefixes, &{:sake_notify, &1})
+    end)
   end
 
   defp notify_tests(server, event) do
@@ -140,11 +171,24 @@ defmodule Sake.Plug.Streams do
     end
   end
 
-  defp send_tagged(entries, server, event),
-    do: for({pid, tag} <- entries, do: send(pid, {tag, server, event}))
+  defp send_tagged(entries, server, event) do
+    for {pid, {tag, prefixes}} <- entries,
+        do: send_translated(pid, event, prefixes, &{tag, server, &1})
+  end
 
-  defp send_each(entries, event),
-    do: for({pid, _} <- entries, do: send(pid, {:sake_notify, event}))
+  defp send_each(entries, event) do
+    for {pid, {_id, _filter, prefixes}} <- entries,
+        do: send_translated(pid, event, prefixes, &{:sake_notify, &1})
+  end
+
+  # A mounted server's broadcast, as the stream of the server that mounts
+  # it tells its client; one that cannot be renamed is not told.
+  defp send_translated(pid, event, prefixes, message) do
+    case Mount.translate(event, prefixes) do
+      nil -> :ok
+      event -> send(pid, message.(event))
+    end
+  end
 
   @doc "Routes a legacy client's JSON-RPC response to the handler waiting for it."
   @spec deliver_response(term(), {:ok, map()} | {:error, map()}) :: :ok | :error
