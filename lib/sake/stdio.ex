@@ -42,7 +42,7 @@ defmodule Sake.Stdio do
   use GenServer
   require Logger
 
-  alias Sake.{Context, JSONRPC, Protocol}
+  alias Sake.{Context, JSONRPC, Protocol, Trace}
   alias Sake.Plug.{Stream, Streams}
   alias Sake.Server.{Dispatch, Legacy}
 
@@ -427,7 +427,12 @@ defmodule Sake.Stdio do
   defp initialize({:request, id, "initialize", params} = parsed, state) do
     ctx = Context.new(era: :legacy, secret: state.secret, server: state.server)
 
-    case Legacy.handle(state.server, parsed, ctx) do
+    outcome =
+      Trace.server(parsed, ctx, {:stdio, state.nonce}, fn ->
+        state.server |> Legacy.handle(parsed, ctx) |> Trace.outcome()
+      end)
+
+    case outcome do
       {:initialize, revision, capabilities, result} ->
         if state.session == nil, do: Streams.register_legacy(state.server, state.nonce)
 
@@ -482,8 +487,11 @@ defmodule Sake.Stdio do
     ctx = legacy_context(state)
     meta = telemetry_meta(method, params, ctx)
 
-    :telemetry.span([:sake, :server, :request], meta, fn ->
-      {Legacy.handle(state.server, parsed, ctx), Map.put(meta, :cancelled, false)}
+    Trace.server(parsed, ctx, {:stdio, state.nonce}, fn ->
+      :telemetry.span([:sake, :server, :request], meta, fn ->
+        outcome = state.server |> Legacy.handle(parsed, ctx) |> Trace.outcome()
+        {outcome, Map.put(meta, :cancelled, false)}
+      end)
     end)
   end
 
@@ -508,16 +516,22 @@ defmodule Sake.Stdio do
   # Each request runs in a process of its own, linked to this one: `fun`
   # returns the request's final message (nil when it was cancelled) and
   # whether it was cancelled, for the telemetry span `Sake.Plug` emits too.
-  defp request({:request, id, method, params}, ctx, state, fun) do
+  # The legacy session's identity is the connection's nonce.
+  defp request({:request, id, method, params} = parsed, ctx, state, fun) do
     meta = telemetry_meta(method, params, ctx)
     kind = if method == "subscriptions/listen", do: :listen, else: :request
     scope = state.scope
+    session = if ctx.era == :legacy, do: state.nonce
 
     start(state, id, kind, fn conn ->
-      ctx = %{ctx | scope: scope(scope)}
+      serve(parsed, %{ctx | scope: scope(scope)}, session, meta, &fun.(conn, &1))
+    end)
+  end
 
+  defp serve(parsed, ctx, session, meta, fun) do
+    Trace.server(parsed, ctx, {:stdio, session}, fn ->
       :telemetry.span([:sake, :server, :request], meta, fn ->
-        {message, cancelled} = fun.(conn, ctx)
+        {message, cancelled} = fun.(ctx)
         {message, Map.put(meta, :cancelled, cancelled)}
       end)
     end)
@@ -553,7 +567,7 @@ defmodule Sake.Stdio do
         else: fn _, _ -> :ok end
 
     ctx = %{ctx | progress: progress, transport: me}
-    task = Task.async(fn -> Stream.run_safely(parsed, ctx, handler) end)
+    task = Task.async(Trace.bind(fn -> Stream.run_safely(parsed, ctx, handler) end))
     loop(conn, id, task)
   end
 
@@ -584,11 +598,15 @@ defmodule Sake.Stdio do
 
       {^task_ref, outcome} ->
         Process.demonitor(task_ref, [:flush])
-        {Stream.response(id, outcome), false}
+        {Stream.response(id, Trace.outcome(outcome)), false}
 
       {:DOWN, ^task_ref, :process, _pid, reason} ->
-        {JSONRPC.error(id, JSONRPC.code(:internal), "The request failed: #{inspect(reason)}"),
-         false}
+        error = %{
+          "code" => JSONRPC.code(:internal),
+          "message" => "The request failed: #{inspect(reason)}"
+        }
+
+        {Stream.response(id, Trace.outcome({:error, error})), false}
     end
   end
 
@@ -598,7 +616,7 @@ defmodule Sake.Stdio do
   defp listen(conn, server, id, params, ctx) do
     case Stream.refused(params, ctx) do
       nil -> open_listen(conn, server, id, params, ctx)
-      error -> {%{"jsonrpc" => "2.0", "id" => id, "error" => error}, false}
+      error -> {Stream.response(id, Trace.outcome({:error, error})), false}
     end
   end
 

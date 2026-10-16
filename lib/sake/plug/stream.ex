@@ -7,7 +7,7 @@ defmodule Sake.Plug.Stream do
   import Plug.Conn
   require Logger
 
-  alias Sake.{Context, JSONRPC, Protocol}
+  alias Sake.{Context, JSONRPC, Protocol, Trace}
   alias Sake.Plug.{SSE, Streams}
 
   # `loop/5` demonitors `Task.async/1`'s own monitor ref by hand (there is
@@ -29,7 +29,7 @@ defmodule Sake.Plug.Stream do
         stream(conn, opts, parsed, ctx, handler)
 
       true ->
-        outcome = parsed |> run_safely(ctx, handler) |> after_outcome(ctx)
+        outcome = parsed |> run_safely(ctx, handler) |> after_outcome(ctx) |> Trace.outcome()
         Sake.Plug.outcome_to_response(conn, id, outcome)
     end
   end
@@ -95,7 +95,7 @@ defmodule Sake.Plug.Stream do
         else: fn _, _ -> :ok end
 
     ctx = %{ctx | progress: progress, transport: me}
-    task = Task.async(fn -> run_safely(parsed, ctx, handler) end)
+    task = Task.async(Trace.bind(fn -> run_safely(parsed, ctx, handler) end))
     loop(conn, opts, id, ctx, task)
   end
 
@@ -188,7 +188,7 @@ defmodule Sake.Plug.Stream do
 
   defp finish(conn, id, ctx, outcome) do
     _ = ctx
-    {_, conn} = SSE.event(conn, response(id, outcome))
+    {_, conn} = SSE.event(conn, response(id, Trace.outcome(outcome)))
     conn
   end
 
@@ -251,7 +251,7 @@ defmodule Sake.Plug.Stream do
   defp listen(conn, opts, id, params, ctx) do
     case refused(params, ctx) do
       nil -> open_listen(conn, opts, id, params, ctx)
-      error -> Sake.Plug.outcome_to_response(conn, id, {:error, error})
+      error -> Sake.Plug.outcome_to_response(conn, id, Trace.outcome({:error, error}))
     end
   end
 
