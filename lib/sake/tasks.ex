@@ -208,7 +208,8 @@ defmodule Sake.Tasks do
   # another client (a narrower integration) or another resource (another
   # tenant's endpoint), or a request to another server sharing the store,
   # is not the task's owner. Kept as a digest, since the store may be a
-  # database and a principal can be long.
+  # database and a principal can be long. A multi round-trip request's
+  # signed state is bound the same way (`Sake.Server.RequestState`).
   @spec owner(Context.t()) :: String.t()
   def owner(%Context{} = ctx) do
     token = ctx.token || %{}
