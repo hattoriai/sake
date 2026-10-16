@@ -10,7 +10,9 @@ defmodule Sake.Auth.WellKnown do
   @behaviour Plug
   import Plug.Conn
 
-  alias Sake.Auth.{Config, Resource}
+  alias Sake.Auth.{Config, JWT, Resource}
+
+  @id_jag_profile "urn:ietf:params:oauth:grant-profile:id-jag"
 
   @impl true
   def init(opts), do: opts
@@ -59,21 +61,28 @@ defmodule Sake.Auth.WellKnown do
       "revocation_endpoint" => Config.revoke_url(config),
       "scopes_supported" => config |> Config.scopes() |> Enum.map(&elem(&1, 0)),
       "response_types_supported" => ["code"],
-      "grant_types_supported" => ["authorization_code", "refresh_token"],
+      "grant_types_supported" => Sake.Auth.Token.grant_types(config),
       "code_challenge_methods_supported" => ["S256"],
-      "token_endpoint_auth_methods_supported" => [
-        "none",
-        "client_secret_basic",
-        "client_secret_post"
-      ],
-      "revocation_endpoint_auth_methods_supported" => [
-        "none",
-        "client_secret_basic",
-        "client_secret_post"
-      ],
+      "token_endpoint_auth_methods_supported" => auth_methods(),
+      "revocation_endpoint_auth_methods_supported" => auth_methods(),
       "client_id_metadata_document_supported" => config.cimd != false,
       "authorization_response_iss_parameter_supported" => true
     }
+
+    body =
+      if JWT.available?(),
+        do:
+          body
+          |> Map.put("token_endpoint_auth_signing_alg_values_supported", JWT.algs())
+          |> Map.put("revocation_endpoint_auth_signing_alg_values_supported", JWT.algs()),
+        else: body
+
+    # draft-ietf-oauth-identity-assertion-authz-grant §7.2: how a client
+    # learns that ID-JAGs are accepted here.
+    body =
+      if Enum.any?(config.trusted_issuers, &(&1.profile == :id_jag)),
+        do: Map.put(body, "authorization_grant_profiles_supported", [@id_jag_profile]),
+        else: body
 
     body =
       if config.dcr,
@@ -81,6 +90,12 @@ defmodule Sake.Auth.WellKnown do
         else: body
 
     json(conn, body)
+  end
+
+  # `private_key_jwt` needs jose to verify the client's assertion.
+  defp auth_methods do
+    ["none", "client_secret_basic", "client_secret_post"] ++
+      if JWT.available?(), do: ["private_key_jwt"], else: []
   end
 
   defp json(conn, body) do

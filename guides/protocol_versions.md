@@ -149,8 +149,7 @@ authorization servers approve at once) and the pre-registered credentials
 from `MCP_CONFORMANCE_CONTEXT` when a scenario provides them (see
 `guides/client.md`'s "Authorization" section). The 2025-03-26
 back-compatibility and draft auth scenarios, which CI does not run, pass
-as well; the extension ones (client credentials, cross-app access) need
-grants the client does not implement.
+as well.
 
 The extension scenarios (the tasks extension's `tasks-*`, the skills
 extension's `sep-2640-*`, and the client auth extensions such as DPoP and
@@ -159,5 +158,11 @@ extensions` runs them in a separate CI step against their own baseline,
 `conformance/expected-failures-extensions.yaml`: every `tasks-*` scenario
 passes (`tasks-status-notifications` is one the suite currently skips),
 the skills scenarios pass as not applicable (Sake declares no skills
-extension), and the client auth extensions fail because the client does
-not implement their grants.
+extension), and so do the client auth extensions' grants:
+`auth/client-credentials-basic` and `auth/client-credentials-jwt` (the
+client credentials grant with a secret and with `private_key_jwt`),
+`auth/wif-jwt-bearer` (a workload's JWT as the grant) and
+`auth/enterprise-managed-authorization` (the token exchange and the
+ID-JAG), with `conformance/client.exs` passing each scenario's
+credentials as `auth:` options. `auth/dpop` and `auth/dpop-nonce` fail:
+the client does not bind its tokens to a key with DPoP (RFC 9449).

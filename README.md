@@ -72,6 +72,7 @@ See `guides/quickstart.md` for turning on authorization in five steps, or
 | Stdio transport | yes | yes | yes |
 | `Sake.Client` (HTTP, stdio) | yes | yes | connects, no batching |
 | `Sake.Client` authorization | yes | yes | yes (no resource metadata: the server's own) |
+| Client credentials, enterprise-managed authorization (`Sake.Auth`, `Sake.Client`) | yes | yes | yes |
 
 ## The authorization flow, briefly
 
@@ -83,6 +84,19 @@ exchanges for an access and refresh token pair. Every later MCP request
 carries the access token as a bearer credential, scoped to that one
 endpoint's resource URL. See `guides/authorization.md`; `Sake.Client`
 runs the same flow from the client's side (`guides/client.md`).
+
+Without a person at a browser, both sides also speak the official
+authorization extensions: the client credentials grant for a service
+acting as itself (with a secret, or a key and `private_key_jwt`), and
+the JWT bearer grant for an enterprise identity provider's ID-JAG
+(enterprise-managed authorization) or a workload's platform JWT. Signed
+JWTs need the optional `jose` dependency:
+
+```elixir
+{:jose, "~> 1.11"}
+```
+
+Client credentials with a secret work without it.
 
 ## Guides
 
@@ -102,10 +116,13 @@ runs the same flow from the client's side (`guides/client.md`).
 
 0.1: the server (both eras, one endpoint, and stdio; with elicitation,
 sampling, roots, the tasks extension and MCP Apps), the authorization server
-(bearer, CIMD, dynamic registration, consent, token rotation), and the
-client (HTTP and stdio), which runs the MCP authorization flow itself
-(discovery, CIMD or dynamic registration, PKCE, refresh, step-up) and
-follows tasks. Next: the device authorization grant.
+(bearer, CIMD, dynamic registration, consent, token rotation, machine
+clients, trusted identity providers and workloads), and the client (HTTP
+and stdio), which runs the MCP authorization flow itself (discovery,
+CIMD or dynamic registration, PKCE, refresh, step-up, or a grant without
+a person: client credentials, a JWT bearer grant, enterprise-managed
+authorization) and follows tasks. Next: DPoP and the device
+authorization grant.
 
 ## License
 

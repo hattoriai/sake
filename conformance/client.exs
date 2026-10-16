@@ -59,6 +59,35 @@ auth = [
   client_secret: context["client_secret"]
 ]
 
+# The authorization extensions' scenarios run a grant without a person;
+# their credentials (a secret or a private key, the workload's JWT, the
+# person's ID token and the identity provider) arrive in the context too.
+auth =
+  case scenario do
+    "auth/client-credentials-basic" ->
+      Keyword.put(auth, :grant, :client_credentials)
+
+    "auth/client-credentials-jwt" ->
+      [
+        grant: :client_credentials,
+        client_id: context["client_id"],
+        private_key: {context["private_key_pem"], context["signing_algorithm"]}
+      ]
+
+    "auth/wif-jwt-bearer" ->
+      [grant: :jwt_bearer, client_id: context["client_id"], assertion: context["valid_jwt"]]
+
+    "auth/enterprise-managed-authorization" ->
+      Keyword.merge(auth,
+        grant: :enterprise,
+        id_token: context["idp_id_token"],
+        idp: [token_endpoint: context["idp_token_endpoint"], client_id: context["idp_client_id"]]
+      )
+
+    _ ->
+      auth
+  end
+
 case Sake.Client.connect(url, on_input: on_input, auth: auth) do
   {:ok, session} ->
     {tools, session} =

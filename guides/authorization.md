@@ -50,7 +50,152 @@ which):
   put a rate limit in front of it, since it is unauthenticated by design.
 - **Host-registered** — your own code calls `Sake.Auth.Clients.create/2`
   for a CLI or a partner integration you control; `confidential: true`
-  returns a client secret once, for a client that can keep one.
+  returns a client secret once, for a client that can keep one. Machine
+  clients and the clients that present JWT grants (below) are
+  host-registered too.
+
+## Machine clients (client credentials)
+
+A service that calls your endpoint as itself — a nightly job, a CI
+pipeline, another backend — has no person to send to a consent page. It
+uses the client credentials grant (the
+`io.modelcontextprotocol/oauth-client-credentials` extension): it
+authenticates at `/oauth/token` and gets an access token for itself.
+
+You register such a client yourself; dynamic registration never creates
+one, since anyone may call it, and the extension asks for credentials
+established out of band:
+
+```elixir
+# With a secret, returned once:
+{:ok, client, secret} =
+  Sake.Auth.Clients.create(config, %{
+    name: "Nightly report",
+    grant_types: ["client_credentials"],
+    confidential: true,
+    scopes: ["reports:read"]
+  })
+
+# Or with the client's public keys (private_key_jwt, RFC 7523 §2.2): the
+# client signs a short-lived JWT for each token request, and no secret
+# exists to leak.
+{:ok, client, nil} =
+  Sake.Auth.Clients.create(config, %{
+    name: "Nightly report",
+    grant_types: ["client_credentials"],
+    jwks: %{"keys" => [public_jwk]},       # or jwks_uri: "https://..."
+    scopes: ["reports:read"]
+  })
+```
+
+A machine client needs no redirect URI. Keys need the optional `jose`
+dependency (`{:jose, "~> 1.11"}`); a secret does not.
+
+The grant is offered only when your subject module defines
+`client_principal/1`, which names the principal the client acts as (or
+returns `:error` to refuse it). It is called when the token is issued
+and again on every request the token makes, as `fetch/1` is for a
+person, so a client you cut off stops at once:
+
+```elixir
+@impl true
+def client_principal(%Sake.Auth.Client{id: id}), do: MyApp.Integrations.fetch_service_account(id)
+```
+
+The token has no subject: `ctx.token.subject_id` is `nil` and
+`ctx.token.client_id` names the client, so a tool can tell a machine
+from a person. Its scopes are the ones asked for (all the servers'
+scopes by default), narrowed to the client's `scopes:`; a request for
+nothing the client may have gets `invalid_scope`. The `resource`
+parameter names the endpoint, as for any token. There is no refresh
+token (RFC 6749 §4.4.3): the client asks again with its credentials. A
+public client is refused (`unauthorized_client`), whatever it lists in
+its `grant_types`.
+
+## Trusted issuers: enterprise identity providers and workloads
+
+The JWT bearer grant (`urn:ietf:params:oauth:grant-type:jwt-bearer`,
+RFC 7523) issues a token for a JWT that an issuer you trust signed:
+
+- **Enterprise-managed authorization** (the
+  `io.modelcontextprotocol/enterprise-managed-authorization` extension).
+  The company's identity provider (Okta, Entra ID, ...) decides which of
+  its people may use which client with your server. The client exchanges
+  the person's single sign-on ID token at the identity provider for an
+  Identity Assertion JWT Authorization Grant (ID-JAG), and presents it
+  here; the person never sees a consent page.
+- **Workload identity.** A CI system, a cloud or Kubernetes gives each
+  workload a signed JWT naming it; the workload presents that JWT and
+  needs no secret of its own.
+
+```elixir
+{Sake,
+ auth: [
+   ...,
+   trusted_issuers: [
+     [issuer: "https://acme.okta.com", clients: [agent_client_id]],
+     [
+       issuer: "https://token.actions.githubusercontent.com",
+       profile: :workload,
+       audiences: ["https://mcp.example.com"],
+       scopes: ["issues:read"],
+       clients: [ci_client_id]
+     ]
+   ]
+ ]}
+```
+
+See `Sake.Auth.TrustedIssuer` for every option. The issuer's keys come
+from `jwks:` or `jwks_uri:`, or else from the `jwks_uri` of its OpenID
+Connect (or RFC 8414) metadata; they are cached, and fetched again for a
+key ID the cache does not know, at most once a minute. A client presents
+an issuer's grants only when the issuer's `clients:` names it and its
+own `grant_types` include the JWT bearer grant; it authenticates as it
+would for any grant (a public client by its `client_id`).
+
+An ID-JAG (`profile: :id_jag`, the default) is accepted when it is typed
+`oauth-id-jag+jwt`, signed by the issuer, issued for this authorization
+server (`aud` is your issuer or token endpoint URL, unless `audiences:`
+says otherwise), unexpired, issued to the very client presenting it
+(`client_id`), for one of your endpoints (`resource`, when present), and
+not seen before (`jti`). Its `scope` limits the token's. A workload
+token (`profile: :workload`) needs only `sub`, the audience and an
+expiry, and is single use when it has a `jti`.
+
+Your subject module's `assertion_principal/2` maps the verified claims
+to an account, or refuses with `:error`; Sake will not start with
+`trusted_issuers:` and without it (nor without `jose`):
+
+```elixir
+@impl true
+def assertion_principal(%{"email" => email}, %Sake.Auth.TrustedIssuer{issuer: "https://acme.okta.com"}),
+  do: MyApp.Accounts.fetch_user_by_email(email)
+
+def assertion_principal(%{"sub" => "repo:acme/app:" <> _}, %{profile: :workload}),
+  do: MyApp.Accounts.fetch_service_account("ci")
+
+def assertion_principal(_claims, _issuer), do: :error
+```
+
+Map only claims the issuer vouches for (an identity provider's
+`email` is only as good as its own verification of it), and for a
+multi-tenant identity provider, check the tenant too. The token's
+subject is the account's `id/1`, and `authorize_resource?/2` applies as
+for a person. No refresh token is issued: when the token expires, the
+client goes back to the identity provider for a new grant, so a person
+removed from the directory loses access within one access token
+lifetime.
+
+## What the metadata says
+
+`/.well-known/oauth-authorization-server` lists only what is configured:
+`client_credentials` in `grant_types_supported` when the subject module
+defines `client_principal/1`, the JWT bearer grant when an issuer is
+trusted (and `authorization_grant_profiles_supported` with the ID-JAG
+profile when one of them is an identity provider), and `private_key_jwt`
+in `token_endpoint_auth_methods_supported`, with
+`token_endpoint_auth_signing_alg_values_supported` (RS256, PS256,
+ES256, ES384), when `jose` is there.
 
 ## CIMD trust policies
 

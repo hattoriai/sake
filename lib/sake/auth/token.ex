@@ -1,13 +1,24 @@
 defmodule Sake.Auth.Token do
   @moduledoc """
-  The token endpoint: the authorization code grant with PKCE, and refresh
-  token rotation with reuse detection.
+  The token endpoint: the authorization code grant with PKCE, refresh
+  token rotation with reuse detection, the client credentials grant for
+  machine clients, and the JWT bearer grant (RFC 7523) for JWTs from a
+  `Sake.Auth.TrustedIssuer`: an enterprise ID-JAG, or a workload identity
+  token.
+
+  The last two issue an access token alone. A machine client asks again
+  with its credentials when it needs a new one (RFC 6749 §4.4.3), and a
+  JWT grant goes back through its issuer, so that the issuer's policy
+  (a person removed from the directory, a revoked workload) applies at
+  every renewal rather than only at the first.
   """
   @behaviour Plug
   import Plug.Conn
 
   alias Sake.Auth
-  alias Sake.Auth.{ClientAuth, PKCE, Tokens}
+  alias Sake.Auth.{Authorize, ClientAuth, Config, JWTGrant, PKCE, Subject, Tokens}
+
+  @jwt_bearer "urn:ietf:params:oauth:grant-type:jwt-bearer"
 
   @impl true
   def init(opts), do: opts
@@ -18,20 +29,20 @@ defmodule Sake.Auth.Token do
     conn = parse(conn)
     p = conn.body_params
 
-    # A client is authenticated only for the two supported grant types: an
+    # A client is authenticated only for a supported grant type: an
     # unsupported or missing grant_type is reported on its own, without
     # requiring client credentials to say so.
     case p["grant_type"] do
-      grant_type when grant_type in ["authorization_code", "refresh_token"] ->
-        authenticate_and_grant(conn, config, p)
-
       grant_type when is_binary(grant_type) ->
-        error(
-          conn,
-          400,
-          "unsupported_grant_type",
-          "Only authorization_code and refresh_token are supported"
-        )
+        if grant_type in grant_types(config),
+          do: authenticate_and_grant(conn, config, p),
+          else:
+            error(
+              conn,
+              400,
+              "unsupported_grant_type",
+              "Supported grant types: #{Enum.join(grant_types(config), ", ")}"
+            )
 
       _ ->
         error(conn, 400, "invalid_request", "grant_type is required")
@@ -43,6 +54,22 @@ defmodule Sake.Auth.Token do
     |> put_resp_header("cache-control", "no-store")
     |> put_resp_header("pragma", "no-cache")
     |> send_resp(405, "")
+  end
+
+  @doc false
+  # The client credentials grant exists only when the subject module can
+  # name a machine client's principal, and the JWT bearer grant only when
+  # some issuer is trusted.
+  @spec grant_types(Config.t()) :: [String.t()]
+  def grant_types(config) do
+    Code.ensure_loaded(config.subject)
+
+    ["authorization_code", "refresh_token"] ++
+      if(function_exported?(config.subject, :client_principal, 1),
+        do: ["client_credentials"],
+        else: []
+      ) ++
+      if config.trusted_issuers == [], do: [], else: [@jwt_bearer]
   end
 
   defp authenticate_and_grant(conn, config, p) do
@@ -127,6 +154,109 @@ defmodule Sake.Auth.Token do
 
   defp grant(_config, _client, %{"grant_type" => "refresh_token"}),
     do: {:error, "invalid_request", "refresh_token is required"}
+
+  # RFC 6749 §4.4: confidential clients only. The host's subject module
+  # names the principal the client acts as, or refuses it.
+  defp grant(config, client, %{"grant_type" => "client_credentials"} = p) do
+    with :ok <- confidential(client),
+         {:ok, principal} <- machine_principal(config, client),
+         {:ok, scopes} <- granted_scopes(config, p["scope"], [client.scopes]),
+         {:ok, resource} <- target(config, p["resource"]),
+         :ok <- resource_allowed(config, principal, resource) do
+      {:ok,
+       issue_access(config, %{
+         client_id: client.id,
+         subject_id: nil,
+         scopes: scopes,
+         resource: resource
+       })}
+    end
+  end
+
+  defp grant(config, client, %{"grant_type" => @jwt_bearer, "assertion" => assertion} = p)
+       when is_binary(assertion) do
+    with {:ok, grant} <- JWTGrant.verify(config, client, assertion),
+         {:ok, scopes} <- granted_scopes(config, p["scope"], JWTGrant.scope_limits(client, grant)),
+         {:ok, resource} <- JWTGrant.resource(config, grant, p["resource"]),
+         :ok <- resource_allowed(config, grant.principal, resource) do
+      {:ok,
+       issue_access(config, %{
+         client_id: client.id,
+         subject_id: config.subject.id(grant.principal),
+         scopes: scopes,
+         resource: resource
+       })}
+    end
+  end
+
+  defp grant(_config, _client, %{"grant_type" => @jwt_bearer}),
+    do: {:error, "invalid_request", "assertion is required"}
+
+  defp confidential(%{token_endpoint_auth_method: "none"}),
+    do: {:error, "unauthorized_client", "Only a confidential client may use client_credentials"}
+
+  defp confidential(_client), do: :ok
+
+  defp machine_principal(config, client) do
+    case Subject.client_principal(config.subject, client) do
+      {:ok, principal} -> {:ok, principal}
+      :error -> {:error, "unauthorized_client", "The client may not act on its own behalf"}
+    end
+  end
+
+  defp target(config, resource) do
+    case Authorize.resource(config, resource) do
+      {:ok, resource} ->
+        {:ok, resource}
+
+      :error ->
+        {:error, "invalid_target", "The resource is not served by this authorization server"}
+    end
+  end
+
+  defp resource_allowed(config, principal, resource) do
+    if Subject.authorize_resource?(config.subject, principal, resource),
+      do: :ok,
+      else: {:error, "invalid_grant", "The principal may not use this resource"}
+  end
+
+  # The scopes a grant without a person gets: the ones asked for (by
+  # default every scope the servers declare), narrowed to what the limits
+  # allow. Each limit is a list of scopes (the client's, the issuer's, the
+  # grant's own), or nil for none. There is nobody to ask for more, so a
+  # request is narrowed rather than refused (RFC 6749 §3.3; the answer's
+  # `scope` says what was granted), unless nothing of it is left.
+  defp granted_scopes(config, scope, limits) do
+    known = config |> Config.scopes() |> Enum.map(&elem(&1, 0))
+    limits = Enum.reject(limits, &is_nil/1)
+
+    requested =
+      if is_binary(scope) and scope != "", do: Enum.uniq(String.split(scope)), else: known
+
+    granted = Enum.filter(requested, fn s -> Enum.all?(limits, &(s in &1)) end)
+
+    cond do
+      requested -- known != [] ->
+        {:error, "invalid_scope", "Unknown scope: #{Enum.join(requested -- known, " ")}"}
+
+      granted == [] and requested != [] ->
+        {:error, "invalid_scope", "The scope exceeds what this grant allows"}
+
+      true ->
+        {:ok, granted}
+    end
+  end
+
+  defp issue_access(config, attrs) do
+    {access, _record} = Tokens.issue_access(config, attrs)
+
+    %{
+      "access_token" => access,
+      "token_type" => "Bearer",
+      "expires_in" => config.access_token_ttl,
+      "scope" => Enum.join(attrs.scopes, " ")
+    }
+  end
 
   defp rotate(client, record, p) do
     with :ok <- fresh(record),

@@ -137,7 +137,10 @@ defmodule Sake.Auth.CIMD do
 
   # The whole download runs under one deadline: Req's own timeouts bound
   # the connect and each receive, not a server that trickles bytes.
-  defp download(uri) do
+  # `Sake.Auth.JWKS` fetches key sets through it too.
+  @doc false
+  @spec download(URI.t()) :: {:ok, binary(), pos_integer()} | {:error, :unreachable}
+  def download(uri) do
     task = Task.async(fn -> download_now(uri) end)
 
     case Task.yield(task, @timeout) || Task.shutdown(task, :brutal_kill) do

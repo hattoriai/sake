@@ -47,6 +47,35 @@ defmodule Sake.Auth.Tokens do
     {access, refresh, %{access: a, refresh: r}}
   end
 
+  @doc """
+  Issues and stores an access token alone, for the grants that get no
+  refresh token (client credentials, JWT bearer); it is a family of its
+  own. `attrs`: client_id, subject_id (nil for a machine client), scopes,
+  resource.
+  """
+  @spec issue_access(Config.t(), map()) :: {String.t(), TokenRecord.t()}
+  def issue_access(config, attrs) do
+    {module, state} = Sake.Auth.store(config)
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    access = generate()
+
+    record = %TokenRecord{
+      id: generate(),
+      kind: :access,
+      hash: hash(access),
+      family_id: generate(),
+      client_id: attrs.client_id,
+      subject_id: attrs.subject_id,
+      scopes: attrs.scopes,
+      resource: attrs.resource,
+      inserted_at: now,
+      expires_at: DateTime.add(now, config.access_token_ttl)
+    }
+
+    :ok = module.put_token(state, record)
+    {access, record}
+  end
+
   @spec valid?(TokenRecord.t(), DateTime.t()) :: boolean()
   def valid?(%TokenRecord{revoked_at: nil, expires_at: exp}, now),
     do: DateTime.compare(exp, now) == :gt

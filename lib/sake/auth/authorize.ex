@@ -92,7 +92,7 @@ defmodule Sake.Auth.Authorize do
   defp authenticated(conn, config, client, request) do
     case config.subject.from_conn(conn) do
       {:ok, principal} ->
-        if authorize_resource?(config.subject, principal, request.resource),
+        if Sake.Auth.Subject.authorize_resource?(config.subject, principal, request.resource),
           do: consent_or_issue(conn, config, client, request, principal),
           else:
             redirect_error(
@@ -113,14 +113,6 @@ defmodule Sake.Auth.Authorize do
           "Sign in to your account, then start the connection again from the app."
         )
     end
-  end
-
-  defp authorize_resource?(subject, principal, resource) do
-    Code.ensure_loaded(subject)
-
-    if function_exported?(subject, :authorize_resource?, 2),
-      do: subject.authorize_resource?(principal, resource) == true,
-      else: true
   end
 
   defp client(config, id) do

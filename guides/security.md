@@ -57,6 +57,43 @@ that one request — a stolen, already-superseded credential cannot be used
 to mint a fresh pair once the legitimate holder has moved past it. See
 `guides/authorization.md`'s "Token lifetimes and rotation".
 
+## Signed JWTs: client assertions and JWT grants
+
+`private_key_jwt` client authentication and the JWT bearer grant (see
+`guides/authorization.md`) trust a signature, so Sake is strict about
+which ones it checks. Only RS256, PS256, ES256 and ES384 are accepted:
+`none`, the HMAC algorithms (an HMAC "signed" with a public key is the
+classic algorithm-confusion attack) and anything else are refused before
+a key is looked at, and so is a token with a `crit` header. A key is
+tried only with an algorithm of its own type, and only when its `kid`,
+`use` and `alg` (when the JWK names them) fit; RSA keys under 2048 bits
+and JWKs carrying private material are never used. The keys come only
+from the client's registration or the trusted issuer's configuration
+and metadata, never from the token's own header.
+
+Every claim that binds the JWT is checked: `exp`, `nbf` and `iat` with
+30 seconds of leeway, `iss` exactly, `aud` (this authorization server's
+issuer or token endpoint URL), and for an ID-JAG its `typ`, its
+`client_id` (the authenticated client) and its `resource`. A client
+assertion must name the client as both `iss` and `sub`, and may not
+claim to live longer than an hour.
+
+Assertions and ID-JAGs are single use: their `jti` is remembered, per
+issuer, until they expire. The memory is an ETS table on each node, so
+in a cluster a JWT replayed to *another* node within its lifetime is not
+caught; identity providers issue ID-JAGs for minutes, and Sake's client
+signs its assertions for one, which keeps that window short. Key sets
+fetched from a `jwks_uri` go through the same guarded download as a
+Client ID Metadata Document (HTTPS, no redirects, 64 KB, five seconds),
+but without the public-address check: those URLs come from your own
+configuration and registrations, not from a stranger's request.
+
+Neither the token endpoint's errors nor Sake's logs ever contain an
+assertion, an ID token or a secret; an `error_description` names the
+check that failed and nothing else. Tokens from these grants carry no
+refresh token, so a machine client's or an identity provider's say ends
+within one access token lifetime of being withdrawn.
+
 ## The CIMD fetch guard, and what it does not cover
 
 `Sake.Auth.CIMD.fetch/2` resolves the client-supplied HTTPS host's

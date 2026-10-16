@@ -26,6 +26,8 @@ if Code.ensure_loaded?(Ecto.Query) do
         logo_uri: c.logo_uri,
         client_uri: c.client_uri,
         scopes: c.scopes,
+        jwks: c.jwks,
+        jwks_uri: c.jwks_uri,
         application_type: c.application_type
       }
 
@@ -65,6 +67,8 @@ if Code.ensure_loaded?(Ecto.Query) do
         logo_uri: r.logo_uri,
         client_uri: r.client_uri,
         scopes: r.scopes,
+        jwks: r.jwks,
+        jwks_uri: r.jwks_uri,
         application_type: r.application_type
       }
     end

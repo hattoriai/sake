@@ -46,12 +46,45 @@ defmodule Sake.Client.Auth do
       tokens and dynamic registrations across sessions. Without one, they
       live in the session only.
 
+  Machine grants, for a client with no person at a browser, run in place
+  of the authorization code flow, with the same discovery and the same
+  handling of expiry, 401 and step-up (the grant runs again, with the
+  union of the scopes, where a person would have been asked):
+
+    * `grant: :client_credentials` — the client acts as itself (the
+      `io.modelcontextprotocol/oauth-client-credentials` extension). It
+      needs `:client_id` and either `:client_secret` or `:private_key`.
+    * `grant: :jwt_bearer` — the client presents a JWT it was given as
+      the grant (RFC 7523 §2.1), a workload identity token from its
+      platform, say. `:assertion` is the JWT, or a function of
+      `%{issuer: issuer, resource: resource}` returning
+      `{:ok, jwt}` (to ask the platform for one with the right
+      audience). `:client_id` is optional.
+    * `grant: :enterprise` — enterprise-managed authorization
+      (`io.modelcontextprotocol/enterprise-managed-authorization`): the
+      person's ID token from the host's single sign-on is exchanged at
+      the enterprise identity provider for an ID-JAG (RFC 8693), which
+      the MCP authorization server takes as a JWT bearer grant. It needs
+      `:client_id` (and `:client_secret` or `:private_key` when the client
+      is confidential there), `:id_token` (the ID token, or a function
+      like `:assertion`'s), and `:idp`: `token_endpoint:` or `issuer:` (to
+      read it from the provider's metadata), and the client's
+      `client_id:` and `client_secret:` at the provider.
+
+  `:private_key` is a PEM private key, or `{pem, alg}` to sign with
+  another algorithm than its default (RS256 for RSA, ES256 for P-256):
+  the client then authenticates with `private_key_jwt` (RFC 7523 §2.2),
+  signing a short-lived assertion for every token request. It needs the
+  optional `jose` dependency. Machine grants get no refresh token: an
+  expired token is replaced by running the grant again.
+
   Without `auth:`, a 401 is returned as
   `{:error, {:unauthorized, %Sake.Client.Challenge{}}}` and the caller
   handles it. A failure inside the flow is `{:error, {:auth, reason}}`.
   """
 
-  alias Sake.Client.Auth.{Browser, Discovery, Grant, Registration}
+  alias Sake.Auth.JWT
+  alias Sake.Client.Auth.{Browser, Discovery, Enterprise, Grant, Registration}
   alias Sake.Client.Challenge
 
   @type t :: %__MODULE__{}
@@ -62,9 +95,15 @@ defmodule Sake.Client.Auth do
   # does not expire on the way.
   @expiry_margin 30
 
+  @grants [:authorization_code, :client_credentials, :jwt_bearer, :enterprise]
+
   defstruct [
     :url,
     :authorize,
+    :private_key,
+    :assertion,
+    :id_token,
+    :idp,
     :redirect_uri,
     :client_id,
     :client_secret,
@@ -74,6 +113,7 @@ defmodule Sake.Client.Auth do
     :client_name,
     :store,
     :token,
+    grant: :authorization_code,
     clients: %{},
     req: []
   ]
@@ -88,10 +128,15 @@ defmodule Sake.Client.Auth do
 
     auth = %__MODULE__{
       url: Discovery.canonical(url),
+      grant: grant(opts),
       authorize: authorize,
       redirect_uri: opts[:redirect_uri] || @redirect_uri,
       client_id: opts[:client_id],
       client_secret: opts[:client_secret],
+      private_key: private_key(opts[:private_key]),
+      assertion: opts[:assertion],
+      id_token: opts[:id_token],
+      idp: idp(opts[:idp]),
       token_endpoint_auth_method: opts[:token_endpoint_auth_method],
       client_issuer: opts[:issuer],
       client_metadata_url: metadata_url(opts[:client_metadata_url]),
@@ -100,8 +145,83 @@ defmodule Sake.Client.Auth do
       req: defaults[:req] || []
     }
 
+    check_grant!(auth)
     %{auth | token: fetch(auth, {:token, auth.url})}
   end
+
+  defp grant(opts) do
+    grant = Keyword.get(opts, :grant, :authorization_code)
+
+    if grant in @grants,
+      do: grant,
+      else: raise(ArgumentError, "auth: :grant must be one of #{inspect(@grants)}")
+  end
+
+  defp private_key(nil), do: nil
+  defp private_key(pem) when is_binary(pem), do: private_key({pem, nil})
+
+  defp private_key({pem, alg}) do
+    JWT.require!("auth: :private_key")
+
+    case JWT.private_key(pem) do
+      {:ok, key} when alg == nil ->
+        {key, JWT.default_alg(key)}
+
+      {:ok, key} ->
+        if alg in JWT.algs(),
+          do: {key, alg},
+          else:
+            raise(
+              ArgumentError,
+              "auth: :private_key's algorithm must be one of #{inspect(JWT.algs())}"
+            )
+
+      {:error, :invalid_key} ->
+        raise ArgumentError,
+              "auth: :private_key must be a PEM RSA (2048 bits or more), P-256 or P-384 private key"
+    end
+  end
+
+  defp idp(nil), do: nil
+  defp idp(opts) when is_list(opts), do: Map.new(opts)
+  defp idp(%{} = opts), do: opts
+
+  defp check_grant!(%__MODULE__{grant: :client_credentials} = auth) do
+    unless is_binary(auth.client_id) and
+             (is_binary(auth.client_secret) or auth.private_key != nil),
+           do:
+             raise(
+               ArgumentError,
+               "grant: :client_credentials needs :client_id and :client_secret or :private_key"
+             )
+  end
+
+  defp check_grant!(%__MODULE__{grant: :jwt_bearer} = auth) do
+    unless provided?(auth.assertion),
+      do: raise(ArgumentError, "grant: :jwt_bearer needs :assertion (a JWT or a function)")
+  end
+
+  defp check_grant!(%__MODULE__{grant: :enterprise} = auth) do
+    cond do
+      not is_binary(auth.client_id) ->
+        raise ArgumentError, "grant: :enterprise needs :client_id"
+
+      not provided?(auth.id_token) ->
+        raise ArgumentError, "grant: :enterprise needs :id_token (an ID token or a function)"
+
+      not (is_map(auth.idp) and
+               (is_binary(auth.idp[:token_endpoint]) or is_binary(auth.idp[:issuer]))) ->
+        raise ArgumentError,
+              "grant: :enterprise needs idp: [token_endpoint: url] or idp: [issuer: url]"
+
+      true ->
+        :ok
+    end
+  end
+
+  defp check_grant!(_auth), do: :ok
+
+  defp provided?(value), do: is_binary(value) or is_function(value, 1)
 
   # draft-ietf-oauth-client-id-metadata-document: an https URL with a path.
   defp metadata_url(nil), do: nil
@@ -139,12 +259,27 @@ defmodule Sake.Client.Auth do
     end
   end
 
+  # A machine grant has no refresh token: an expiring token is replaced by
+  # running the grant again, against the authorization server it came
+  # from.
+  def fresh(%__MODULE__{grant: grant, token: %{"expires_at" => at} = token} = auth)
+      when grant != :authorization_code and is_integer(at) do
+    if System.system_time(:second) < at - @expiry_margin do
+      auth
+    else
+      case renew(auth, token) do
+        {:ok, auth} -> auth
+        {:error, _reason, auth} -> auth
+      end
+    end
+  end
+
   def fresh(auth), do: auth
 
   @doc false
   @spec unauthorized(t(), Challenge.t(), boolean()) :: {:ok, t()} | {:error, term(), t()}
   def unauthorized(auth, challenge, refresh?) do
-    case Discovery.discover(auth.url, challenge, auth.client_issuer, auth.req) do
+    case discover(auth, challenge) do
       {:ok, server} ->
         case maybe_refresh(auth, server, refresh?) do
           {:ok, auth} -> {:ok, auth}
@@ -165,7 +300,7 @@ defmodule Sake.Client.Auth do
     if challenged -- granted(auth.token) == [] do
       :exhausted
     else
-      case Discovery.discover(auth.url, challenge, auth.client_issuer, auth.req) do
+      case discover(auth, challenge) do
         {:ok, server} ->
           authorize(auth, server, union(requested(auth.token), challenged, server.metadata))
 
@@ -173,6 +308,16 @@ defmodule Sake.Client.Auth do
           {:error, reason, auth}
       end
     end
+  end
+
+  defp discover(auth, challenge) do
+    Discovery.discover(
+      auth.url,
+      challenge,
+      auth.client_issuer,
+      auth.req,
+      auth.grant == :authorization_code
+    )
   end
 
   # ---- scopes
@@ -219,7 +364,20 @@ defmodule Sake.Client.Auth do
 
   # ---- the flow
 
+  defp authorize(%__MODULE__{grant: :authorization_code} = auth, server, scopes),
+    do: authorize_code(auth, server, scopes)
+
+  # `offline_access` asks for a refresh token, which no machine grant gets.
   defp authorize(auth, server, scopes) do
+    scopes = scopes -- ["offline_access"]
+
+    case machine_client(auth, server) do
+      {:ok, registration, auth} -> machine(auth, server, registration, scopes)
+      {:error, reason, auth} -> {:error, reason, auth}
+    end
+  end
+
+  defp authorize_code(auth, server, scopes) do
     case Registration.client(auth, server) do
       {:ok, registration, auth} ->
         {url, request} = Grant.request(server, registration, auth.redirect_uri, scopes)
@@ -234,6 +392,72 @@ defmodule Sake.Client.Auth do
 
       {:error, reason, auth} ->
         {:error, reason, auth}
+    end
+  end
+
+  # A JWT bearer grant needs no client identity at all (RFC 7523 §3.1);
+  # every other machine grant presents the pre-registered one.
+  defp machine_client(%__MODULE__{grant: :jwt_bearer, client_id: nil} = auth, server),
+    do:
+      {:ok,
+       %{"client_id" => nil, "token_endpoint_auth_method" => "none", "issuer" => server.issuer},
+       auth}
+
+  defp machine_client(auth, server), do: Registration.client(auth, server)
+
+  defp machine(auth, server, registration, scopes) do
+    case machine_token(auth, server, registration, scopes) do
+      {:ok, body} ->
+        {:ok, put(auth, {:token, auth.url}, token(body, server, registration, scopes))}
+
+      {:error, reason} ->
+        {:error, reason, auth}
+    end
+  end
+
+  defp machine_token(
+         %__MODULE__{grant: :client_credentials} = auth,
+         server,
+         registration,
+         scopes
+       ),
+       do: Grant.client_credentials(server, registration, scopes, auth.req)
+
+  defp machine_token(%__MODULE__{grant: :jwt_bearer} = auth, server, registration, scopes) do
+    with {:ok, jwt} <- provide(auth.assertion, server),
+         do: Grant.jwt_bearer(server, registration, jwt, scopes, auth.req)
+  end
+
+  defp machine_token(%__MODULE__{grant: :enterprise} = auth, server, registration, scopes) do
+    with {:ok, id_token} <- provide(auth.id_token, server),
+         {:ok, jag} <- Enterprise.exchange(auth.idp, id_token, server, scopes, auth.req),
+         do: Grant.jwt_bearer(server, registration, jag, scopes, auth.req)
+  end
+
+  defp provide(value, _server) when is_binary(value), do: {:ok, value}
+
+  defp provide(fun, server) do
+    case fun.(%{issuer: server.issuer, resource: server.resource}) do
+      {:ok, value} when is_binary(value) -> {:ok, value}
+      value when is_binary(value) -> {:ok, value}
+      {:error, reason} -> {:error, {:assertion, reason}}
+      other -> {:error, {:assertion, other}}
+    end
+  end
+
+  # The token remembers its authorization server, its token endpoint and
+  # the client it was issued to: enough to run a machine grant again
+  # without discovering anything.
+  defp renew(auth, token) do
+    server = %{
+      issuer: token["issuer"],
+      resource: token["resource"],
+      metadata: %{"token_endpoint" => token["token_endpoint"]}
+    }
+
+    case Registration.for_token(auth, token) do
+      %{} = registration -> machine(auth, server, registration, requested(token))
+      nil -> {:error, :no_client, auth}
     end
   end
 

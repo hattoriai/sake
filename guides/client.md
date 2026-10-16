@@ -268,6 +268,60 @@ URI — or `{:error, reason}`. Two come with Sake:
 Your own function can do anything else — show the URL in your app's UI
 and wait for the callback on your web server, for instance.
 
+### Grants without a person
+
+`grant:` replaces the browser with a grant a program runs on its own.
+Discovery is the same (resource metadata, then the authorization
+server's, which then needs only a token endpoint); no client registers
+dynamically.
+
+```elixir
+# A service acting as itself (the client credentials extension), with a
+# secret...
+auth: [grant: :client_credentials, client_id: "svc", client_secret: secret]
+
+# ...or with a private key: it signs a one-minute assertion for the
+# authorization server's issuer on every token request (private_key_jwt).
+auth: [grant: :client_credentials, client_id: "svc", private_key: File.read!("svc.pem")]
+
+# A workload presenting its platform's JWT (RFC 7523 JWT bearer grant);
+# a function gets one for the discovered issuer and resource.
+auth: [grant: :jwt_bearer, client_id: "ci", assertion: fn %{issuer: aud} -> MyApp.Platform.id_token(aud) end]
+
+# Enterprise-managed authorization: the person's ID token from your own
+# single sign-on is exchanged at their identity provider for an ID-JAG,
+# which the authorization server takes as a JWT bearer grant.
+auth: [
+  grant: :enterprise,
+  client_id: "agent",
+  client_secret: agent_secret,
+  id_token: id_token,
+  idp: [issuer: "https://acme.okta.com", client_id: "agent-at-okta", client_secret: okta_secret]
+]
+```
+
+The token exchange (RFC 8693) asks the identity provider for an ID-JAG
+with the authorization server's issuer as `audience`, the endpoint's
+resource identifier as `resource` and the scopes chosen as below; `idp:`
+takes the provider's `token_endpoint:` directly, or its `issuer:` to read
+it from the provider's metadata. Obtaining the ID token is your single
+sign-on's business: pass it, or a function that returns `{:ok, token}`
+when the flow needs one.
+
+`private_key:` is a PEM RSA (2048 bits or more), P-256 or P-384 private
+key, signing RS256, ES256 or ES384, or `{pem, alg}` for another algorithm
+(PS256); it needs the optional `jose` dependency (`{:jose, "~> 1.11"}`).
+Pre-registered credentials stay bound to their authorization server, as
+above.
+
+None of these grants returns a refresh token. An expiring token is
+replaced by running the grant again (straight at the token endpoint it
+came from), a 401 runs it after discovery, and a 403
+`insufficient_scope` runs it for the union of the scopes. A refused
+grant comes back as `{:error, {:auth, {:token_failed, status, body}}}`
+(`{:token_exchange_failed, ...}` from the identity provider): the client
+does not retry it, nor fall back to another grant.
+
 ### Scopes
 
 The first authorization asks for the challenge's `scope` when it has one,
@@ -301,7 +355,9 @@ authorization response), `:pkce_not_supported`, `:missing_iss`,
 `:state_mismatch`, `{:denied, error, description}`,
 `{:insecure_url, url}`, `:no_client_registration`,
 `{:registration_failed, ...}`, `{:token_failed, ...}`,
-`{:authorize, reason}` (your `authorize:` function's error), and so on.
+`{:token_exchange_failed, ...}`, `{:authorize, reason}` (your
+`authorize:` function's error), `{:assertion, reason}` (your
+`assertion:` or `id_token:` function's), and so on.
 
 ### Without `auth:`
 

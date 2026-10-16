@@ -21,7 +21,7 @@ defmodule Sake.Auth.Revoke do
 
     # A revoke call that names no client at all has nothing to authenticate
     # against; it is answered like an unknown token, without a 401.
-    if client_given?(conn, p) do
+    if ClientAuth.client_given?(conn, p) do
       authenticate_and_revoke(conn, config, p)
     else
       ok(conn)
@@ -50,10 +50,6 @@ defmodule Sake.Auth.Revoke do
     end
   end
 
-  defp client_given?(conn, p),
-    do:
-      match?(["Basic " <> _], get_req_header(conn, "authorization")) or is_binary(p["client_id"])
-
   defp ok(conn), do: conn |> put_resp_header("cache-control", "no-store") |> send_resp(200, "")
 
   defp revoke(config, client, hash, hint) do
@@ -66,11 +62,17 @@ defmodule Sake.Auth.Revoke do
     with {:ok, %{client_id: cid} = record} <- module.get_token(state, kind, hash),
          true <- cid == client.id do
       revoke_record(module, state, kind, record)
-      module.delete_consent(state, record.subject_id, cid, :all)
+      forget_consent(module, state, record)
     else
       _ -> :ok
     end
   end
+
+  # A machine client's token has no subject, and no consent behind it.
+  defp forget_consent(_module, _state, %{subject_id: nil}), do: :ok
+
+  defp forget_consent(module, state, record),
+    do: module.delete_consent(state, record.subject_id, record.client_id, :all)
 
   defp revoke_record(module, state, :refresh, record),
     do: module.revoke_family(state, record.family_id)

@@ -24,6 +24,12 @@ defmodule SakeTest.FakeOAuth do
   #   * `:grant` — the scopes every token gets, whatever was asked for.
   #   * `:expires_in`, `:refresh` (default true) — the token answers.
   #   * `:registration` — fields merged into the registration answer.
+  #   * `:grant_error` — an error code every client credentials or JWT
+  #     bearer request is answered with.
+  #   * `:idp_error` — an error code the identity provider's token
+  #     exchange (at /idp/token, metadata at the RFC 8414 URL of the
+  #     issuer `/idp`) answers with; otherwise it returns `jag-` and the
+  #     subject token as the ID-JAG.
   #   * `:state` — the Agent with the issued codes and tokens (required).
 
   @behaviour Plug
@@ -67,6 +73,7 @@ defmodule SakeTest.FakeOAuth do
 
   defp route(conn, "GET", path, _params, opts) do
     cond do
+      path == "/.well-known/oauth-authorization-server/idp" -> json(conn, 200, idp_metadata(conn))
       resource_metadata?(path, opts) -> resource_metadata(conn, opts)
       path == metadata_path(opts) -> json(conn, 200, metadata(conn, opts))
       path == issuer_path(opts) <> "/authorize" -> authorize(conn, opts)
@@ -76,6 +83,7 @@ defmodule SakeTest.FakeOAuth do
 
   defp route(conn, "POST", path, params, opts) do
     cond do
+      path == "/idp/token" -> token_exchange(conn, params, opts)
       path == issuer_path(opts) <> "/token" -> token(conn, params, opts)
       path == issuer_path(opts) <> "/register" -> register(conn, params, opts)
       true -> send_resp(conn, 404, "")
@@ -230,6 +238,45 @@ defmodule SakeTest.FakeOAuth do
     case Agent.get(opts.state, &get_in(&1, [:refresh, p["refresh_token"]])) do
       nil -> json(conn, 400, %{"error" => "invalid_grant"})
       scopes -> issue(conn, scopes, opts)
+    end
+  end
+
+  defp token(conn, %{"grant_type" => grant} = p, opts)
+       when grant in ["client_credentials", "urn:ietf:params:oauth:grant-type:jwt-bearer"] do
+    case opts[:grant_error] do
+      nil ->
+        issue(
+          conn,
+          opts[:grant] || String.split(p["scope"] || ""),
+          Map.put(opts, :refresh, false)
+        )
+
+      error ->
+        json(conn, 400, %{"error" => error})
+    end
+  end
+
+  # ---- the enterprise identity provider
+
+  defp idp_metadata(conn) do
+    %{
+      "issuer" => base(conn) <> "/idp",
+      "token_endpoint" => base(conn) <> "/idp/token",
+      "token_endpoint_auth_methods_supported" => ["client_secret_post"]
+    }
+  end
+
+  defp token_exchange(conn, p, opts) do
+    case opts[:idp_error] do
+      nil ->
+        json(conn, 200, %{
+          "access_token" => "jag-" <> p["subject_token"],
+          "issued_token_type" => "urn:ietf:params:oauth:token-type:id-jag",
+          "token_type" => "N_A"
+        })
+
+      error ->
+        json(conn, 400, %{"error" => error})
     end
   end
 

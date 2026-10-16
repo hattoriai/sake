@@ -35,16 +35,34 @@ defmodule Sake.Auth.WellKnownTest do
     assert body["code_challenge_methods_supported"] == ["S256"]
     assert body["client_id_metadata_document_supported"] == true
     assert body["authorization_response_iss_parameter_supported"] == true
-    assert body["grant_types_supported"] == ["authorization_code", "refresh_token"]
+
+    assert body["grant_types_supported"] == [
+             "authorization_code",
+             "refresh_token",
+             "client_credentials"
+           ]
+
     assert body["response_types_supported"] == ["code"]
 
     assert body["token_endpoint_auth_methods_supported"] == [
              "none",
              "client_secret_basic",
-             "client_secret_post"
+             "client_secret_post",
+             "private_key_jwt"
            ]
 
+    assert body["token_endpoint_auth_signing_alg_values_supported"] ==
+             ["RS256", "PS256", "ES256", "ES384"]
+
+    refute Map.has_key?(body, "authorization_grant_profiles_supported")
+
     assert body["scopes_supported"] == ["issues:read", "issues:write"]
+  end
+
+  @tag auth: [subject: SakeTest.TenantSubject]
+  test "no client credentials grant without client_principal/1" do
+    body = JSON.decode!(get("/.well-known/oauth-authorization-server").resp_body)
+    assert body["grant_types_supported"] == ["authorization_code", "refresh_token"]
   end
 
   @tag auth: [dcr: false]

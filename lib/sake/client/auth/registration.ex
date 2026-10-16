@@ -43,12 +43,12 @@ defmodule Sake.Client.Auth.Registration do
   def for_token(auth, %{"issuer" => issuer, "client_id" => client_id} = token) do
     cond do
       client_id == auth.client_id and auth.client_issuer in [nil, issuer] ->
-        %{
+        with_key(auth, %{
           "client_id" => client_id,
           "client_secret" => auth.client_secret,
           "token_endpoint_auth_method" => token["token_endpoint_auth_method"],
           "issuer" => issuer
-        }
+        })
 
       client_id == auth.client_metadata_url ->
         metadata_document(auth, issuer)
@@ -72,15 +72,25 @@ defmodule Sake.Client.Auth.Registration do
   end
 
   defp pre_registered_client(auth, issuer, metadata) do
-    %{
+    with_key(auth, %{
       "client_id" => auth.client_id,
       "client_secret" => auth.client_secret,
       "token_endpoint_auth_method" =>
-        auth.token_endpoint_auth_method || secret_method(auth.client_secret, metadata),
+        auth.token_endpoint_auth_method || secret_method(auth, metadata),
       "issuer" => issuer
-    }
+    })
   end
 
+  # The private key of `private_key_jwt` stays in the session: it is
+  # added to a pre-registered client's registration, which is never
+  # persisted, and is not JSON.
+  defp with_key(%Auth{private_key: nil}, registration), do: registration
+
+  defp with_key(%Auth{private_key: key}, registration),
+    do: Map.put(registration, "private_key", key)
+
+  defp secret_method(%Auth{private_key: {_key, _alg}}, _metadata), do: "private_key_jwt"
+  defp secret_method(%Auth{client_secret: secret}, metadata), do: secret_method(secret, metadata)
   defp secret_method(nil, _metadata), do: "none"
 
   defp secret_method(_secret, metadata),

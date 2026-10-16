@@ -195,11 +195,18 @@ defmodule Sake.Tasks do
   defp touch(_before, updated, now), do: %{updated | updated_at: now}
 
   @doc false
-  # The principal a task is bound to: the token's subject, else the host's
+  # The principal a task is bound to: the token's subject (or its client),
+  # else the host's
   # scope (as `Sake.Server.RequestState` binds a request state). The scope
   # is kept as a digest, since the store may be a database.
   @spec principal(Context.t()) :: String.t() | nil
   def principal(%Context{token: %{subject_id: id}}) when is_binary(id), do: "subject:" <> id
+
+  # A machine client's token (client credentials) has no subject: the
+  # client is the principal.
+  def principal(%Context{token: %{subject_id: nil, client_id: id}}) when is_binary(id),
+    do: "client:" <> id
+
   def principal(%Context{scope: nil}), do: nil
 
   def principal(%Context{scope: scope}),
