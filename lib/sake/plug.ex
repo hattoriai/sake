@@ -420,8 +420,8 @@ defmodule Sake.Plug do
       {{:request, id, _, _}, {:error, error}} ->
         [%{"jsonrpc" => "2.0", "id" => id, "error" => error}]
 
-      {{:request, id, _, _}, {:forbidden, _}} ->
-        [JSONRPC.error(id, JSONRPC.code(:invalid_request), "Insufficient scope")]
+      {{:request, id, _, _}, {:forbidden, scopes}} ->
+        [%{"jsonrpc" => "2.0", "id" => id, "error" => Sake.Plug.Stream.forbidden(scopes)}]
 
       {{:request, id, _, _}, _} ->
         [JSONRPC.error(id, JSONRPC.code(:invalid_request), "Not supported in a batch")]
@@ -485,13 +485,19 @@ defmodule Sake.Plug do
   def outcome_to_response(conn, id, {:error, error}),
     do: send_json(conn, 200, %{"jsonrpc" => "2.0", "id" => id, "error" => error})
 
+  # A refusal that names no scopes (a middleware's `:forbidden`) has no
+  # challenge: no token the client could step up to would lift it.
   def outcome_to_response(conn, id, {:forbidden, scopes}) do
     conn =
-      if conn.assigns[:sake_auth],
+      if conn.assigns[:sake_auth] && scopes != [],
         do: Sake.Auth.Bearer.insufficient_scope(conn, scopes),
         else: conn
 
-    send_error(conn, 403, id, JSONRPC.code(:invalid_request), "Insufficient scope")
+    send_json(conn, 403, %{
+      "jsonrpc" => "2.0",
+      "id" => id,
+      "error" => Sake.Plug.Stream.forbidden(scopes)
+    })
   end
 
   def outcome_to_response(conn, _id, :noreply), do: send_resp(conn, 202, "")

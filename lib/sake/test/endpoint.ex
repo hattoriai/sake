@@ -231,6 +231,7 @@ defmodule Sake.Test.Endpoint do
 
     case outcome do
       {:raised, kind, reason, stacktrace} -> :erlang.raise(kind, reason, stacktrace)
+      {:forbidden, []} -> {:error, {:http, 403, Stream.response(id, {:forbidden, []})}}
       {:forbidden, scopes} -> {:error, {:insufficient_scope, challenge(scopes)}}
       outcome -> reply(session, Stream.response(id, outcome))
     end

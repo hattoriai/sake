@@ -614,9 +614,11 @@ defmodule Sake.Stdio do
   # filter asks for, tagged with its subscription ID, until the client
   # cancels it or the server stops.
   defp listen(conn, server, id, params, ctx) do
+    ctx = %{ctx | request_id: id, method: "subscriptions/listen"}
+
     case Stream.refused(params, ctx) do
       nil -> open_listen(conn, server, id, params, ctx)
-      error -> {Stream.response(id, Trace.outcome({:error, error})), false}
+      outcome -> {Stream.response(id, Trace.outcome(outcome)), false}
     end
   end
 

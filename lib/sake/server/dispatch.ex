@@ -7,7 +7,7 @@ defmodule Sake.Server.Dispatch do
   require Logger
 
   alias Sake.{Context, JSONRPC, Protocol, Server}
-  alias Sake.Server.{Cursor, Results, Tasks, UI}
+  alias Sake.Server.{Cursor, Middleware, Results, Tasks, UI}
 
   @type outcome ::
           {:reply, map()}
@@ -22,12 +22,23 @@ defmodule Sake.Server.Dispatch do
   def handle(server, {:request, id, method, params}, ctx) do
     ctx = %{ctx | request_id: id, method: method, server: server}
 
-    case dispatch(server, method, params, ctx) do
+    case request(server, method, params, ctx) do
       {:ok, result} -> {:reply, finish(result, server, ctx)}
       {:error, code, message} -> {:error, error(code, message)}
       {:error, code, message, data} -> {:error, Map.put(error(code, message), "data", data)}
       {:forbidden, scopes} -> {:forbidden, scopes}
       {:listen, filter} -> {:listen, filter}
+    end
+  end
+
+  @doc false
+  # `:before_request` runs before every method, so a refusal there (a
+  # rate limit, say) costs the server nothing else. Shared with the
+  # legacy dispatcher.
+  def request(server, method, params, ctx, dispatch \\ &dispatch/4) do
+    case Middleware.before_request(params, ctx) do
+      {:ok, ctx} -> dispatch.(server, method, params, ctx)
+      {:halt, reason} -> Middleware.refusal(reason, params, ctx)
     end
   end
 
@@ -91,29 +102,30 @@ defmodule Sake.Server.Dispatch do
 
   @doc false
   def list_tools(server, params, ctx) do
-    with {:ok, offset} <- offset(params, ctx) do
-      specs =
-        server.__sake__(:tools)
-        |> Enum.filter(&(Server.allowed?(&1, ctx) and UI.visible?(&1, ctx)))
-
+    with {:ok, offset} <- offset(params, ctx),
+         {:ok, specs} <-
+           server.__sake__(:tools)
+           |> Enum.filter(&(Server.allowed?(&1, ctx) and UI.visible?(&1, ctx)))
+           |> listable(:tools, params, ctx) do
       {page, next} = page(specs, offset, server)
 
       {:ok,
        %{"tools" => Enum.map(page, &UI.tool_to_wire(&1, ctx))}
        |> next_cursor(next, ctx)
        |> cacheable(server, ctx, Enum.map(page, & &1.ttl))
-       |> UI.cache_scope(server)}
+       |> UI.cache_scope(server)
+       |> Middleware.cache_scope(server, [:after_list])}
     end
   end
 
   @doc false
   def list_resources(server, params, ctx) do
-    with {:ok, offset} <- offset(params, ctx) do
-      entries =
-        server.__sake__(:resources)
-        |> Enum.filter(&(Server.allowed?(&1, ctx) and UI.listed?(&1, ctx)))
-        |> Enum.flat_map(&resource_entries(&1, ctx))
-
+    with {:ok, offset} <- offset(params, ctx),
+         {:ok, specs} <-
+           server.__sake__(:resources)
+           |> Enum.filter(&(Server.allowed?(&1, ctx) and UI.listed?(&1, ctx)))
+           |> listable(:resources, params, ctx) do
+      entries = Enum.flat_map(specs, &resource_entries(&1, ctx))
       {page, next} = page(entries, offset, server)
       {ttls, page} = Enum.unzip(page)
 
@@ -121,7 +133,8 @@ defmodule Sake.Server.Dispatch do
        %{"resources" => page}
        |> next_cursor(next, ctx)
        |> cacheable(server, ctx, ttls)
-       |> UI.cache_scope(server)}
+       |> UI.cache_scope(server)
+       |> Middleware.cache_scope(server, [:after_list])}
     end
   end
 
@@ -142,10 +155,11 @@ defmodule Sake.Server.Dispatch do
 
   @doc false
   def list_resource_templates(server, params, ctx) do
-    with {:ok, offset} <- offset(params, ctx) do
-      specs =
-        server.__sake__(:resources) |> Enum.filter(&(&1.template and Server.allowed?(&1, ctx)))
-
+    with {:ok, offset} <- offset(params, ctx),
+         {:ok, specs} <-
+           server.__sake__(:resources)
+           |> Enum.filter(&(&1.template and Server.allowed?(&1, ctx)))
+           |> listable(:resources, params, ctx) do
       {page, next} = page(specs, offset, server)
 
       {:ok,
@@ -154,20 +168,45 @@ defmodule Sake.Server.Dispatch do
            Enum.map(page, &Sake.Resource.Spec.template_to_wire(&1, ctx.protocol_version))
        }
        |> next_cursor(next, ctx)
-       |> cacheable(server, ctx, Enum.map(page, & &1.ttl))}
+       |> cacheable(server, ctx, Enum.map(page, & &1.ttl))
+       |> Middleware.cache_scope(server, [:after_list])}
     end
   end
 
   @doc false
   def list_prompts(server, params, ctx) do
-    with {:ok, offset} <- offset(params, ctx) do
-      specs = server.__sake__(:prompts) |> Enum.filter(&Server.allowed?(&1, ctx))
+    with {:ok, offset} <- offset(params, ctx),
+         {:ok, specs} <-
+           server.__sake__(:prompts)
+           |> Enum.filter(&Server.allowed?(&1, ctx))
+           |> listable(:prompts, params, ctx) do
       {page, next} = page(specs, offset, server)
 
       {:ok,
        %{"prompts" => Enum.map(page, &Sake.Prompt.Spec.to_wire(&1, ctx.protocol_version))}
        |> next_cursor(next, ctx)
-       |> cacheable(server, ctx, Enum.map(page, & &1.ttl))}
+       |> cacheable(server, ctx, Enum.map(page, & &1.ttl))
+       |> Middleware.cache_scope(server, [:after_list])}
+    end
+  end
+
+  # The `:after_list` plugs see what Sake's own checks (scopes, MCP Apps)
+  # let through, and before the list is paged, so that pages stay full.
+  defp listable(specs, kind, params, ctx) do
+    case Middleware.filter(kind, specs, ctx) do
+      {:ok, specs} -> {:ok, specs}
+      {:halt, reason} -> Middleware.refusal(reason, params, ctx)
+    end
+  end
+
+  @doc false
+  # Whether the `:after_list` plugs let the request reach the component,
+  # answered as the list would be: a component the list hides does not
+  # exist for the call either.
+  def listed(kind, spec, params, ctx) do
+    case Middleware.listed(kind, spec, ctx) do
+      :ok -> :ok
+      {:halt, reason} -> Middleware.refusal(reason, params, ctx)
     end
   end
 
@@ -198,6 +237,7 @@ defmodule Sake.Server.Dispatch do
   def call_tool(server, %{"name" => name} = params, ctx) when is_binary(name) do
     with {:ok, spec} <- find_tool(server, name),
          :ok <- visible(spec, name, ctx),
+         :ok <- listed(:tools, spec, params, ctx),
          :ok <- allowed(spec, ctx) do
       call_validated(spec, params, ctx)
     end
@@ -247,9 +287,19 @@ defmodule Sake.Server.Dispatch do
   defp allowed(spec, ctx),
     do: if(Server.allowed?(spec, ctx), do: :ok, else: {:forbidden, spec.scopes})
 
+  # `:before_call` runs on every round of a multi round-trip call, before
+  # anything of the tool: what it decides about the arguments is what
+  # `prepare/2`, `execute/2` and a task see.
+  defp run_tool(spec, args, ctx) do
+    case Middleware.before(:before_call, %{tool: spec, arguments: args}, :arguments, ctx) do
+      {:ok, args, ctx} -> run_prepared(spec, args, ctx)
+      {:halt, reason} -> Middleware.refusal(reason, %{"name" => spec.name}, ctx)
+    end
+  end
+
   # `prepare/2` runs in the request itself, so it can still ask the client
   # for input on a modern retry before a task takes over the rest.
-  defp run_tool(spec, args, ctx) do
+  defp run_prepared(spec, args, ctx) do
     case prepare(spec, args, ctx) do
       {:ok, args} ->
         if spec.task && Tasks.declared?(ctx) && Sake.Tasks.running?(),
@@ -257,7 +307,7 @@ defmodule Sake.Server.Dispatch do
           else: execute(spec, args, ctx)
 
       {:error, text} ->
-        {:ok, Results.tool({:error, text}, spec, ctx)}
+        after_call({:error, text}, spec, args, ctx)
     end
   rescue
     exception ->
@@ -267,13 +317,26 @@ defmodule Sake.Server.Dispatch do
         "tool #{spec.name} failed: " <> Exception.format(:error, exception, __STACKTRACE__)
       )
 
-      {:ok, Results.tool({:error, "The tool failed."}, spec, ctx)}
+      after_call({:error, "The tool failed."}, spec, args, ctx)
   end
 
   defp execute(spec, args, ctx) do
     case spec.module.execute(args, ctx) do
       {:error, {:missing_capability, caps}} -> missing_capability(caps)
-      result -> {:ok, Results.tool(result, spec, ctx)}
+      result -> after_call(result, spec, args, ctx)
+    end
+  end
+
+  # Every result the tool gives the client goes through `:after_call`, an
+  # error result too; a task's goes through it when the task ends (see
+  # `Sake.Tasks.Worker`).
+  defp after_call(value, spec, args, ctx) do
+    result = Results.tool(value, spec, ctx)
+    payload = %{tool: spec, arguments: args, result: result}
+
+    case Middleware.after_result(:after_call, payload, ctx) do
+      {:ok, result} -> {:ok, result}
+      {:halt, reason} -> Middleware.refusal(reason, %{"name" => spec.name}, ctx)
     end
   end
 
@@ -303,6 +366,7 @@ defmodule Sake.Server.Dispatch do
   @doc false
   def read_resource(server, %{"uri" => uri} = params, ctx) when is_binary(uri) do
     with {:ok, spec, uri_params} <- find_resource(server, uri),
+         :ok <- listed(:resources, spec, params, ctx),
          :ok <- allowed(spec, ctx) do
       with_inputs(uri, %{"uri" => uri}, params, ctx, fn ctx ->
         read_result(spec, uri_params, uri, server, ctx)
@@ -314,11 +378,43 @@ defmodule Sake.Server.Dispatch do
     do: {:error, JSONRPC.code(:invalid_params), "resources/read needs a uri"}
 
   defp read_result(spec, uri_params, uri, server, ctx) do
+    payload = %{resource: spec, uri: uri, params: uri_params}
+
+    case Middleware.before(:before_read, payload, :params, ctx) do
+      {:ok, uri_params, ctx} -> read_spec(spec, uri_params, uri, server, ctx)
+      {:halt, reason} -> Middleware.refusal(reason, %{"uri" => uri}, ctx)
+    end
+  end
+
+  # A result that read middleware rewrote or redacted may be one
+  # principal's, so it is private.
+  defp read_spec(spec, uri_params, uri, server, ctx) do
     case Results.resource(spec.module.read(uri_params, ctx), spec, uri, ctx) do
-      {:ok, result} -> {:ok, cacheable(result, server, ctx, [spec.ttl])}
-      {:error, :not_found} -> not_found(uri, ctx)
-      {:error, {:missing_capability, caps}} -> missing_capability(caps)
-      {:error, text} -> {:error, JSONRPC.code(:internal), text}
+      {:ok, result} ->
+        with {:ok, result} <- after_read(result, spec, uri_params, uri, ctx) do
+          {:ok,
+           result
+           |> cacheable(server, ctx, [spec.ttl])
+           |> Middleware.cache_scope(server, [:before_read, :after_read])}
+        end
+
+      {:error, :not_found} ->
+        not_found(uri, ctx)
+
+      {:error, {:missing_capability, caps}} ->
+        missing_capability(caps)
+
+      {:error, text} ->
+        {:error, JSONRPC.code(:internal), text}
+    end
+  end
+
+  defp after_read(result, spec, uri_params, uri, ctx) do
+    payload = %{resource: spec, uri: uri, params: uri_params, result: result}
+
+    case Middleware.after_result(:after_read, payload, ctx) do
+      {:ok, result} -> {:ok, result}
+      {:halt, reason} -> Middleware.refusal(reason, %{"uri" => uri}, ctx)
     end
   end
 
@@ -335,7 +431,8 @@ defmodule Sake.Server.Dispatch do
   # The error names the URI in `data`, as both eras' specifications
   # recommend, so a client reading several resources can tell which one
   # was missing.
-  defp not_found(uri, ctx),
+  @doc false
+  def not_found(uri, ctx),
     do: {:error, not_found_code(ctx), "Resource not found: #{uri}", %{"uri" => uri}}
 
   defp not_found_code(%Context{era: :legacy}), do: JSONRPC.code(:legacy_resource_not_found)
@@ -346,6 +443,7 @@ defmodule Sake.Server.Dispatch do
   @doc false
   def get_prompt(server, %{"name" => name} = params, ctx) when is_binary(name) do
     with {:ok, spec} <- find_prompt(server, name),
+         :ok <- listed(:prompts, spec, params, ctx),
          :ok <- allowed(spec, ctx),
          {:ok, args} <- prompt_args(spec, params["arguments"] || %{}) do
       with_inputs(name, params["arguments"] || %{}, params, ctx, fn ctx ->
@@ -358,10 +456,28 @@ defmodule Sake.Server.Dispatch do
     do: {:error, JSONRPC.code(:invalid_params), "prompts/get needs a name"}
 
   defp prompt_result(spec, args, ctx) do
+    case Middleware.before(:before_get, %{prompt: spec, arguments: args}, :arguments, ctx) do
+      {:ok, args, ctx} -> render_prompt(spec, args, ctx)
+      {:halt, reason} -> Middleware.refusal(reason, %{"name" => spec.name}, ctx)
+    end
+  end
+
+  defp render_prompt(spec, args, ctx) do
     case Results.prompt(spec.module.get(args, ctx), spec, ctx) do
-      {:ok, result} -> {:ok, result}
+      {:ok, result} -> after_get(result, spec, args, ctx)
       {:error, {:missing_capability, caps}} -> missing_capability(caps)
       {:error, text} -> {:error, JSONRPC.code(:invalid_params), text}
+    end
+  end
+
+  defp after_get(result, spec, args, ctx) do
+    case Middleware.after_result(
+           :after_get,
+           %{prompt: spec, arguments: args, result: result},
+           ctx
+         ) do
+      {:ok, result} -> {:ok, result}
+      {:halt, reason} -> Middleware.refusal(reason, %{"name" => spec.name}, ctx)
     end
   end
 
@@ -440,9 +556,13 @@ defmodule Sake.Server.Dispatch do
   # ---- completion/complete
 
   @doc false
-  def complete(server, %{"ref" => ref, "argument" => %{"name" => arg, "value" => value}}, ctx) do
+  def complete(
+        server,
+        %{"ref" => ref, "argument" => %{"name" => arg, "value" => value}} = params,
+        ctx
+      ) do
     case resolve_completion_ref(server, ref) do
-      %{module: _} = spec -> run_completion(spec, arg, value, ctx)
+      %{module: _} = spec -> listed_completion(spec, arg, value, params, ctx)
       _ -> {:error, JSONRPC.code(:invalid_params), "Unknown completion reference"}
     end
   end
@@ -458,6 +578,15 @@ defmodule Sake.Server.Dispatch do
     do: Enum.find(server.__sake__(:resources), &(&1.uri == uri))
 
   defp resolve_completion_ref(_server, _ref), do: :error
+
+  # A prompt or resource template the list hides cannot be completed.
+  defp listed_completion(spec, arg, value, params, ctx) do
+    kind = if match?(%Sake.Prompt.Spec{}, spec), do: :prompts, else: :resources
+
+    with :ok <- listed(kind, spec, params, ctx) do
+      run_completion(spec, arg, value, ctx)
+    end
+  end
 
   defp run_completion(spec, arg, value, ctx) do
     cond do

@@ -9,6 +9,7 @@ defmodule Sake.Plug.Stream do
 
   alias Sake.{Context, JSONRPC, Protocol, Trace}
   alias Sake.Plug.{SSE, Streams}
+  alias Sake.Server.Middleware
 
   # `loop/5` demonitors `Task.async/1`'s own monitor ref by hand (there is
   # no public `Task` API to do this outside a `receive`, which is exactly
@@ -221,8 +222,8 @@ defmodule Sake.Plug.Stream do
       {:error, error} ->
         %{"jsonrpc" => "2.0", "id" => id, "error" => error}
 
-      {:forbidden, _scopes} ->
-        JSONRPC.error(id, JSONRPC.code(:invalid_request), "Insufficient scope")
+      {:forbidden, scopes} ->
+        %{"jsonrpc" => "2.0", "id" => id, "error" => forbidden(scopes)}
 
       :noreply ->
         JSONRPC.result(id, %{})
@@ -237,6 +238,14 @@ defmodule Sake.Plug.Stream do
         JSONRPC.error(id, JSONRPC.code(:internal), "Unexpected outcome")
     end
   end
+
+  @doc false
+  # The error of a refusal: for missing scopes, or, with none to name, a
+  # middleware's refusal that no scope would lift.
+  def forbidden([]), do: %{"code" => JSONRPC.code(:invalid_request), "message" => "Forbidden"}
+
+  def forbidden(_scopes),
+    do: %{"code" => JSONRPC.code(:invalid_request), "message" => "Insufficient scope"}
 
   @doc false
   def progress(token, current, total, message) do
@@ -267,9 +276,11 @@ defmodule Sake.Plug.Stream do
   # Task notifications need the tasks extension; a client asking for them
   # without it gets -32021 instead of a stream.
   defp listen(conn, opts, id, params, ctx) do
+    ctx = %{ctx | request_id: id, method: "subscriptions/listen"}
+
     case refused(params, ctx) do
       nil -> open_listen(conn, opts, id, params, ctx)
-      error -> Sake.Plug.outcome_to_response(conn, id, Trace.outcome({:error, error}))
+      outcome -> Sake.Plug.outcome_to_response(conn, id, Trace.outcome(outcome))
     end
   end
 
@@ -319,17 +330,31 @@ defmodule Sake.Plug.Stream do
   # stream; shared with `Sake.Stdio`.
 
   @doc false
-  # The JSON-RPC error a listen request gets instead of a stream, if any:
-  # task notifications need the tasks extension.
+  # The outcome a listen request gets instead of a stream, if any: the
+  # server's `:before_request` middleware may refuse it, and task
+  # notifications need the tasks extension.
   def refused(params, ctx) do
-    requested = params["notifications"]
+    case Middleware.before_request(params, ctx) do
+      {:halt, reason} -> reason |> Middleware.refusal(params, ctx) |> refusal_outcome()
+      {:ok, ctx} -> missing_tasks(params["notifications"], ctx)
+    end
+  end
 
+  defp missing_tasks(requested, ctx) do
     if is_map(requested) and Map.has_key?(requested, "taskIds") and
          not Sake.Server.Tasks.declared?(ctx) do
       {:error, code, message, data} = Sake.Server.Tasks.missing_capability()
-      %{"code" => code, "message" => message, "data" => data}
+      {:error, %{"code" => code, "message" => message, "data" => data}}
     end
   end
+
+  defp refusal_outcome({:forbidden, scopes}), do: {:forbidden, scopes}
+
+  defp refusal_outcome({:error, code, message}),
+    do: {:error, %{"code" => code, "message" => message}}
+
+  defp refusal_outcome({:error, code, message, data}),
+    do: {:error, %{"code" => code, "message" => message, "data" => data}}
 
   @doc false
   def honoured(params, ctx) do
@@ -342,7 +367,26 @@ defmodule Sake.Plug.Stream do
       _ -> false
     end)
     |> Map.new()
+    |> subscribable(ctx)
     |> put_task_ids(Sake.Server.Tasks.visible(is_map(requested) && requested["taskIds"], ctx))
+  end
+
+  # A resource the server's `:after_list` middleware hides cannot be
+  # followed either: its URI is left out of what the stream honours.
+  defp subscribable(%{"resourceSubscriptions" => uris} = honoured, ctx) do
+    case Enum.filter(uris, &subscribable?(&1, ctx)) do
+      [] -> Map.delete(honoured, "resourceSubscriptions")
+      uris -> Map.put(honoured, "resourceSubscriptions", uris)
+    end
+  end
+
+  defp subscribable(honoured, _ctx), do: honoured
+
+  defp subscribable?(uri, ctx) do
+    case is_binary(uri) and Sake.Server.resource(ctx.server, uri) do
+      {:ok, spec, _params} -> Middleware.listed(:resources, spec, ctx) == :ok
+      _ -> true
+    end
   end
 
   # The caller's own tasks only: anything else was left out of `taskIds`.
