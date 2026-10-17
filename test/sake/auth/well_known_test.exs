@@ -1,6 +1,7 @@
 defmodule Sake.Auth.WellKnownTest do
   use SakeTest.AuthCase, async: false
   import Plug.Test
+  import ExUnit.CaptureLog
 
   defp get(path) do
     conn(:get, path) |> Sake.Auth.WellKnown.call(Sake.Auth.WellKnown.init([]))
@@ -24,6 +25,28 @@ defmodule Sake.Auth.WellKnownTest do
 
     body = JSON.decode!(get("/.well-known/oauth-protected-resource/acme/mcp").resp_body)
     assert body["resource"] == "http://www.example.com/acme/mcp"
+  end
+
+  test "behind a proxy: the resource is on the issuer's origin, and the app is told once" do
+    :persistent_term.erase({Sake.Auth.WellKnown, :warned})
+    on_exit(fn -> :persistent_term.erase({Sake.Auth.WellKnown, :warned}) end)
+
+    proxied = fn ->
+      conn(:get, "/.well-known/oauth-protected-resource/mcp")
+      |> Map.put(:host, "app.internal")
+      |> Sake.Auth.WellKnown.call(Sake.Auth.WellKnown.init([]))
+    end
+
+    log =
+      capture_log(fn ->
+        assert JSON.decode!(proxied.().resp_body)["resource"] == "http://www.example.com/mcp"
+      end)
+
+    assert log =~ "the request arrived at http://app.internal"
+    assert log =~ "Plug.RewriteOn"
+
+    assert capture_log(fn -> proxied.() end) == ""
+    assert capture_log(fn -> get("/.well-known/oauth-protected-resource/mcp") end) == ""
   end
 
   test "authorization server metadata" do

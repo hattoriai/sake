@@ -1,9 +1,24 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 (2026-10-17)
+
+Two fixes: for apps behind a proxy, and for an `{m, f, a}` secret.
+Nothing changes for an app that receives requests with the host its
+clients asked for and gives its secret as a binary.
 
 ### Fixed
 
+- `Sake.Auth` named the resource from the request's host, but accepts
+  only resources on its issuer's origin. Behind a proxy that sends its
+  upstream's host (`myapp.fly.dev`, `app.internal`), the protected
+  resource metadata named a resource the authorize endpoint then refused
+  with `invalid_target`, and no MCP client could sign in. The metadata,
+  the `WWW-Authenticate` challenges, the audience a token must carry and
+  the URL a DPoP proof must name are now all on the issuer's origin,
+  whatever host the request arrives with.
+- An issuer with a path (`https://example.com/auth`) put the path into
+  the resource it accepted (`https://example.com/auth/mcp` for
+  `/mcp`). The resource is now on the issuer's origin alone.
 - **An `{m, f, a}` secret is called when it is used, not when `Sake`
   starts.** `{Sake, secret_key_base: {MyAppWeb.Endpoint, :config,
   [:secret_key_base]}}`, as the docs show it, sits before the endpoint
@@ -13,6 +28,18 @@
   the first time the secret is needed. A secret that is neither a
   binary of at least 32 bytes nor an `{m, f, a}` is still refused when
   `Sake` starts.
+
+### Added
+
+- `url:` for an external authorization server (`Sake.Auth.External`):
+  the origin clients reach the app's endpoints at, for the resource the
+  metadata names, the default audience and DPoP proofs. Without it, the
+  request's own origin, as before.
+- A warning, once per node, when the protected resource metadata is
+  asked for at another origin than the one it names: a sign that the app
+  is behind a proxy it does not rewrite for.
+- "Behind a proxy" in the security guide: what Sake takes from the
+  request, and `Plug.RewriteOn` for the rest of the app.
 
 ## 0.4.0 (2026-10-17)
 

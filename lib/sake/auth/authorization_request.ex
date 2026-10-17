@@ -263,7 +263,9 @@ defmodule Sake.Auth.AuthorizationRequest do
   def resource(config, nil) do
     case config.resources do
       [pattern] ->
-        if String.contains?(pattern, ":"), do: :error, else: {:ok, config.issuer <> pattern}
+        if String.contains?(pattern, ":"),
+          do: :error,
+          else: {:ok, Resource.issuer_origin(config) <> pattern}
 
       _ ->
         :error
@@ -273,11 +275,12 @@ defmodule Sake.Auth.AuthorizationRequest do
   def resource(config, value) when is_binary(value) do
     uri = URI.parse(value)
     path = String.trim_trailing(uri.path || "", "/")
+    origin = Resource.issuer_origin(config)
 
     cond do
       not same_origin?(uri, URI.parse(config.issuer)) -> :error
-      config.resources == nil -> {:ok, config.issuer <> path}
-      Enum.any?(config.resources, &Resource.path_match?(&1, path)) -> {:ok, config.issuer <> path}
+      config.resources == nil -> {:ok, origin <> path}
+      Enum.any?(config.resources, &Resource.path_match?(&1, path)) -> {:ok, origin <> path}
       true -> :error
     end
   end

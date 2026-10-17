@@ -309,6 +309,11 @@ own. Use it only when every token the authorization server issues is
 meant for this app anyway, as with a provider inside the app that serves
 nothing else, and never for a shared identity provider.
 
+Behind a proxy that sends its upstream's host, give the origin clients
+reach the app at with `url: "https://mcp.example.com"`: the resource the
+metadata names and the default audience are then on it, whatever host
+the request arrives with (see "Behind a proxy" in the security guide).
+
 ## DPoP
 
 A token the authorization server bound to the client's key (`cnf.jkt`
