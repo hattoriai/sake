@@ -3,9 +3,9 @@ defmodule Sake.Auth.Config do
   The authorization configuration given to `{Sake, auth: [...]}`.
 
   `secret` is the Sake secret (`secret_key_base:` of the `Sake` child,
-  else `config :sake, :secret_key_base`), which `Sake` reads once when
-  it starts and puts here: it signs the consent form's request and the
-  DPoP nonces.
+  else `config :sake, :secret_key_base`), which `Sake` puts here when
+  it starts, as given: an `{m, f, a}` is called when the secret is used.
+  It signs the consent form's request and the DPoP nonces.
 
   `device:` turns on the device authorization grant (RFC 8628), for
   clients with no browser: `true`, or `[expires_in: seconds, interval:
@@ -323,6 +323,15 @@ defmodule Sake.Auth.Config do
   @spec request_scopes(t()) :: [{String.t(), String.t()}]
   def request_scopes(config),
     do: Enum.uniq_by(scopes(config) ++ openid_scopes(config), &elem(&1, 0))
+
+  @doc """
+  The Sake secret as a binary: `secret` is kept as `Sake` was given it,
+  and an `{m, f, a}` is called here, when the secret is used, never when
+  `Sake` starts (it may name an endpoint that starts after Sake).
+  """
+  @spec resolve_secret(binary() | {module(), atom(), list()}) :: binary()
+  def resolve_secret(secret) when is_binary(secret), do: secret
+  def resolve_secret({m, f, a}), do: resolve_secret(apply(m, f, a))
 
   def authorize_url(c), do: c.issuer <> c.oauth_path <> "/authorize"
   def token_url(c), do: c.issuer <> c.oauth_path <> "/token"

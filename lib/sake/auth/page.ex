@@ -74,7 +74,8 @@ defmodule Sake.Auth.Page do
   end
 
   @spec secret(Config.t()) :: binary()
-  def secret(%Config{secret: secret}) when is_binary(secret), do: secret
+  def secret(%Config{secret: secret}) when secret != nil,
+    do: Sake.Auth.Config.resolve_secret(secret)
 
   def secret(_config),
     do:

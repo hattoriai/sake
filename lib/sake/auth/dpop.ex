@@ -265,7 +265,9 @@ defmodule Sake.Auth.DPoP do
 
   @doc "The secret of the server's nonces when the configuration requires them, else nil."
   @spec nonce_secret(Sake.Auth.Config.t() | Sake.Auth.External.t()) :: binary() | nil
-  def nonce_secret(%{dpop: %{nonce: true}, secret: secret}), do: secret
+  def nonce_secret(%{dpop: %{nonce: true}, secret: secret}) when secret != nil,
+    do: Sake.Auth.Config.resolve_secret(secret)
+
   def nonce_secret(_config), do: nil
 
   @doc """
