@@ -37,6 +37,12 @@ defmodule Sake.Server do
   (`billing_create_invoice`) and resource URIs take it as the first
   segment after the scheme (`invoice://billing/{id}`, `ui://billing/board`);
   `scope:` (one or many) adds required scopes to every component mounted.
+  `only:` or `except:` (a list of the mounted server's components, each a
+  module, a tool or prompt name, or a resource URI, as that server
+  declares it) mounts some of them:
+
+      mount MyApp.MCP.Billing, prefix: "billing", except: [MyApp.MCP.Billing.Refund]
+
   See `guides/composing.md` for what the mounted server's own middleware,
   instructions, scopes and settings become. A `Sake.Proxy` mounts as any
   server does, with the components of its upstream.
@@ -78,7 +84,8 @@ defmodule Sake.Server do
 
   @doc """
   Mounts another server's tools, resources and prompts in this one.
-  Options: `prefix:` and `scope:` (see the module documentation).
+  Options: `prefix:`, `scope:`, and `only:` or `except:` (see the module
+  documentation).
   """
   defmacro mount(server, opts \\ []),
     do: quote(do: @sake_mounts({unquote(server), unquote(opts)}))
@@ -187,6 +194,7 @@ defmodule Sake.Server do
   defp mounted(mounts, kind) do
     for {server, opts} <- mounts,
         spec <- server.__sake__(kind),
+        Sake.Server.Mount.keep?(spec, opts),
         do: Sake.Server.Mount.wrap(spec, server, opts)
   end
 
