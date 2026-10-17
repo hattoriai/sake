@@ -172,6 +172,81 @@ defmodule Sake.Plug.StreamTest do
            }
   end
 
+  defmodule Scoped do
+    @moduledoc false
+    # Sake.Plug behind a token carrying `scopes`, as an endpoint with
+    # authorization would see it.
+    @behaviour Plug
+    import Plug.Conn
+
+    @impl true
+    def init(scopes),
+      do: {scopes, Sake.Plug.init(server: SakeDev.Server, secret: String.duplicate("s", 64))}
+
+    @impl true
+    def call(conn, {scopes, opts}) do
+      conn
+      |> assign(:sake_token, %{subject_id: "alice", client_id: "test", issuer: nil})
+      |> assign(:sake_scopes, scopes)
+      |> Sake.Plug.call(opts)
+    end
+  end
+
+  # Listens for issue://1 (which needs issues:read), dev://readme (which
+  # takes no subscriptions) and x://y (which names nothing) with a token
+  # carrying `scopes`, announces an update to each and then a tools list
+  # change, and returns the events up to that list change.
+  defp scoped_listen(scopes) do
+    url = HTTP.start({Scoped, scopes})
+
+    body =
+      modern_body("sub-s", "subscriptions/listen", %{
+        "notifications" => %{
+          "toolsListChanged" => true,
+          "resourceSubscriptions" => ["issue://1", "dev://readme", "x://y"]
+        }
+      })
+
+    headers = [
+      {"accept", "application/json, text/event-stream"},
+      {"mcp-protocol-version", "2026-07-28"},
+      {"mcp-method", "subscriptions/listen"}
+    ]
+
+    spawn(fn ->
+      Process.sleep(200)
+      Sake.Server.resource_updated(SakeDev.Server, "issue://1")
+      Sake.Server.resource_updated(SakeDev.Server, "dev://readme")
+      Sake.Server.resource_updated(SakeDev.Server, "x://y")
+      Sake.Server.notify_list_changed(SakeDev.Server, :tools)
+    end)
+
+    assert {:ok, events} =
+             HTTP.sse(url <> "/mcp", body, headers, fn events ->
+               List.last(events)["method"] == "notifications/tools/list_changed"
+             end)
+
+    events
+  end
+
+  test "subscriptions/listen follows a resource the token's scopes allow, and only a subscribable one" do
+    assert [ack, updated, %{"method" => "notifications/tools/list_changed"}] =
+             scoped_listen(["issues:read"])
+
+    assert ack["params"]["notifications"] == %{
+             "toolsListChanged" => true,
+             "resourceSubscriptions" => ["issue://1"]
+           }
+
+    assert updated["method"] == "notifications/resources/updated"
+    assert updated["params"]["uri"] == "issue://1"
+  end
+
+  test "subscriptions/listen does not follow a resource the token's scopes do not allow" do
+    assert [ack, %{"method" => "notifications/tools/list_changed"}] = scoped_listen([])
+    assert ack["params"]["notifications"] == %{"toolsListChanged" => true}
+  end
+
   test "the legacy GET stream carries list changes and subscribed resource updates" do
     url = HTTP.start()
     session = LegacyClient.initialize(ModernClient.opts(), "2025-06-18")

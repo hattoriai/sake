@@ -200,7 +200,8 @@ naming the request. A component they drop is answered as one that does
 not exist ("Unknown tool: export"), so a client cannot call what it
 cannot list, and cannot tell a hidden tool from a missing one. A
 `subscriptions/listen` stream leaves a hidden resource out of the
-`resourceSubscriptions` it honours.
+`resourceSubscriptions` it honours, as it does one the token's scopes do
+not allow and a URI that names no resource.
 
 For this to hold, write `:after_list` plugs as filters: decide each item
 on its own, from the item and the request. A plug may drop and reorder

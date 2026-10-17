@@ -73,6 +73,12 @@ open modern stream, filtered to what it asked for) through the stream
 registry started by `{Sake, ...}` — no extra wiring needed once the
 resource declares `subscribe: true` and a client has subscribed.
 
+Both protocols subscribe on the same terms: the resource declares
+`subscribe: true`, `:after_list` middleware does not hide it, and the
+token carries the resource's `scope:`. A legacy `resources/subscribe`
+that fails them is refused; a modern stream leaves the URI out of the
+`resourceSubscriptions` it acknowledges, and hears nothing about it.
+
 ## Completion
 
 ```elixir

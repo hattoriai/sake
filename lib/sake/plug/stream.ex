@@ -372,8 +372,11 @@ defmodule Sake.Plug.Stream do
     |> put_task_ids(Sake.Server.Tasks.visible(is_map(requested) && requested["taskIds"], ctx))
   end
 
-  # A resource the server's `:after_list` middleware hides cannot be
-  # followed either: its URI is left out of what the stream honours.
+  # A URI is honoured on the terms of a legacy `resources/subscribe`: a
+  # resource that declares `subscribe: true`, that the server's
+  # `:after_list` middleware does not hide, and whose scopes the token
+  # carries. Any other URI, an unknown one too, is left out of what the
+  # stream honours, so the caller cannot tell them apart.
   defp subscribable(%{"resourceSubscriptions" => uris} = honoured, ctx) do
     case Enum.filter(uris, &subscribable?(&1, ctx)) do
       [] -> Map.delete(honoured, "resourceSubscriptions")
@@ -386,11 +389,12 @@ defmodule Sake.Plug.Stream do
   # A proxied resource it honours is followed upstream (see `Sake.Proxy`).
   defp subscribable?(uri, ctx) do
     case is_binary(uri) and Sake.Server.resource(ctx.server, uri, ctx) do
-      {:ok, spec, _params} ->
-        Middleware.listed(:resources, spec, ctx) == :ok and followed(spec, uri)
+      {:ok, %{subscribe: true} = spec, _params} ->
+        Middleware.listed(:resources, spec, ctx) == :ok and Sake.Server.allowed?(spec, ctx) and
+          followed(spec, uri)
 
       _ ->
-        true
+        false
     end
   end
 

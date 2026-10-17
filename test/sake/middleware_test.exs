@@ -598,7 +598,7 @@ defmodule Sake.MiddlewareTest do
       }
 
       assert Sake.Plug.Stream.honoured(params, ctx) == %{
-               "resourceSubscriptions" => ["note://1", "x://y"]
+               "resourceSubscriptions" => ["note://1"]
              }
 
       params = %{"notifications" => %{"resourceSubscriptions" => ["vault://keys"]}}
