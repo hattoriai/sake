@@ -34,7 +34,7 @@ exporter, and the instrumentation for the rest of your stack.
 ```elixir
 def deps do
   [
-    {:sake, "~> 0.3"},
+    {:sake, "~> 0.4"},
     {:opentelemetry_api, "~> 1.5"},
     {:opentelemetry, "~> 1.7"},
     {:opentelemetry_exporter, "~> 1.11"},
