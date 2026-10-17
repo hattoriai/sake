@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **An `{m, f, a}` secret is called when it is used, not when `Sake`
+  starts.** `{Sake, secret_key_base: {MyAppWeb.Endpoint, :config,
+  [:secret_key_base]}}`, as the docs show it, sits before the endpoint
+  in the supervision tree, and the endpoint's `config/1` raises until
+  the endpoint has started: `Sake` failed to start and the host app
+  never booted. `Sake` now keeps the `{m, f, a}` as given and calls it
+  the first time the secret is needed. A secret that is neither a
+  binary of at least 32 bytes nor an `{m, f, a}` is still refused when
+  `Sake` starts.
+
 ## 0.4.0 (2026-10-17)
 
 The auth roadmap (#73). `Sake.Auth` gains the device authorization

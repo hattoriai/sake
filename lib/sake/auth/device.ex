@@ -302,9 +302,13 @@ defmodule Sake.Auth.Device do
   @doc false
   # The user code's digest, as stored.
   @spec user_code_hash(Config.t(), String.t()) :: String.t()
-  def user_code_hash(%Config{secret: secret}, code) when is_binary(secret),
+  def user_code_hash(%Config{secret: secret}, code) when secret != nil,
     do:
       :hmac
-      |> :crypto.mac(:sha256, secret, "sake.device.user_code:" <> code)
+      |> :crypto.mac(
+        :sha256,
+        Sake.Auth.Config.resolve_secret(secret),
+        "sake.device.user_code:" <> code
+      )
       |> Base.encode16(case: :lower)
 end

@@ -56,13 +56,15 @@ defmodule Sake do
   def start_link(opts) do
     Sake.JSON.configure!()
 
+    # Kept as given: an `{m, f, a}` is called when the secret is first
+    # needed, as it may name something that starts after Sake.
     if secret = opts[:secret_key_base],
-      do: :persistent_term.put({Sake, :secret_key_base}, Sake.Secret.resolve(secret))
+      do: :persistent_term.put({Sake, :secret_key_base}, Sake.Secret.validate!(secret))
 
     # Authorization reads the secret from its configurations, never from
-    # the rest of Sake: it is read here once, for them.
+    # the rest of Sake: it is handed to them here, still unresolved.
     secret =
-      if opts[:auth] || opts[:external_auth] not in [nil, []], do: Sake.Secret.configured()
+      if opts[:auth] || opts[:external_auth] not in [nil, []], do: Sake.Secret.unresolved()
 
     auth =
       case opts[:auth] do
