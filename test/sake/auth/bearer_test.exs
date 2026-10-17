@@ -121,22 +121,82 @@ defmodule Sake.Auth.BearerTest do
     assert call(access).status == 401
   end
 
-  test "the canonical resource follows the mounted path" do
+  test "the canonical resource follows the mounted path, on the issuer's origin", %{
+    config: config
+  } do
+    alias Sake.Auth.{External, Resource}
+
     conn =
       conn(:post, "/acme/mcp")
       |> Map.put(:scheme, :https)
       |> Map.put(:host, "App.Example")
       |> Map.put(:port, 443)
 
-    assert Sake.Auth.Resource.canonical(conn, %{}) == "https://app.example/acme/mcp"
-    conn = conn(:post, "/mcp/") |> Map.put(:port, 8443) |> Map.put(:scheme, :https)
-    assert Sake.Auth.Resource.canonical(conn, %{}) == "https://www.example.com:8443/mcp"
+    # Sake's own server: the issuer's origin, whatever the request's host.
+    assert Resource.canonical(conn, config, %{}) == "http://www.example.com/acme/mcp"
 
-    assert Sake.Auth.Resource.canonical(conn, %{resource: fn _ -> "https://fixed.example/mcp" end}) ==
+    # An external one: its `url:`, else the request's own origin.
+    assert Resource.canonical(conn, %External{url: "https://mcp.example"}, %{}) ==
+             "https://mcp.example/acme/mcp"
+
+    assert Resource.canonical(conn, %External{}, %{}) == "https://app.example/acme/mcp"
+    conn = conn(:post, "/mcp/") |> Map.put(:port, 8443) |> Map.put(:scheme, :https)
+    assert Resource.canonical(conn, %External{}, %{}) == "https://www.example.com:8443/mcp"
+
+    assert Resource.canonical(conn, config, %{resource: fn _ -> "https://fixed.example/mcp" end}) ==
              "https://fixed.example/mcp"
 
-    assert Sake.Auth.Resource.metadata_url(conn(:post, "/acme/mcp")) ==
+    assert Resource.url_origin("HTTPS://Issuer.Example:443/realm/") == "https://issuer.example"
+    assert Resource.url_origin("http://localhost:4000") == "http://localhost:4000"
+
+    assert Resource.metadata_url("http://www.example.com/acme/mcp") ==
              "http://www.example.com/.well-known/oauth-protected-resource/acme/mcp"
+  end
+
+  test "a middleware's forbidden halt: scopes to step up to are a challenge; none, none" do
+    for {scopes, challenge} <- [{["admin"], [~s(scope="admin")]}, {[], []}] do
+      conn =
+        conn(:post, "/mcp")
+        |> assign(:sake_auth, true)
+        |> Sake.Plug.outcome_to_response(1, {:forbidden, scopes})
+
+      assert conn.status == 403
+
+      assert Enum.map(get_resp_header(conn, "www-authenticate"), fn header ->
+               header |> String.split(", ") |> Enum.at(1)
+             end) == challenge
+    end
+  end
+
+  test "behind a proxy, a token for the issuer's origin is accepted and challenges name it", %{
+    config: config
+  } do
+    {access, _, _} =
+      issue(config, %{scopes: ["issues:read"], resource: "http://www.example.com/mcp"})
+
+    # The proxy reaches the app at its upstream's address.
+    proxied = [host: "app.internal"]
+
+    conn =
+      ModernClient.post(
+        opts(),
+        "tools/list",
+        %{},
+        [headers: [{"authorization", "Bearer " <> access}]] ++ proxied
+      )
+
+    assert conn.status == 200
+
+    conn = ModernClient.post(opts(), "tools/list", %{}, proxied)
+    assert conn.status == 401
+    assert [_bearer, _dpop] = challenges = get_resp_header(conn, "www-authenticate")
+
+    for challenge <- challenges,
+        do:
+          assert(
+            challenge =~
+              ~s(resource_metadata="http://www.example.com/.well-known/oauth-protected-resource/mcp")
+          )
   end
 
   test "the legacy era is protected too", %{config: config} do

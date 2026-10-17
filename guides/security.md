@@ -31,6 +31,31 @@ authorization codes are only as safe as the transport they travel over.
 `allow_insecure: true` (below) is the explicit, development-only escape
 hatch.
 
+## Behind a proxy
+
+An app behind a proxy (a load balancer, a CDN, Fly.io's or a platform's
+router, a Cloudflare Worker) often receives requests with the proxy's
+upstream host, `app.internal` or `myapp.fly.dev`, and the host the
+client asked for in `X-Forwarded-Host`.
+
+Sake never takes the resource's URL from that: the protected resource
+metadata, the `WWW-Authenticate` challenges, the audience a token must
+carry and the URL a DPoP proof must name are on the issuer's origin for
+`Sake.Auth`, the only origin it serves, and on `url:` for an external
+authorization server (else the request's own origin). An MCP client is
+always sent the resource that the authorization server will accept.
+
+Other URLs your app builds from the request still need the client's
+host and scheme. Rewrite them from the proxy's headers, after a check
+that the request came through the proxy (or with the proxy stripping
+those headers from what clients send):
+
+    plug Plug.RewriteOn, [:x_forwarded_host, :x_forwarded_proto]
+
+When the protected resource metadata is asked for at another origin
+than the one it names, Sake logs a warning, once per node, that points
+here.
+
 ## PKCE
 
 Every authorization code exchange requires a `code_challenge` (S256 only)

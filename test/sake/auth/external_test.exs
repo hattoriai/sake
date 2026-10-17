@@ -783,6 +783,38 @@ defmodule Sake.Auth.ExternalTest do
       assert %{"authorization_servers" => ["http://www.example.com"]} = prm.("/partners")
     end
 
+    test "url: names the origin clients reach, behind a proxy that sends another host" do
+      {key, jwk} = Keys.key(:ec, "k1")
+      start_sake(idp: jwt_config(jwk, url: "https://MCP.example/"))
+
+      # The request's own origin is not the one named: Sake warns, once.
+      ExUnit.CaptureLog.capture_log(fn ->
+        conn =
+          conn(:get, "/.well-known/oauth-protected-resource/mcp")
+          |> Map.put(:host, "app.internal")
+          |> Sake.Auth.WellKnown.call([])
+
+        assert JSON.decode!(conn.resp_body)["resource"] == "https://mcp.example/mcp"
+      end)
+
+      proxied = fn token ->
+        ModernClient.post(ModernClient.opts(auth: :idp), "tools/list", %{},
+          headers: [{"authorization", "Bearer " <> token}],
+          host: "app.internal"
+        )
+      end
+
+      assert proxied.(jwt(key, %{"aud" => "https://mcp.example/mcp"})).status == 200
+      assert proxied.(jwt(key, %{"aud" => "http://app.internal/mcp"})).status == 401
+
+      for {url, message} <- [
+            {"https://mcp.example/mcp", ~r/url: is an origin/},
+            {"http://mcp.example", ~r/url: must be an https URL/}
+          ] do
+        assert_raise ArgumentError, message, fn -> External.new(:x, jwt_config(jwk, url: url)) end
+      end
+    end
+
     test "external servers only: Sake.Auth is not needed, and has no metadata" do
       {key, jwk} = Keys.key(:ec, "k1")
       start_sake(idp: jwt_config(jwk, extensions: [:client_credentials, :enterprise]))

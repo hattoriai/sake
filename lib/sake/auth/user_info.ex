@@ -32,7 +32,7 @@ defmodule Sake.Auth.UserInfo do
       authorization: get_req_header(conn, "authorization"),
       dpop: get_req_header(conn, "dpop"),
       method: conn.method,
-      url: Resource.url(conn)
+      url: Resource.url(conn, config)
     }
 
     case Claims.userinfo(config, request) do

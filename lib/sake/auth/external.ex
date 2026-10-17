@@ -73,6 +73,12 @@ defmodule Sake.Auth.External do
       endpoint's MCP capabilities (`:client_credentials`,
       `:enterprise`), when this server offers their grants. Default
       none.
+    * `:url` — the origin MCP clients reach this app's endpoints at
+      (`"https://mcp.example.com"`), for the resource URL the protected
+      resource metadata names, the default audience and DPoP proofs.
+      Without it, the origin the request arrived with: give it when a
+      proxy in front of the app sends another host (see "Behind a proxy"
+      in the security guide).
     * `:resource_name` — the protected resource metadata's
       `resource_name`.
     * `:allow_insecure` — allow `http` URLs (issuer, keys, introspection
@@ -132,6 +138,7 @@ defmodule Sake.Auth.External do
     :principal,
     :resources,
     :resource_name,
+    :url,
     audiences: nil,
     typ: "at+jwt",
     servers: [],
@@ -197,12 +204,25 @@ defmodule Sake.Auth.External do
     %{
       config
       | verify: verify(config, config.verify, label),
+        url: origin_option(config, config.url, label),
         audiences: audiences(config.audiences, label),
         typ: typ(config.typ, label),
         principal: principal_option(config.principal, label),
         dpop: Config.dpop_option(config.dpop, config.secret),
         extensions: extensions(config.extensions, label)
     }
+  end
+
+  defp origin_option(_config, nil, _label), do: nil
+
+  defp origin_option(config, url, label) do
+    url!(config, url, "#{label} url:")
+    uri = URI.parse(url)
+
+    unless uri.path in [nil, "", "/"] and uri.query == nil and uri.fragment == nil,
+      do: raise(ArgumentError, "#{label} url: is an origin, with no path, got #{inspect(url)}")
+
+    Resource.url_origin(url)
   end
 
   defp verify(config, :jwt, label) do

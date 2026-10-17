@@ -135,16 +135,16 @@ defmodule Sake.Auth do
   @spec authenticate(Plug.Conn.t(), map()) ::
           {:ok, Plug.Conn.t()} | {:error, Sake.Auth.Challenge.t()}
   def authenticate(conn, plug_opts) do
-    config = if plug_opts.auth == true, do: config(), else: External.fetch!(plug_opts.auth)
+    config = endpoint_config(plug_opts.auth)
 
     request = %{
       authorization: Plug.Conn.get_req_header(conn, "authorization"),
       dpop: Plug.Conn.get_req_header(conn, "dpop"),
       method: conn.method,
-      url: Resource.url(conn)
+      url: Resource.url(conn, config)
     }
 
-    case Bearer.check(config, request, Resource.canonical(conn, plug_opts), conn) do
+    case Bearer.check(config, request, Resource.canonical(conn, config, plug_opts), conn) do
       {:ok, accepted} ->
         {:ok,
          conn
@@ -159,6 +159,10 @@ defmodule Sake.Auth do
     end
   end
 
+  # The authorization server an endpoint's `auth:` names.
+  defp endpoint_config(true), do: config()
+  defp endpoint_config(name), do: External.fetch!(name)
+
   defp put_nonce(conn, nil), do: conn
   defp put_nonce(conn, nonce), do: Plug.Conn.put_resp_header(conn, "dpop-nonce", nonce)
 
@@ -167,7 +171,12 @@ defmodule Sake.Auth do
   # (`Sake.Plug` calls it).
   @spec insufficient_scope(Plug.Conn.t(), [String.t()]) :: Sake.Auth.Challenge.t()
   def insufficient_scope(conn, scopes),
-    do: Bearer.insufficient_scope(Resource.url(conn), scopes, conn.assigns[:sake_dpop] == true)
+    do:
+      Bearer.insufficient_scope(
+        Resource.url(conn, endpoint_config(conn.assigns.sake_auth)),
+        scopes,
+        conn.assigns[:sake_dpop] == true
+      )
 
   @doc false
   # The 401 challenge (RFC 9470) for a component that asks how the
@@ -184,7 +193,7 @@ defmodule Sake.Auth do
   def insufficient_user_authentication(conn, requirement, reason, scopes),
     do:
       Bearer.insufficient_user_authentication(
-        Resource.url(conn),
+        Resource.url(conn, endpoint_config(conn.assigns.sake_auth)),
         requirement,
         reason,
         scopes,

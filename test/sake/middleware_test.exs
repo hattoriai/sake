@@ -488,7 +488,7 @@ defmodule Sake.MiddlewareTest do
     defp modern_opts(scope, extra \\ []),
       do: ModernClient.opts([server: Server, scope: fn _ -> scope end] ++ extra)
 
-    test "a forbidden halt is a 403; with scopes to name, a challenge on an endpoint with auth" do
+    test "a forbidden halt is a 403, with no challenge on an endpoint without auth" do
       conn =
         ModernClient.post(modern_opts(scope(halt: {:before_call, :forbidden})), "tools/call", %{
           "name" => "whoami",
@@ -501,20 +501,7 @@ defmodule Sake.MiddlewareTest do
       assert %{"error" => %{"code" => -32_600, "message" => "Forbidden"}} =
                ModernClient.json(conn)
 
-      # On an endpoint with authorization, scopes to step up to are a
-      # challenge; none to name, none.
-      for {scopes, challenge} <- [{["admin"], [~s(scope="admin")]}, {[], []}] do
-        conn =
-          Plug.Test.conn(:post, "/mcp")
-          |> Plug.Conn.assign(:sake_auth, true)
-          |> Sake.Plug.outcome_to_response(1, {:forbidden, scopes})
-
-        assert conn.status == 403
-
-        assert Enum.map(Plug.Conn.get_resp_header(conn, "www-authenticate"), fn header ->
-                 header |> String.split(", ") |> Enum.at(1)
-               end) == challenge
-      end
+      # On an endpoint with authorization, a challenge: in the bearer tests.
 
       conn =
         ModernClient.post(

@@ -40,6 +40,9 @@ defmodule SakeTest.ModernClient do
       |> put_req_header("content-type", "application/json")
       |> put_req_header("accept", "application/json, text/event-stream")
       |> put_req_header("mcp-protocol-version", version)
+      # The host the request arrives with, as behind a proxy that sends
+      # its upstream's.
+      |> Map.update!(:host, &Keyword.get(opts, :host, &1))
 
     conn = if Keyword.get(opts, :mirror, true), do: mirror(conn, method, params, opts), else: conn
 

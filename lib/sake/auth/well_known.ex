@@ -14,6 +14,7 @@ defmodule Sake.Auth.WellKnown do
   """
   @behaviour Plug
   import Plug.Conn
+  require Logger
 
   alias Sake.Auth.{External, Metadata, Resource}
 
@@ -57,8 +58,32 @@ defmodule Sake.Auth.WellKnown do
     suffix = if rest == [], do: "", else: "/" <> Enum.join(rest, "/")
 
     case External.for_path(suffix) || Sake.Auth.configured() do
-      nil -> send_resp(conn, 404, "")
-      config -> json(conn, Metadata.protected_resource(config, Resource.origin(conn) <> suffix))
+      nil ->
+        send_resp(conn, 404, "")
+
+      config ->
+        origin = Resource.origin(conn, config)
+        warn_origin(conn, origin)
+        json(conn, Metadata.protected_resource(config, origin <> suffix))
+    end
+  end
+
+  # A request that arrives with another origin than the one the metadata
+  # names has come through a proxy the app does not rewrite for
+  # (`Plug.RewriteOn`). Sake names the right one either way, but other
+  # URLs the app builds from the request will not be, so it says so,
+  # once per node.
+  defp warn_origin(conn, origin) do
+    request_origin = Resource.origin(conn)
+
+    if request_origin != origin and not :persistent_term.get({__MODULE__, :warned}, false) do
+      :persistent_term.put({__MODULE__, :warned}, true)
+
+      Logger.warning(
+        "Sake names #{origin} as the resource's origin, but the request arrived at " <>
+          "#{request_origin}. Behind a proxy, rewrite the host and scheme from its headers " <>
+          "(Plug.RewriteOn); see \"Behind a proxy\" in the security guide."
+      )
     end
   end
 
