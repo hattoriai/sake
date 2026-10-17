@@ -85,8 +85,11 @@ defmodule Sake.Auth.External do
   `scopes` from `scope` (or `scp`, a string or a list), `client_id` from
   `client_id` (or `azp`), `subject_id` from `sub`, `jkt` from `cnf.jkt`,
   `expires_at` from `exp`, and `issuer` and `claims` besides. A token
-  without `sub`, or whose `sub` is its client (RFC 9068 §2.2, the client
-  credentials grant), is a machine client's: `subject_id` is `nil`.
+  whose `cnf` binds it any other way than `jkt` (a client certificate,
+  `x5t#S256`, RFC 8705) is refused, since Sake cannot check that
+  binding. A token without `sub`, or whose `sub` is its client (RFC 9068
+  §2.2, the client credentials grant), is a machine client's:
+  `subject_id` is `nil`.
   Scope checks, step-up challenges, middleware, and task ownership work
   as for Sake's own tokens; tasks and request states are bound to the
   issuer as well as the subject, so the same `sub` from another issuer
@@ -95,7 +98,8 @@ defmodule Sake.Auth.External do
   Each refusal is the telemetry event `[:sake, :auth, :external,
   :refused]`, with the configuration's `name`, its `issuer` and the
   `reason` (`:invalid_audience`, `:expired`, `:bad_signature`,
-  `:inactive`, ...), for finding out why a token is not accepted.
+  `:inactive`, `:unsupported_confirmation`, ...), for finding out why a
+  token is not accepted.
   """
 
   alias Sake.Auth.{Config, JWKS, JWT, Resource, TokenRecord}
@@ -369,7 +373,7 @@ defmodule Sake.Auth.External do
     |> Map.update(
       "cnf",
       nil,
-      &if(is_map(&1), do: Map.new(&1, fn {k, v} -> {to_string(k), v} end))
+      &if(is_map(&1), do: Map.new(&1, fn {k, v} -> {to_string(k), v} end), else: &1)
     )
     |> Map.update("exp", nil, fn
       %DateTime{} = at -> DateTime.to_unix(at)
@@ -381,7 +385,9 @@ defmodule Sake.Auth.External do
   # The checks every way of verifying shares: the issuer when the claims
   # name one, and the audience, which a token must have unless the host
   # said `audiences: :any`. A token for another resource of the same
-  # authorization server is someone else's to accept.
+  # authorization server is someone else's to accept. A token bound to
+  # something Sake cannot check (a client certificate, `cnf.x5t#S256`) is
+  # refused: taken as a bearer token, its binding would protect nothing.
   defp record(config, claims, resource) do
     cond do
       Map.has_key?(claims, "iss") and claims["iss"] != config.issuer ->
@@ -389,6 +395,9 @@ defmodule Sake.Auth.External do
 
       not audience?(config.audiences, claims["aud"], resource) ->
         {:error, :invalid_audience}
+
+      not confirmation?(claims) ->
+        {:error, :unsupported_confirmation}
 
       true ->
         {:ok, to_record(config, claims, resource)}
@@ -400,6 +409,13 @@ defmodule Sake.Auth.External do
 
   defp audience?(accepted, aud, _resource),
     do: aud |> List.wrap() |> Enum.any?(&(is_binary(&1) and &1 in accepted))
+
+  # The only confirmation Sake verifies is DPoP's `jkt` (RFC 9449 §6).
+  defp confirmation?(%{"cnf" => cnf}) when is_map(cnf),
+    do: Enum.all?(cnf, fn {key, value} -> key == "jkt" and is_binary(value) end)
+
+  defp confirmation?(%{"cnf" => cnf}), do: cnf == nil
+  defp confirmation?(_claims), do: true
 
   defp to_record(config, claims, resource) do
     client_id = string(claims["client_id"]) || string(claims["azp"])

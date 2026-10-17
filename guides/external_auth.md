@@ -242,6 +242,14 @@ Whichever way it was verified, a token becomes the
 token without `sub`, or whose `sub` is its own client (RFC 9068 §2.2, the
 client credentials grant), is a machine client's: `subject_id` is `nil`.
 
+A token can be bound to its client only in a way Sake checks: DPoP's
+`cnf.jkt` (below). A token whose `cnf` names any other binding, such as
+a client certificate (`cnf.x5t#S256`, RFC 8705), is refused like any
+invalid token (a 401), whether it comes as a bearer token or with a DPoP
+proof: taken without the check, the binding would protect nothing. If
+your authorization server binds tokens to certificates, have it issue
+unbound or DPoP-bound tokens for this resource.
+
 `ctx.scope`, the principal your tools see, is what `principal:` returns
 for the claims (`{:ok, principal}`, or `:error` to refuse the token), the
 callback's own principal, or by default the claims map itself:
@@ -335,5 +343,5 @@ Every refusal is the telemetry event `[:sake, :auth, :external,
 :refused]`, with the configuration's `name`, its `issuer` and the
 `reason`: `:invalid_audience`, `:invalid_issuer`, `:expired`,
 `:not_yet_valid`, `:bad_signature`, `:no_key`, `:unsupported_alg`,
-`:invalid_typ`, `:inactive`, `:unreachable`, `:no_principal`, and the
-like. The client only sees the 401.
+`:invalid_typ`, `:inactive`, `:unreachable`, `:no_principal`,
+`:unsupported_confirmation`, and the like. The client only sees the 401.
