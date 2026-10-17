@@ -90,12 +90,12 @@ session and needs neither.
   `Last-Event-ID` and a server-issued `retry` interval (removed from the
   2026-07-28 revision). Neither `Sake.Plug` nor `Sake.Client` implements
   this; a dropped stream is simply gone.
-- **The client's standalone GET stream** — on a legacy session,
-  `Sake.Client` does not open the `GET` stream a server may use for
-  notifications and for requests unrelated to any call. A server request
-  sent inside a call's own response stream (how a Sake server elicits) is
-  answered; one sent only on the standalone stream never reaches the
-  client.
+- **Server requests on the client's standalone GET stream** — on a
+  legacy session, `Sake.Client` opens the `GET` stream only in
+  `Sake.Client.listen/3`, and reads notifications from it, not requests.
+  A server request sent inside a call's own response stream (how a Sake
+  server elicits) is answered; one sent only on the standalone stream,
+  unrelated to any call, never gets an answer.
 - **The 2025-11-25 experimental tasks** — that revision's in-core task
   primitive (`tasks/result`, `tasks/list`, the `task` request parameter,
   `execution.taskSupport` on tools). Sake implements tasks as the
@@ -133,7 +133,8 @@ in `conformance/package.json`, 0.2.0-alpha.12) runs in CI through
 server:
 
 - **Server scenarios**, for each of 2025-06-18, 2025-11-25 and 2026-07-28,
-  against `/open/mcp` (`SakeDev.ConformanceServer`, unauthenticated). The
+  against `/open/mcp` (the conformance server in
+  `dev/lib/sake_dev/conformance_server.ex`, unauthenticated). The
   suite speaks each revision's own wire: an `initialize` handshake and a
   session for the legacy two, stateless requests with per-request `_meta`
   for 2026-07-28 (`server-stateless`, `caching`, the header validation
@@ -163,8 +164,8 @@ Currently:
 - **`sse-retry`** (client) — no resumability (above).
 - **`elicitation-sep1034-client-defaults`** (client) — the fixture server
   sends its elicitation request outside the tool call's response stream,
-  so it can only arrive on the standalone GET stream, which the client
-  does not open (above).
+  so it can only arrive on the standalone GET stream, where the client
+  answers no requests (above).
 
 Every `auth/*` client scenario of the core suite passes:
 `conformance/client.exs` connects with `auth:`, with

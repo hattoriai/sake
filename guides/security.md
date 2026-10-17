@@ -218,7 +218,7 @@ compromised DNS resolver that returns a public address to the check and a
 private one to the actual connect (a classic TOCTOU/DNS-rebinding gap)
 can still redirect the fetch. Mitigating this fully needs connecting to
 the checked address directly rather than resolving the hostname a second
-time — not implemented in 0.1. This is a real but narrow risk: it needs
+time — not implemented yet. This is a real but narrow risk: it needs
 control over DNS resolution for the specific client-supplied host, not
 just the ability to register a client.
 
@@ -226,9 +226,12 @@ just the ability to register a client.
 
 The opaque `requestState` a multi-round-trip tool call carries between an
 input-required response and its retry (the `requestState` field) is a
-signed token binding the principal, the method, the component name, and a
-digest of the original arguments — a retry cannot be replayed against a
-different principal, a different tool, or with different arguments than
+signed token binding its owner as a task is bound (the principal — the
+token's subject or machine client, else a SHA-256 digest of the host's
+scope — and the server, OAuth client and resource the request came
+through), the method, the component name, and a digest of the original
+arguments — a retry cannot be replayed against a different principal,
+client or resource, a different tool, or with different arguments than
 the ones that triggered the original elicitation, and expires after ten
 minutes. `inputResponses` sent without a `requestState` are ignored, even
 if they would otherwise look like a plausible answer: the handler starts

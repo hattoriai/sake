@@ -40,6 +40,17 @@ options, the era probe over stdio, and how `close/1` stops the server.
 {:ok, session} = Sake.Client.connect({:stdio, "my-mcp-server", ["--verbose"]}, env: %{"TOKEN" => token})
 ```
 
+`max_response_size:` (bytes, 16 MiB by default) bounds what the client
+holds of one response: a JSON body or a Server-Sent Event still arriving
+over HTTP, which end the request with `{:error, :response_too_large}`,
+and a line over stdio, which is dropped with a warning. Raise it for a
+server whose results are larger.
+
+The client encodes its requests with `config :sake, :json_library`
+(`JSON` by default; see `guides/tools.md`), so arguments holding structs
+that derive only `Jason.Encoder` need `config :sake, :json_library,
+Jason`.
+
 `call_tool/3` returns a `Sake.Client.ToolResult`: `content` (a list of
 `Sake.Content.t()`), `structured` (the tool's `structuredContent`, if any),
 `is_error` (the tool itself failed — still a successful RPC), `text` (every

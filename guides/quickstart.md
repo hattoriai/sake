@@ -5,7 +5,7 @@
 ```elixir
 def deps do
   [
-    {:sake, "~> 0.1"},
+    {:sake, "~> 0.2"},
     {:bandit, "~> 1.5"}
   ]
 end
@@ -16,7 +16,7 @@ end
 ## Start Sake
 
 Add `Sake` to your supervision tree. Without `auth:`, only the stream
-registry runs — good enough for a first server:
+registry and tasks run — good enough for a first server:
 
 ```elixir
 children = [
@@ -27,7 +27,8 @@ children = [
 
 `secret_key_base:` can be a binary of at least 32 bytes, or `{m, f, a}`
 to read it lazily (from `MyAppWeb.Endpoint.config/1`, for instance). It
-signs legacy session IDs and elicitation round-trips.
+signs legacy session IDs and the state of multi round-trip requests
+(elicitation, sampling, roots).
 
 ## Write a server and a tool
 

@@ -1,7 +1,7 @@
 defmodule Sake.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/hattoriai/sake"
 
   def project do
@@ -65,7 +65,7 @@ defmodule Sake.MixProject do
   end
 
   defp description do
-    "MCP for Elixir and Phoenix: a server for both protocol eras, an OAuth 2.1 authorization server on your own login, and a client."
+    "MCP for Elixir and Phoenix: a server for both protocol eras and stdio, with tasks, MCP Apps, middleware and proxying; an OAuth 2.1 authorization server on your own login, or your own; and a client that authorizes itself."
   end
 
   defp package do
@@ -74,7 +74,7 @@ defmodule Sake.MixProject do
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
       files:
-        ~w(lib priv/templates mix.exs .formatter.exs guides README.md CHANGELOG.md LICENSE NOTICE)
+        ~w(lib priv/templates mix.exs .formatter.exs guides README.md CHANGELOG.md SECURITY.md LICENSE NOTICE)
     ]
   end
 
@@ -85,6 +85,7 @@ defmodule Sake.MixProject do
       source_url: @source_url,
       # The banner of the README, at the same relative path in the docs.
       assets: %{"media" => "media"},
+      logo: "media/logo.svg",
       extras: [
         "README.md",
         "guides/quickstart.md",
@@ -104,7 +105,8 @@ defmodule Sake.MixProject do
         "guides/protocol_versions.md",
         "guides/security.md",
         "guides/clustering.md",
-        "CHANGELOG.md"
+        "CHANGELOG.md",
+        "SECURITY.md"
       ],
       groups_for_extras: [
         Guides:
@@ -113,12 +115,16 @@ defmodule Sake.MixProject do
       ],
       groups_for_modules: [
         Server: [
+          Sake,
           Sake.Server,
           Sake.Proxy,
           Sake.Tool,
+          Sake.Tool.Spec,
           Sake.Resource,
+          Sake.Resource.Spec,
           Sake.UI,
           Sake.Prompt,
+          Sake.Prompt.Spec,
           Sake.Context,
           Sake.Middleware,
           Sake.Content,
@@ -147,6 +153,7 @@ defmodule Sake.MixProject do
           Sake.Auth.Config,
           Sake.Auth.Subject,
           Sake.Auth.Consent,
+          Sake.Auth.Consent.Default,
           Sake.Auth.Clients,
           Sake.Auth.Client,
           Sake.Auth.TrustedIssuer,
@@ -177,7 +184,7 @@ defmodule Sake.MixProject do
           Sake.Client.Auth.Store
         ],
         Testing: [Sake.Test, Sake.Test.Client],
-        Protocol: [Sake.Protocol, Sake.JSONRPC, Sake.Schema]
+        Protocol: [Sake.Protocol, Sake.JSONRPC, Sake.Schema, Sake.Server.Session]
       ]
     ]
   end

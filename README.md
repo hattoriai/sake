@@ -12,7 +12,7 @@ other MCP servers.
 
 ```elixir
 def deps do
-  [{:sake, "~> 0.1"}, {:bandit, "~> 1.5"}]
+  [{:sake, "~> 0.2"}, {:bandit, "~> 1.5"}]
 end
 ```
 
@@ -57,6 +57,11 @@ claude mcp add --transport stdio my-app -- mix sake.stdio MyApp.MCP
 See `guides/quickstart.md` for turning on authorization in five steps, or
 `mix dev` in this repository for a complete, running example.
 
+Sake needs Elixir 1.18 or later (for the built-in `JSON` module) on
+OTP 27 or later; CI runs Elixir 1.18 (OTP 27), 1.19 (OTP 28) and 1.20
+(OTP 29). Phoenix, Ecto, Phoenix.PubSub, `jose`, `phoenix_html` and
+`opentelemetry_api` are optional: add the ones whose features you use.
+
 ## Features by era
 
 | | 2026-07-28 (modern) | 2025-11-25 / 2025-06-18 | 2025-03-26 |
@@ -72,14 +77,16 @@ See `guides/quickstart.md` for turning on authorization in five steps, or
 | Stdio transport | yes | yes | yes |
 | `Sake.Client` (HTTP, stdio) | yes | yes | connects, no batching |
 | `Sake.Client` authorization | yes | yes | yes (no resource metadata: the server's own) |
-| Client credentials, enterprise-managed authorization (`Sake.Auth`, `Sake.Client`) | yes | yes | yes |
-| DPoP, tokens bound to the client's key (`Sake.Auth`, `Sake.Client`) | yes | yes | yes |
+| Client credentials, enterprise-managed authorization from an OpenID Connect or SAML sign-on (`Sake.Auth`, `Sake.Client`) | yes | yes | yes |
+| DPoP, tokens bound to the client's key, offered or required (`Sake.Auth`, `Sake.Auth.External`, `Sake.Client`) | yes | yes | yes |
 | Your own authorization server (`Sake.Auth.External`: JWT, introspection or a callback) | yes | yes | yes |
 | OpenTelemetry tracing, client to server to tool (trace context in `_meta`) | yes | yes | yes |
 | `Sake.Test`, an in-memory client for a server's tests | yes | yes | yes |
 | Middleware around calls (`Sake.Middleware`: audit, rate limits, plans, rewriting, redaction) | yes | yes | yes |
 | Composing servers (`mount`, with prefixes) | yes | yes | yes |
 | Proxying another server (`Sake.Proxy`, HTTP or stdio upstream of either era) | yes | yes | yes |
+| Several nodes (shared Ecto stores, `pubsub:` for streams, a warning for node-local state) | yes | yes (with `pubsub:` or session affinity) | yes (with `pubsub:` or session affinity) |
+| Your JSON library for your data (`JSON` or `Jason`) | yes | yes | yes |
 
 ## The authorization flow, briefly
 
@@ -134,10 +141,26 @@ work without it.
 - [Testing](guides/testing.md)
 - [Protocol versions](guides/protocol_versions.md)
 - [Security](guides/security.md)
+- [Running on several nodes](guides/clustering.md)
+
+## Conformance
+
+The official MCP conformance suite (`@modelcontextprotocol/conformance`
+0.2.0-alpha.12) runs in CI: the server and client scenarios of
+2025-06-18, 2025-11-25 and 2026-07-28, the authorization-server
+scenarios, and the extension scenarios (tasks, skills, and the client
+auth extensions, DPoP included). Every extension scenario passes. Four
+core scenarios are expected to fail, each for a documented reason (see
+`guides/protocol_versions.md`): on the server, `server-sse-polling` (no
+SSE resumability) and `input-required-result-ignore-extra-params`
+(answers sent without the signed request state are asked for again); on
+the client, `sse-retry` (no SSE resumability) and
+`elicitation-sep1034-client-defaults` (the client answers no server
+request sent on the standalone GET stream).
 
 ## Status
 
-0.1: the server (both eras, one endpoint, and stdio; with elicitation,
+0.2: the server (both eras, one endpoint, and stdio; with elicitation,
 sampling, roots, the tasks extension and MCP Apps), the authorization server
 (bearer and DPoP-bound tokens, CIMD, dynamic registration, consent, token
 rotation, machine clients, trusted identity providers and workloads), or
@@ -155,6 +178,11 @@ another under a prefix; and proxying, another MCP server's tools,
 resources and prompts behind your own login, per-user credentials and
 middleware, with input requests, tasks and notifications forwarded
 across eras. Next: the device authorization grant.
+
+## Security
+
+Report a vulnerability privately, as `SECURITY.md` says; please do not
+open a public issue for one.
 
 ## License
 
