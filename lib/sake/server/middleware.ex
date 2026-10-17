@@ -171,9 +171,30 @@ defmodule Sake.Server.Middleware do
   @spec refusal(term(), map(), Context.t()) ::
           {:ok, map()}
           | {:forbidden, [String.t()]}
+          | {:insufficient_user_authentication, map()}
           | {:error, integer(), String.t()}
           | {:error, integer(), String.t(), map()}
   def refusal(:not_found, params, ctx), do: not_found(ctx.method, params, ctx)
+
+  def refusal(
+        {:insufficient_user_authentication, %{acr_values: acr_values, max_age: max_age} = r},
+        params,
+        ctx
+      ) do
+    if is_list(acr_values) and Enum.all?(acr_values, &is_binary/1) and
+         (max_age == nil or (is_integer(max_age) and max_age >= 0)) do
+      {:insufficient_user_authentication,
+       %{
+         acr_values: acr_values,
+         max_age: max_age,
+         reason: reason(Map.get(r, :reason), acr_values),
+         scopes: []
+       }}
+    else
+      refusal({:refused, r}, params, ctx)
+    end
+  end
+
   def refusal(:forbidden, _params, _ctx), do: {:forbidden, []}
 
   def refusal({:forbidden, scopes} = reason, params, ctx) when is_list(scopes) do
@@ -197,6 +218,12 @@ defmodule Sake.Server.Middleware do
 
   def refusal(_reason, _params, _ctx),
     do: {:error, JSONRPC.code(:invalid_request), "Request refused"}
+
+  # The part of the requirement not met, which the challenge's
+  # `error_description` names.
+  defp reason(reason, _acr_values) when reason in [:acr, :max_age], do: reason
+  defp reason(_reason, []), do: :max_age
+  defp reason(_reason, _acr_values), do: :acr
 
   @doc "Whether a halt is a plug's failure rather than its decision."
   @spec failed?(term()) :: boolean()

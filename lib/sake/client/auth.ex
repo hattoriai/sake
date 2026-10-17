@@ -17,7 +17,12 @@ defmodule Sake.Client.Auth do
   expired one is refreshed, a 401 tries the refresh token before the whole
   flow, and a 403 `insufficient_scope` asks again for the union of the
   scopes requested so far and the challenged ones (step-up), at most
-  twice for one request.
+  twice for one request. A 401 `insufficient_user_authentication` (RFC
+  9470: the person must sign in more strongly, or more recently) runs
+  the person's grant again, the code flow or the device flow, with the
+  challenge's `acr_values` and `max_age`, once for one request; a
+  machine grant cannot, and ends with `{:error, {:auth,
+  {:insufficient_user_authentication, challenge}}}`.
 
   Options:
 
@@ -201,6 +206,9 @@ defmodule Sake.Client.Auth do
   #     the flow; `:exhausted` with `:static`.
   #   * `insufficient_scope/2` — on a 403 challenge: the flow again for
   #     more scopes (step-up); `:exhausted` when it would not help.
+  #   * `insufficient_user_authentication/2` — on a 401 RFC 9470
+  #     challenge: the person's grant again, with its `acr_values` and
+  #     `max_age`; `:exhausted` with `:static`.
   #
   # The challenges are `Sake.Auth.Challenge`s, parsed by the transport.
 
@@ -560,6 +568,38 @@ defmodule Sake.Client.Auth do
     end
   end
 
+  @doc false
+  # On a 401 `insufficient_user_authentication` (RFC 9470): the person's
+  # grant again, the code flow or the device flow, with the challenge's
+  # `acr_values` and `max_age` and the scopes asked for so far (and any
+  # the challenge names), so that they sign in as the server asks. A
+  # machine grant has no person to sign in again: the refusal is the
+  # caller's. `Sake.Client` runs it once per request.
+  @spec insufficient_user_authentication(t(), Challenge.t()) ::
+          {:ok, t()} | {:error, term(), t()} | :exhausted
+  def insufficient_user_authentication(%__MODULE__{static: true}, _challenge), do: :exhausted
+
+  def insufficient_user_authentication(%__MODULE__{grant: grant} = auth, challenge)
+      when grant not in [:authorization_code, :device],
+      do: {:error, {:insufficient_user_authentication, challenge}, auth}
+
+  def insufficient_user_authentication(auth, %Challenge{} = challenge) do
+    case discover(auth, challenge) do
+      {:ok, server} ->
+        previous =
+          if auth.token && auth.token["resource"] == server.resource,
+            do: requested(auth.token),
+            else: []
+
+        scopes = union(previous, challenge.scope, server.metadata)
+        step_up = %{acr_values: challenge.acr_values, max_age: challenge.max_age}
+        authorize(auth, server, scopes, step_up)
+
+      {:error, reason} ->
+        {:error, reason, auth}
+    end
+  end
+
   defp discover(auth, challenge) do
     Discovery.discover(
       auth.url,
@@ -616,26 +656,33 @@ defmodule Sake.Client.Auth do
 
   # A resource that takes DPoP-bound tokens only refuses every token a
   # client without DPoP could get: the flow stops before anyone is asked.
-  defp authorize(auth, %{dpop_required: true}, _scopes)
+  #
+  # `step_up` is how the person must sign in (RFC 9470), for the
+  # person's grants: nil, or the `acr_values` and `max_age` of an
+  # `insufficient_user_authentication` challenge.
+  defp authorize(auth, server, scopes, step_up \\ nil)
+
+  defp authorize(auth, %{dpop_required: true}, _scopes, _step_up)
        when auth.dpop == false,
        do: {:error, {:dpop_required, :dpop_off}, auth}
 
-  defp authorize(auth, %{dpop_required: true} = server, scopes) do
+  defp authorize(auth, %{dpop_required: true} = server, scopes, step_up) do
     if DPoP.available?(),
-      do: authorize_granted(auth, server, scopes),
+      do: authorize_granted(auth, server, scopes, step_up),
       else: {:error, {:dpop_required, :no_jose}, auth}
   end
 
-  defp authorize(auth, server, scopes), do: authorize_granted(auth, server, scopes)
+  defp authorize(auth, server, scopes, step_up),
+    do: authorize_granted(auth, server, scopes, step_up)
 
-  defp authorize_granted(%__MODULE__{grant: :authorization_code} = auth, server, scopes),
-    do: authorize_code(auth, server, scopes)
+  defp authorize_granted(%__MODULE__{grant: :authorization_code} = auth, server, scopes, step_up),
+    do: authorize_code(auth, server, scopes, step_up)
 
-  defp authorize_granted(%__MODULE__{grant: :device} = auth, server, scopes),
-    do: authorize_device(auth, server, scopes)
+  defp authorize_granted(%__MODULE__{grant: :device} = auth, server, scopes, step_up),
+    do: authorize_device(auth, server, scopes, step_up)
 
   # `offline_access` asks for a refresh token, which no machine grant gets.
-  defp authorize_granted(auth, server, scopes) do
+  defp authorize_granted(auth, server, scopes, _step_up) do
     scopes = scopes -- ["offline_access"]
 
     case machine_client(auth, server) do
@@ -647,12 +694,12 @@ defmodule Sake.Client.Auth do
     end
   end
 
-  defp authorize_code(auth, server, scopes) do
+  defp authorize_code(auth, server, scopes, step_up) do
     case Registration.client(auth, server) do
       {:ok, registration, auth} ->
         pem = new_key(auth, server)
 
-        with {:ok, url, request} <- start_code(auth, server, registration, scopes, pem),
+        with {:ok, url, request} <- start_code(auth, server, registration, scopes, pem, step_up),
              {:ok, params} <- interact(auth.authorize, url),
              {:ok, code} <- Grant.callback(params, request),
              {:ok, body} <-
@@ -677,13 +724,13 @@ defmodule Sake.Client.Auth do
   # RFC 9126: the request is pushed to the server, with a DPoP proof
   # when the client uses DPoP (which binds the code to its key), and the
   # browser carries only its request_uri.
-  defp start_code(auth, server, registration, scopes, pem) do
+  defp start_code(auth, server, registration, scopes, pem, step_up) do
     if push?(auth, server.metadata) do
       endpoint = server.metadata["pushed_authorization_request_endpoint"]
       dpop = proofs(auth, pem, endpoint)
-      Grant.push(server, registration, auth.redirect_uri, scopes, auth.req, dpop)
+      Grant.push(server, registration, auth.redirect_uri, scopes, auth.req, dpop, step_up)
     else
-      {url, request} = Grant.request(server, registration, auth.redirect_uri, scopes)
+      {url, request} = Grant.request(server, registration, auth.redirect_uri, scopes, step_up)
       {:ok, url, request}
     end
   end
@@ -697,14 +744,15 @@ defmodule Sake.Client.Auth do
 
   # RFC 8628: the device authorization request, the person told where to
   # go, then the token endpoint polled until they decide.
-  defp authorize_device(auth, server, scopes) do
+  defp authorize_device(auth, server, scopes, step_up) do
     with true <-
            is_binary(server.metadata["device_authorization_endpoint"]) ||
              {:error, :no_device_endpoint, auth},
          {:ok, registration, auth} <- Registration.client(auth, server) do
       pem = new_key(auth, server)
 
-      with {:ok, start} <- Grant.device_authorization(server, registration, scopes, auth.req),
+      with {:ok, start} <-
+             Grant.device_authorization(server, registration, scopes, auth.req, step_up),
            _ = prompt(auth.device_prompt, start),
            {:ok, body} <-
              poll(

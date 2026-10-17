@@ -32,4 +32,33 @@ defmodule SakeDev.Subject do
     do: SakeDev.Accounts.by_email(email)
 
   def assertion_principal(_claims, _issuer), do: :error
+
+  # How the person signed in, as the login form recorded it: "pwd" with a
+  # password, "mfa" with the one-time code as well (RFC 9470).
+  @impl true
+  def authentication(conn) do
+    %{
+      acr: Plug.Conn.get_session(conn, :acr),
+      auth_time:
+        case Plug.Conn.get_session(conn, :auth_time) do
+          at when is_integer(at) -> DateTime.from_unix!(at)
+          _ -> nil
+        end
+    }
+  end
+
+  # Back to the login form, which asks for the one-time code when MFA is
+  # asked for, and then to the page that sent the person there.
+  @impl true
+  def reauthenticate(conn, %{acr_values: acr_values}) do
+    return_to = conn.request_path <> "?" <> conn.query_string
+    mfa = if "mfa" in acr_values, do: %{"acr" => "mfa"}, else: %{}
+
+    conn
+    |> Plug.Conn.put_resp_header(
+      "location",
+      "/login?" <> URI.encode_query(Map.put(mfa, "return_to", return_to))
+    )
+    |> Plug.Conn.send_resp(302, "")
+  end
 end

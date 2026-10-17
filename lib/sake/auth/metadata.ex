@@ -6,9 +6,9 @@ defmodule Sake.Auth.Metadata do
   # Each document is a base map and a list of contributors, small
   # functions of the configuration that return the fields of one feature
   # (DPoP, client ID metadata documents, dynamic registration, ID-JAGs,
-  # the device grant, pushed authorization requests), or nothing when it
-  # is off. A feature adds its
-  # fields by adding a contributor.
+  # the device grant, pushed authorization requests, the acr values), or
+  # nothing when it is off. A feature adds its fields by adding a
+  # contributor.
   #
   # Core: it takes the configuration and plain data, and never sees the
   # conn; `Sake.Auth.WellKnown` serves the documents.
@@ -35,7 +35,16 @@ defmodule Sake.Auth.Metadata do
         "authorization_response_iss_parameter_supported" => true
       },
       config,
-      [&cimd/1, &private_key_jwt/1, &id_jag/1, &dcr/1, &device/1, &par/1, &dpop_algs/1]
+      [
+        &cimd/1,
+        &private_key_jwt/1,
+        &id_jag/1,
+        &dcr/1,
+        &device/1,
+        &par/1,
+        &dpop_algs/1,
+        &acr_values/1
+      ]
     )
   end
 
@@ -120,6 +129,12 @@ defmodule Sake.Auth.Metadata do
   # learns that DPoP is on offer at all.
   defp dpop_algs(%{dpop: false}), do: %{}
   defp dpop_algs(_config), do: %{"dpop_signing_alg_values_supported" => DPoP.algs()}
+
+  # OpenID Connect Discovery's `acr_values_supported`, which RFC 9470
+  # registers for an OAuth authorization server: the authentication
+  # context classes the host's login offers, when it said.
+  defp acr_values(%{acr_values: nil}), do: %{}
+  defp acr_values(config), do: %{"acr_values_supported" => config.acr_values}
 
   # RFC 9728 §2: the resource takes DPoP-bound tokens only.
   defp dpop_required(config) do

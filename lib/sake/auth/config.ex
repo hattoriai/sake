@@ -24,6 +24,14 @@ defmodule Sake.Auth.Config do
   request that was not pushed, as a client registered with
   `require_pushed_authorization_requests` has its own refused. It is off
   by default, and the metadata then says nothing about it.
+
+  `acr_values:` lists the authentication context classes the host's
+  login can sign a person in with (`["pwd", "mfa"]`, say: the `acr`
+  values `c:Sake.Auth.Subject.authentication/1` returns), for the
+  metadata's `acr_values_supported` (RFC 9470). An authorization
+  request's `acr_values` are then narrowed to those, and a request that
+  names none of them is refused with `invalid_request`. Without it,
+  the metadata says nothing and any `acr_values` are taken as they come.
   """
 
   @type t :: %__MODULE__{}
@@ -47,6 +55,7 @@ defmodule Sake.Auth.Config do
             dpop: true,
             device: false,
             par: false,
+            acr_values: nil,
             name: nil,
             secret: nil
 
@@ -76,6 +85,7 @@ defmodule Sake.Auth.Config do
         dpop: dpop_option(config.dpop, config.secret),
         device: device_option(config.device, config.secret),
         par: par_option(config.par),
+        acr_values: acr_values_option(config.acr_values),
         store_state: module.init(store_opts),
         name: config.name || uri.host
     }
@@ -202,6 +212,24 @@ defmodule Sake.Auth.Config do
       raise(
         ArgumentError,
         "par: must be true, false or [required: boolean, expires_in: seconds], got #{inspect(other)}"
+      )
+
+  # The acr values the host's login offers: nil, or a list of strings.
+  defp acr_values_option(nil), do: nil
+
+  defp acr_values_option(values) when is_list(values) and values != [] do
+    if Enum.all?(values, &(is_binary(&1) and &1 != "" and not String.contains?(&1, " "))),
+      do: Enum.uniq(values),
+      else: bad_acr_values!(values)
+  end
+
+  defp acr_values_option(other), do: bad_acr_values!(other)
+
+  defp bad_acr_values!(values),
+    do:
+      raise(
+        ArgumentError,
+        "acr_values: must be a non-empty list of strings without spaces, got #{inspect(values)}"
       )
 
   @doc """

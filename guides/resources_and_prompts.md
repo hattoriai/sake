@@ -20,6 +20,11 @@ binary content, `{:ok, map_or_list}` (JSON-encoded, `mime_type` defaults to
 `"application/json"`), `{:ok, [%Sake.Content{}, ...]}` for full control, or
 `{:error, :not_found}` / `{:error, text}`.
 
+Like a tool, a resource or a prompt takes `scope:` (the token's scopes
+it needs) and `authentication:` (how the person must have signed in,
+`[acr: ["mfa"], max_age: 300]`; see "Step-up authentication" in
+`guides/tools.md`), checked on every read and get.
+
 ## Template resources
 
 A `{name}` placeholder in `uri:` makes a resource a template; `read/2`

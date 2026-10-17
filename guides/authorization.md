@@ -257,6 +257,142 @@ token endpoint does. Without DPoP the proof and `dpop_jkt` are ignored.
 `Sake.Client` pushes its requests to any server whose metadata lists the
 endpoint (see `guides/client.md`).
 
+## Step-up authentication: MFA for a dangerous tool
+
+Scopes say what a token may do; they say nothing of how the person
+behind it signed in. Some tools need more than a session someone left
+open: "`delete_repo` only with MFA in the last five minutes". RFC 9470
+gives the resource a challenge for exactly that, and the client a way to
+answer it: have the person sign in again, as asked, and get a new token.
+
+Declare it on the tool (or a resource, or a prompt):
+
+```elixir
+defmodule MyApp.MCP.DeleteRepo do
+  use Sake.Tool,
+    name: "delete_repo",
+    description: "Delete a repository",
+    scope: "repos:admin",
+    annotations: [destructive: true],
+    authentication: [acr: ["mfa"], max_age: 300]
+
+  arg :name, :string, required: true
+
+  @impl true
+  def execute(%{name: name}, ctx), do: MyApp.Repos.delete(ctx.scope, name)
+end
+```
+
+`acr:` lists the authentication context classes (any one will do), and
+`max_age:` how many seconds ago the person may have signed in; either is
+optional. `use Sake.Server, authentication: [...]` sets one for every
+component of the server, its mounted servers' included (an `acr` must
+then be among both lists, the shorter `max_age` wins), and a requirement
+that depends on the arguments ("transfers over 1,000 need MFA") is a
+middleware's, with `Sake.Middleware.require_authentication/2` (see
+`guides/middleware.md`).
+
+Sake does not sign anyone in, and does not run MFA: your login does. Two
+optional callbacks on the subject module tell Sake how it went, and send
+the person back to it:
+
+```elixir
+defmodule MyAppWeb.MCPSubject do
+  @behaviour Sake.Auth.Subject
+  # from_conn/1, id/1, fetch/1, display/1 as before.
+
+  # How and when the person of this session signed in: your login puts
+  # it in the session (`"mfa"` after the second factor, `"pwd"` after a
+  # password alone).
+  @impl true
+  def authentication(conn) do
+    auth_time = Plug.Conn.get_session(conn, :auth_time)
+
+    %{
+      acr: Plug.Conn.get_session(conn, :acr),
+      auth_time: auth_time && DateTime.from_unix!(auth_time)
+    }
+  end
+
+  # Sign in again, or do MFA, and come back here.
+  @impl true
+  def reauthenticate(conn, %{acr_values: acr_values, max_age: _max_age}) do
+    return_to = conn.request_path <> "?" <> conn.query_string
+    step = if "mfa" in acr_values, do: "mfa", else: "password"
+
+    conn
+    |> Phoenix.Controller.redirect(to: ~p"/users/reauthenticate?#{[step: step, return_to: return_to]}")
+    |> Plug.Conn.halt()
+  end
+end
+```
+
+What happens:
+
+1. The client calls `delete_repo` with a token whose person signed in
+   with a password an hour ago. The endpoint answers 401 with RFC 9470's
+   challenge, in the token's scheme (`Bearer` or `DPoP`):
+
+   ```
+   WWW-Authenticate: Bearer error="insufficient_user_authentication",
+     error_description="A different authentication level is required",
+     acr_values="mfa", max_age="300",
+     resource_metadata="https://app.example.com/.well-known/oauth-protected-resource/mcp"
+   ```
+
+   The description says "More recent authentication is required" when
+   only the sign-in's age falls short. A token that lacks the tool's
+   scopes as well gets this challenge, with their `scope` added, so that
+   one new grant covers both; a token whose sign-in meets the
+   requirement and lacks scopes gets the usual 403 `insufficient_scope`.
+2. The client runs the person's grant again with `acr_values=mfa` and
+   `max_age=300` (`Sake.Client` does, see `guides/client.md`): on the
+   authorize endpoint, in a pushed request, or at the device
+   authorization endpoint. All three take both parameters through the
+   same validation: `acr_values` is space-separated, `max_age` a
+   non-negative integer in seconds (anything else is `invalid_request`).
+3. Before anything is decided, the authorize endpoint (or the device
+   verification page, once the person enters the code) asks
+   `authentication/1`. When the `acr` is not one of `acr_values`, or
+   `auth_time` is older than `max_age` (an unknown one meets neither), it
+   calls `reauthenticate/2`; the person signs in with MFA and comes back
+   to the same URL, where it is asked again. A pushed request is kept
+   for the return until it expires; the device page passes a conn whose
+   query string is `user_code=…`, so coming back shows the code filled
+   in, and the grant waits meanwhile.
+4. The consent page (or a remembered consent), and the code, which
+   carries the `acr` and `auth_time` of the approval into the tokens.
+   The client's retry is served.
+
+A refresh keeps the tokens' `acr` and `auth_time`: a refresh is no new
+sign-in, so `max_age: 300` means five minutes after the person signed
+in, however often the client refreshes. A machine client's token (client
+credentials, a JWT grant) has neither, and never meets a requirement.
+
+Without `authentication/1`, Sake knows nothing of how anyone signed in,
+and no requirement is ever met. Without `reauthenticate/2`, the authorize
+endpoint and the device page answer an unmet request with an error page,
+"Sign in again to continue". **Make sure the sign-in you send the person
+to can meet what it was asked**, and comes back to the URL: coming back
+still short of it calls `reauthenticate/2` again, which, if your login
+cannot do MFA, sends them round for ever.
+
+`max_age: 0` (OpenID Connect's "sign in again now") cannot be met to the
+second, since the person signs in, comes back and the token is used some
+seconds later: Sake takes it as a sign-in within the last 60 seconds,
+on the authorization server and the resource alike.
+
+`acr_values: ["pwd", "mfa"]` in the auth config lists the classes your
+login offers. The metadata then says `acr_values_supported`, a request's
+`acr_values` are narrowed to those, and a request that names none of
+them is refused with `invalid_request` (the token it would get could not
+do what the client wants). Without it, any value is taken as it comes,
+and it is your `authentication/1` and `reauthenticate/2` that give it a
+meaning.
+
+An external authorization server's tokens carry the same in their `acr`
+and `auth_time` claims; see `guides/external_auth.md`.
+
 ## Machine clients (client credentials)
 
 A service that calls your endpoint as itself — a nightly job, a CI
@@ -523,8 +659,9 @@ authorization server's and the protected resource's) list
 `required: true` the protected resource's says
 `dpop_bound_access_tokens_required`. With `par:`, the authorization
 server's lists `pushed_authorization_request_endpoint` and
-`require_pushed_authorization_requests`, and with `device:`
-`device_authorization_endpoint` and the device code grant.
+`require_pushed_authorization_requests`, with `device:`
+`device_authorization_endpoint` and the device code grant, and with
+`acr_values:` `acr_values_supported`.
 
 `client_secret_jwt` is never listed, and the token endpoint refuses its
 assertions with `invalid_client`. It is an HMAC keyed with the client

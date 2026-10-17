@@ -17,6 +17,8 @@ if Code.ensure_loaded?(Ecto.Schema) do
       field(:used_at, :utc_datetime)
       field(:inserted_at, :utc_datetime)
       field(:jkt, :string)
+      field(:acr, :string)
+      field(:auth_time, :utc_datetime)
     end
   end
 end

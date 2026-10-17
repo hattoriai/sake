@@ -156,8 +156,16 @@ defmodule Sake.Auth.Store.ETS do
     answer
   end
 
-  defp decided(grant, {:approved, subject_id, scopes}),
-    do: %{grant | status: :approved, subject_id: subject_id, scopes: scopes}
+  defp decided(grant, {:approved, subject_id, scopes, authentication}) do
+    %{
+      grant
+      | status: :approved,
+        subject_id: subject_id,
+        scopes: scopes,
+        acr: authentication.acr,
+        auth_time: authentication.auth_time
+    }
+  end
 
   defp decided(grant, :denied), do: %{grant | status: :denied}
 

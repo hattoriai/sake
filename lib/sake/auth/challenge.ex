@@ -9,7 +9,11 @@ defmodule Sake.Auth.Challenge do
   `resource_metadata` URL (RFC 9728), the `error`, its
   `error_description`, the `realm` and the `scope`. `nonce` is the
   response's `DPoP-Nonce` header (RFC 9449 §9), which a `use_dpop_nonce`
-  error asks the next proof to carry.
+  error asks the next proof to carry. An `insufficient_user_authentication`
+  error (RFC 9470) says how the person must sign in: `acr_values`, the
+  authentication context classes any one of which will do, and `max_age`,
+  in seconds, how recently (`Sake.Client` hands it back in
+  `{:error, {:insufficient_user_authentication, challenge}}`).
 
   A resource refuses a request with one: `status` is the HTTP status
   (401, or 403 for `insufficient_scope`), `www_authenticate` the header
@@ -24,6 +28,8 @@ defmodule Sake.Auth.Challenge do
           realm: String.t() | nil,
           nonce: String.t() | nil,
           scope: [String.t()],
+          acr_values: [String.t()],
+          max_age: non_neg_integer() | nil,
           status: 401 | 403 | nil,
           www_authenticate: [String.t()]
         }
@@ -35,7 +41,9 @@ defmodule Sake.Auth.Challenge do
     :realm,
     :nonce,
     :status,
+    :max_age,
     scope: [],
+    acr_values: [],
     www_authenticate: []
   ]
 
@@ -61,7 +69,18 @@ defmodule Sake.Auth.Challenge do
       error: params["error"],
       error_description: params["error_description"],
       realm: params["realm"],
-      scope: params |> Map.get("scope", "") |> String.split(" ", trim: true)
+      scope: params |> Map.get("scope", "") |> String.split(" ", trim: true),
+      acr_values: params |> Map.get("acr_values", "") |> String.split(" ", trim: true),
+      max_age: max_age(params["max_age"])
     }
   end
+
+  defp max_age(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {n, ""} when n >= 0 -> n
+      _ -> nil
+    end
+  end
+
+  defp max_age(_value), do: nil
 end

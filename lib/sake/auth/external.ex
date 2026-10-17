@@ -84,7 +84,10 @@ defmodule Sake.Auth.External do
   `Sake.Auth.TokenRecord` a token of `Sake.Auth` does, in `ctx.token`:
   `scopes` from `scope` (or `scp`, a string or a list), `client_id` from
   `client_id` (or `azp`), `subject_id` from `sub`, `jkt` from `cnf.jkt`,
-  `expires_at` from `exp`, and `issuer` and `claims` besides. A token
+  `expires_at` from `exp`, `acr` from `acr` and `auth_time` from
+  `auth_time` (seconds since the epoch; RFC 9470: how and when the
+  person signed in, which a tool's `authentication:` requirement is
+  checked against), and `issuer` and `claims` besides. A token
   whose `cnf` binds it any other way than `jkt` (a client certificate,
   `x5t#S256`, RFC 8705) is refused, since Sake cannot check that
   binding. A token without `sub`, or whose `sub` is its client (RFC 9068
@@ -110,7 +113,8 @@ defmodule Sake.Auth.External do
   token's claims, in the shape of an introspection answer (RFC 7662
   §2.2, string or atom keys): `sub`, `client_id`, `scope` (a string or a
   list), `exp` (seconds or a `DateTime`), `aud`, `cnf` with `jkt` for a
-  DPoP-bound token. `{:ok, claims, principal}` gives the principal as
+  DPoP-bound token, and `acr` and `auth_time` (seconds or a `DateTime`)
+  for a tool that requires a strong or recent sign-in. `{:ok, claims, principal}` gives the principal as
   well, when the query that found the token loaded it, and skips
   `principal:`. `:error` refuses the token.
   """
@@ -379,12 +383,13 @@ defmodule Sake.Auth.External do
       nil,
       &if(is_map(&1), do: Map.new(&1, fn {k, v} -> {to_string(k), v} end), else: &1)
     )
-    |> Map.update("exp", nil, fn
-      %DateTime{} = at -> DateTime.to_unix(at)
-      exp -> exp
-    end)
+    |> Map.update("exp", nil, &unix/1)
+    |> Map.update("auth_time", nil, &unix/1)
     |> Map.reject(fn {_k, v} -> is_nil(v) end)
   end
+
+  defp unix(%DateTime{} = at), do: DateTime.to_unix(at)
+  defp unix(seconds), do: seconds
 
   # The checks every way of verifying shares: the issuer when the claims
   # name one, and the audience, which a token must have unless the host
@@ -432,7 +437,9 @@ defmodule Sake.Auth.External do
       scopes: scopes(claims),
       resource: resource,
       jkt: claims |> Map.get("cnf") |> jkt(),
-      expires_at: expires_at(claims["exp"]),
+      acr: string(claims["acr"]),
+      auth_time: datetime(claims["auth_time"]),
+      expires_at: datetime(claims["exp"]),
       issuer: config.issuer,
       claims: claims
     }
@@ -452,9 +459,9 @@ defmodule Sake.Auth.External do
   defp jkt(%{"jkt" => jkt}) when is_binary(jkt), do: jkt
   defp jkt(_cnf), do: nil
 
-  defp expires_at(exp) when is_integer(exp), do: DateTime.from_unix!(exp)
-  defp expires_at(exp) when is_float(exp), do: DateTime.from_unix!(trunc(exp))
-  defp expires_at(_exp), do: nil
+  defp datetime(seconds) when is_integer(seconds), do: DateTime.from_unix!(seconds)
+  defp datetime(seconds) when is_float(seconds), do: DateTime.from_unix!(trunc(seconds))
+  defp datetime(_seconds), do: nil
 
   defp refused(config, reason) do
     :telemetry.execute(

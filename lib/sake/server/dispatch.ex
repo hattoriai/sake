@@ -20,6 +20,7 @@ defmodule Sake.Server.Dispatch do
           {:reply, map()}
           | {:error, map()}
           | {:forbidden, [String.t()]}
+          | {:insufficient_user_authentication, map()}
           | {:listen, map()}
           | :noreply
 
@@ -34,6 +35,7 @@ defmodule Sake.Server.Dispatch do
       {:error, code, message} -> {:error, error(code, message)}
       {:error, code, message, data} -> {:error, Map.put(error(code, message), "data", data)}
       {:forbidden, scopes} -> {:forbidden, scopes}
+      {:insufficient_user_authentication, refusal} -> {:insufficient_user_authentication, refusal}
       {:listen, filter} -> {:listen, filter}
     end
   end
@@ -340,8 +342,9 @@ defmodule Sake.Server.Dispatch do
       else: {:error, JSONRPC.code(:invalid_params), "Unknown tool: #{name}"}
   end
 
-  defp allowed(spec, ctx),
-    do: if(Server.allowed?(spec, ctx), do: :ok, else: {:forbidden, spec.scopes})
+  # A call, a read or a get: the token's scopes, and how its person
+  # signed in (`Server.permit/2`).
+  defp allowed(spec, ctx), do: Server.permit(spec, ctx)
 
   # `:before_call` runs on every round of a multi round-trip call, before
   # anything of the tool: what it decides about the arguments is what

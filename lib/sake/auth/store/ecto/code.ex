@@ -12,6 +12,8 @@ if Code.ensure_loaded?(Ecto.Schema) do
       field(:resource, :string)
       field(:subject_id, :string)
       field(:dpop_jkt, :string)
+      field(:acr, :string)
+      field(:auth_time, :utc_datetime)
       field(:expires_at, :utc_datetime)
       field(:used_at, :utc_datetime)
       field(:revoked_at, :utc_datetime)

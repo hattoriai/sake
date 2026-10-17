@@ -9,9 +9,12 @@ defmodule Sake.Auth.Device do
   # The request is validated as an authorization request
   # (`AuthorizationRequest.validate/4` with `:device`), and the person's
   # decision goes through `Grant.decide/4`, so `authorize_resource?/2`,
-  # `scopes_for/2` and the consent page apply as in the code flow. An
-  # approval is recorded on the device grant, which the token endpoint's
-  # device code clause (`Sake.Auth.TokenGrants`) turns into tokens once.
+  # `scopes_for/2` and the consent page apply as in the code flow, and
+  # so do `acr_values` and `max_age` (RFC 9470), kept in the grant's
+  # `extra` and checked before the decision. An approval is recorded on
+  # the device grant, with how the person signed in, which the token
+  # endpoint's device code clause (`Sake.Auth.TokenGrants`) turns into
+  # tokens once.
   #
   # Both codes are stored hashed: the device code as codes and tokens
   # are, the user code with an HMAC keyed by the Sake secret, since its
@@ -24,7 +27,17 @@ defmodule Sake.Auth.Device do
   # and `Sake.Auth.DeviceVerification` are the adapters.
 
   alias Sake.Auth
-  alias Sake.Auth.{AuthorizationRequest, ClientAuth, Clients, Config, DeviceGrant, Grant, Tokens}
+
+  alias Sake.Auth.{
+    Authentication,
+    AuthorizationRequest,
+    ClientAuth,
+    Clients,
+    Config,
+    DeviceGrant,
+    Grant,
+    Tokens
+  }
 
   # RFC 8628 §6.1: base 20, with no vowels (so no words) and none of the
   # letters and digits that look alike; 8 characters, about 34.5 bits.
@@ -76,6 +89,7 @@ defmodule Sake.Auth.Device do
           client_id: client.id,
           scopes: request.scopes,
           resource: request.resource,
+          extra: request.extra,
           interval: config.device.interval,
           expires_at: DateTime.add(now, config.device.expires_in),
           inserted_at: now
@@ -147,7 +161,8 @@ defmodule Sake.Auth.Device do
          request: %AuthorizationRequest{
            client_id: grant.client_id,
            scopes: grant.scopes,
-           resource: grant.resource
+           resource: grant.resource,
+           extra: grant.extra || %{}
          }
        }}
     else
@@ -161,11 +176,20 @@ defmodule Sake.Auth.Device do
   compare with the device's; `:error` for a code that is not valid; or
   `{:error, code, description}` when the person may not authorize the
   request, which denies the grant, so the device stops polling.
+
+  `authentication` is how the person signed in: a request whose
+  `acr_values` or `max_age` (RFC 9470) it does not meet is
+  `{:reauthenticate, requirement}`, before anything is decided, and the
+  grant stays pending for when they come back.
   """
-  @spec prompt(Config.t(), term(), term()) ::
-          {:consent, map()} | :error | {:error, String.t(), String.t()}
-  def prompt(config, user_code, principal) do
-    with {:ok, found} <- lookup(config, user_code) do
+  @spec prompt(Config.t(), term(), term(), Authentication.context()) ::
+          {:consent, map()}
+          | {:reauthenticate, Authentication.requirement()}
+          | :error
+          | {:error, String.t(), String.t()}
+  def prompt(config, user_code, principal, authentication \\ Authentication.none()) do
+    with {:ok, found} <- lookup(config, user_code),
+         :ok <- authenticated(found.request, authentication) do
       case Grant.decide(config, found.client, found.request, principal) do
         {:consent, assigns} ->
           {:consent, Map.put(assigns, :user_code, shown(user_code))}
@@ -177,20 +201,33 @@ defmodule Sake.Auth.Device do
     end
   end
 
+  defp authenticated(request, authentication) do
+    requirement = Authentication.requested(request.extra)
+
+    case Authentication.check(authentication, requirement) do
+      :ok -> :ok
+      {:error, _reason} -> {:reauthenticate, requirement}
+    end
+  end
+
   @doc """
   The person's decision on the grant a user code names. An approval
   takes `Grant.decide/4` again, with the scopes narrowed as they are
-  now, records it on the grant and remembers the consent (with
-  `remember_consent`). `:error` when the code is not valid any more (it
-  expired, or the grant was decided meanwhile: the decision is atomic).
+  now, records it on the grant, with how the person signed in
+  (`authentication`, which the tokens carry), and remembers the consent
+  (with `remember_consent`). `:error` when the code is not valid any
+  more (it expired, or the grant was decided meanwhile: the decision is
+  atomic).
   """
-  @spec decide(Config.t(), term(), term(), :approve | :deny) ::
+  @spec decide(Config.t(), term(), term(), :approve | :deny, Authentication.context()) ::
           :ok | :error | {:error, String.t(), String.t()}
-  def decide(config, user_code, principal, :approve) do
+  def decide(config, user_code, principal, decision, authentication \\ Authentication.none())
+
+  def decide(config, user_code, principal, :approve, authentication) do
     with {:ok, found} <- lookup(config, user_code) do
       case Grant.decide(config, found.client, found.request, principal) do
         {:consent, %{request: request}} ->
-          approve(config, found.grant, request, config.subject.id(principal))
+          approve(config, found.grant, request, config.subject.id(principal), authentication)
 
         {:error, code, description} ->
           deny(config, found.grant)
@@ -199,15 +236,15 @@ defmodule Sake.Auth.Device do
     end
   end
 
-  def decide(config, user_code, _principal, :deny) do
+  def decide(config, user_code, _principal, :deny, _authentication) do
     with {:ok, found} <- lookup(config, user_code), do: deny(config, found.grant)
   end
 
-  defp approve(config, grant, request, subject_id) do
+  defp approve(config, grant, request, subject_id, authentication) do
     {module, state} = Auth.store(config)
+    decision = {:approved, subject_id, request.scopes, Authentication.context(authentication)}
 
-    with :ok <-
-           module.decide_device_grant(state, grant.hash, {:approved, subject_id, request.scopes}),
+    with :ok <- module.decide_device_grant(state, grant.hash, decision),
          do: Grant.remember(config, request, subject_id)
   end
 

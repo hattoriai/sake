@@ -325,6 +325,32 @@ declared scope, with its description, across the servers an authorization
 configuration lists — that list is what a consent page and the
 `scopes_supported` discovery field show.
 
+## Step-up authentication
+
+A scope says what a token may do, not how its person signed in.
+`authentication:` asks for that too (RFC 9470): with which
+authentication context class (`acr`, any one of the list) and how
+recently (`max_age`, in seconds):
+
+```elixir
+use Sake.Tool,
+  name: "delete_repo",
+  scope: "repos:admin",
+  authentication: [acr: ["mfa"], max_age: 300]
+```
+
+A token that does not meet it gets a 401 `insufficient_user_authentication`
+challenge with `acr_values="mfa"` and `max_age="300"`, and a client such as
+`Sake.Client` has the person sign in again, with MFA, and retries. The
+tool stays in `tools/list`: the token's sign-in changes with time, and the
+client needs to see the tool to step up for it. Resources and prompts
+take the same option (for a read and a get), and so does the server
+(`use Sake.Server, authentication: [...]`, for all its components and its
+mounted servers'). Like scopes, it takes effect only on an endpoint with
+authorization. `guides/authorization.md` has the whole flow, and what
+the host's login provides; a requirement that depends on the arguments is
+a middleware's (`Sake.Middleware.require_authentication/2`).
+
 ## Testing a tool
 
 `Sake.Test` calls a server's tools from a test as a client would, in

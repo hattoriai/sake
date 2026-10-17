@@ -3,7 +3,9 @@ defmodule Sake.Auth.Code do
   An authorization code (stored hashed). `dpop_jkt` is the thumbprint of
   the DPoP key the code is bound to (RFC 9449 §10), or nil: the token
   request that redeems a bound code must carry a proof made with that
-  key.
+  key. `acr` and `auth_time` are how and when the person signed in
+  when they approved it (`c:Sake.Auth.Subject.authentication/1`), or
+  nil, which its tokens carry (RFC 9470).
   """
   @type t :: %__MODULE__{}
   defstruct [
@@ -15,6 +17,8 @@ defmodule Sake.Auth.Code do
     :subject_id,
     :expires_at,
     :dpop_jkt,
+    :acr,
+    :auth_time,
     scopes: []
   ]
 end
@@ -26,7 +30,9 @@ defmodule Sake.Auth.PushedRequest do
   expires. The other fields are the validated request's: `extra` holds
   the parameters a later feature adds (`"dpop_jkt"`, the thumbprint of
   the DPoP key the code will be bound to), with string keys and JSON
-  values, so a store can keep it as JSON.
+  values, so a store can keep it as JSON. It holds `"acr_values"` and
+  `"max_age"` too, when the client asks how the person must have signed
+  in (RFC 9470).
   """
   @type t :: %__MODULE__{}
   defstruct [
@@ -48,7 +54,10 @@ defmodule Sake.Auth.TokenRecord do
   An access or refresh token (stored hashed). `family_id` groups the
   tokens born from one authorization code. `jkt` is the RFC 7638
   thumbprint of the DPoP key the token is bound to (its `cnf.jkt`), or nil
-  for a bearer token.
+  for a bearer token. `acr` and `auth_time` are how and when the person
+  signed in to approve the grant (RFC 9470), or nil when unknown (and
+  always for a machine client); a refresh keeps them, since it is no new
+  sign-in.
 
   A token from an external authorization server (see
   `Sake.Auth.External`) is never stored: its record is made for each
@@ -70,6 +79,8 @@ defmodule Sake.Auth.TokenRecord do
     :used_at,
     :inserted_at,
     :jkt,
+    :acr,
+    :auth_time,
     :issuer,
     :claims,
     scopes: []
@@ -84,6 +95,12 @@ defmodule Sake.Auth.DeviceGrant do
   `subject_id` and the `scopes` they granted) or `:denied`, and
   `:issued` once the client has its tokens. `last_polled_at` is when
   the client last asked the token endpoint, against `interval`.
+
+  `extra` holds the device authorization request's parameters that are
+  not fields, as `Sake.Auth.PushedRequest`'s does: `"acr_values"` and
+  `"max_age"` (RFC 9470), with string keys and JSON values. `acr` and
+  `auth_time` are how and when the person who approved it signed in,
+  which its tokens carry.
   """
   @type status :: :pending | :approved | :denied | :issued
   @type t :: %__MODULE__{}
@@ -97,8 +114,11 @@ defmodule Sake.Auth.DeviceGrant do
     :expires_at,
     :last_polled_at,
     :inserted_at,
+    :acr,
+    :auth_time,
     status: :pending,
-    scopes: []
+    scopes: [],
+    extra: %{}
   ]
 
   @doc """

@@ -42,10 +42,24 @@ defmodule Sake.Client.Auth.Grant do
   verifier and the issuer recorded from the validated metadata
   (RFC 9207), kept together as the specification asks.
   """
-  @spec request(map(), map(), String.t(), [String.t()]) :: {String.t(), map()}
-  def request(server, registration, redirect_uri, scopes) do
-    {params, request} = authorization(server, registration, redirect_uri, scopes)
+  @spec request(map(), map(), String.t(), [String.t()], step_up()) :: {String.t(), map()}
+  def request(server, registration, redirect_uri, scopes, step_up \\ nil) do
+    {params, request} = authorization(server, registration, redirect_uri, scopes, step_up)
     {authorize_url(server, params), request}
+  end
+
+  @typedoc """
+  How the person must sign in, from an `insufficient_user_authentication`
+  challenge (RFC 9470): its `acr_values` and `max_age`, sent as the
+  authorization request's parameters of those names; nil for neither.
+  """
+  @type step_up :: %{acr_values: [String.t()], max_age: non_neg_integer() | nil} | nil
+
+  defp step_up_params(nil), do: []
+
+  defp step_up_params(step_up) do
+    if(step_up.acr_values == [], do: [], else: [acr_values: Enum.join(step_up.acr_values, " ")]) ++
+      if step_up.max_age == nil, do: [], else: [max_age: to_string(step_up.max_age)]
   end
 
   @doc """
@@ -57,10 +71,10 @@ defmodule Sake.Client.Auth.Grant do
   `request_uri`, and the record the answer is checked against, as
   `request/4` does.
   """
-  @spec push(map(), map(), String.t(), [String.t()], keyword(), dpop()) ::
+  @spec push(map(), map(), String.t(), [String.t()], keyword(), dpop(), step_up()) ::
           {:ok, String.t(), map()} | {:error, term()}
-  def push(server, registration, redirect_uri, scopes, req, dpop \\ nil) do
-    {params, request} = authorization(server, registration, redirect_uri, scopes)
+  def push(server, registration, redirect_uri, scopes, req, dpop \\ nil, step_up \\ nil) do
+    {params, request} = authorization(server, registration, redirect_uri, scopes, step_up)
     endpoint = server.metadata["pushed_authorization_request_endpoint"]
 
     # The client authentication adds the client_id where it goes.
@@ -83,7 +97,7 @@ defmodule Sake.Client.Auth.Grant do
     end
   end
 
-  defp authorization(server, registration, redirect_uri, scopes) do
+  defp authorization(server, registration, redirect_uri, scopes, step_up) do
     {verifier, challenge} = pkce()
     state = 24 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
 
@@ -96,7 +110,8 @@ defmodule Sake.Client.Auth.Grant do
         code_challenge_method: "S256",
         state: state,
         resource: server.resource
-      ] ++ if(scopes == [], do: [], else: [scope: Enum.join(scopes, " ")])
+      ] ++
+        if(scopes == [], do: [], else: [scope: Enum.join(scopes, " ")]) ++ step_up_params(step_up)
 
     {params,
      %{
@@ -216,14 +231,14 @@ defmodule Sake.Client.Auth.Grant do
   endpoint's server). Returns the response's fields as atoms, with an
   `interval` of 5 seconds when the server names none (§3.2).
   """
-  @spec device_authorization(map(), map(), [String.t()], keyword()) ::
+  @spec device_authorization(map(), map(), [String.t()], keyword(), step_up()) ::
           {:ok, map()} | {:error, term()}
-  def device_authorization(server, registration, scopes, req) do
+  def device_authorization(server, registration, scopes, req, step_up \\ nil) do
     endpoint = server.metadata["device_authorization_endpoint"]
 
     {form, headers} =
       authenticate(
-        [resource: server.resource] ++ scope(scopes),
+        [resource: server.resource] ++ scope(scopes) ++ step_up_params(step_up),
         registration,
         server.metadata["token_endpoint"]
       )

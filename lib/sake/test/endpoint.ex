@@ -231,11 +231,34 @@ defmodule Sake.Test.Endpoint do
       end)
 
     case outcome do
-      {:raised, kind, reason, stacktrace} -> :erlang.raise(kind, reason, stacktrace)
-      {:forbidden, []} -> {:error, {:http, 403, Stream.response(id, {:forbidden, []})}}
-      {:forbidden, scopes} -> {:error, {:insufficient_scope, challenge(scopes)}}
-      outcome -> reply(session, Stream.response(id, outcome))
+      {:raised, kind, reason, stacktrace} ->
+        :erlang.raise(kind, reason, stacktrace)
+
+      {:forbidden, []} ->
+        {:error, {:http, 403, Stream.response(id, {:forbidden, []})}}
+
+      {:forbidden, scopes} ->
+        {:error, {:insufficient_scope, challenge(scopes)}}
+
+      {:insufficient_user_authentication, r} ->
+        {:error, {:insufficient_user_authentication, step_up(r)}}
+
+      outcome ->
+        reply(session, Stream.response(id, outcome))
     end
+  end
+
+  # A refusal for how the person signed in is the 401 an endpoint with
+  # authorization answers it with (RFC 9470).
+  defp step_up(refusal) do
+    %Challenge{
+      scheme: "Bearer",
+      status: 401,
+      error: "insufficient_user_authentication",
+      acr_values: refusal.acr_values,
+      max_age: refusal.max_age,
+      scope: refusal.scopes
+    }
   end
 
   # A scope refusal is what `Sake.Client` sees from an endpoint with

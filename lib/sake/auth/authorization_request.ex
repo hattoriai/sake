@@ -6,12 +6,15 @@ defmodule Sake.Auth.AuthorizationRequest do
   # `validate/3` takes the request's parameters as a map of strings,
   # wherever they came from: the authorize endpoint's query string today,
   # a pushed authorization request or a device authorization request
-  # later. Parameters a later endpoint adds (`nonce`, `max_age`,
+  # later. Parameters a later endpoint adds (`dpop_jkt`, `max_age`,
   # `acr_values`) go in `extra`, so the struct and `validate/3` keep their
   # shape. Its keys are strings and its values JSON, so that a pushed
   # request (RFC 9126) can be stored with it. It holds `"dpop_jkt"`
   # (RFC 9449 §10) when the code is to be bound to a DPoP key: from the
-  # parameter of that name, or from the proof of a pushed request.
+  # parameter of that name, or from the proof of a pushed request. It
+  # holds `"acr_values"` (a list) and `"max_age"` (seconds) when the
+  # client asks how the person must have signed in (RFC 9470), on every
+  # path: the authorize endpoint, a pushed request, a device request.
   #
   # A device authorization request (RFC 8628) has no redirect URI, state
   # or PKCE challenge: those three are nil on that path alone, and
@@ -20,7 +23,7 @@ defmodule Sake.Auth.AuthorizationRequest do
   # Core: it takes the configuration and plain data, and never sees the
   # conn.
 
-  alias Sake.Auth.{Client, Clients, Config, Redirect, Resource}
+  alias Sake.Auth.{Authentication, Client, Clients, Config, Redirect, Resource}
 
   @device_code "urn:ietf:params:oauth:grant-type:device_code"
 
@@ -74,8 +77,9 @@ defmodule Sake.Auth.AuthorizationRequest do
   its description, for the redirect URI.
 
   With `:device`, the parameters of a device authorization request (RFC
-  8628 §3.1) from an authenticated `client`: only the scopes and the
-  resource, and the client must be allowed the device grant. Its error
+  8628 §3.1) from an authenticated `client`: only the scopes, the
+  resource, `acr_values` and `max_age`, and the client must be allowed
+  the device grant. Its error
   goes in the endpoint's JSON answer.
   """
   @spec validate(Config.t(), Client.t(), map(), :authorization_code | :device) ::
@@ -126,13 +130,22 @@ defmodule Sake.Auth.AuthorizationRequest do
   defp request(:device, client, _p, scopes, resource),
     do: %__MODULE__{client_id: client.id, scopes: scopes, resource: resource}
 
+  # The parameters of the features that came after the request's shape:
+  # the DPoP key the code is bound to, and what the sign-in must be
+  # (RFC 9470).
+  defp extra(config, flow, p) do
+    with {:ok, dpop} <- dpop_jkt(config, flow, p),
+         {:ok, authentication} <- Authentication.params(p, config.acr_values),
+         do: {:ok, Map.merge(dpop, authentication)}
+  end
+
   # RFC 9449 §10: `dpop_jkt` binds the code to a DPoP key, by its RFC
   # 7638 thumbprint (a base64url SHA-256 hash, 43 characters). A server
   # without DPoP ignores it, as it ignores any parameter it does not know.
-  defp extra(%Config{dpop: false}, _flow, _p), do: {:ok, %{}}
-  defp extra(_config, :device, _p), do: {:ok, %{}}
+  defp dpop_jkt(%Config{dpop: false}, _flow, _p), do: {:ok, %{}}
+  defp dpop_jkt(_config, :device, _p), do: {:ok, %{}}
 
-  defp extra(_config, :authorization_code, p) do
+  defp dpop_jkt(_config, :authorization_code, p) do
     case p["dpop_jkt"] do
       nil -> {:ok, %{}}
       jkt -> if thumbprint?(jkt), do: {:ok, %{"dpop_jkt" => jkt}}, else: bad_jkt()

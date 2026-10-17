@@ -51,15 +51,28 @@ defmodule SakeDev.Router do
 
   get "/", do: SakeDev.Pages.home(conn)
 
-  get "/login", do: SakeDev.Pages.login(conn, safe_return_to(conn.query_params["return_to"]))
+  get "/login",
+    do:
+      SakeDev.Pages.login(
+        conn,
+        safe_return_to(conn.query_params["return_to"]),
+        nil,
+        conn.query_params["acr"] == "mfa"
+      )
 
+  # The sign-in records how it went (RFC 9470): "mfa" with the one-time
+  # code, "pwd" without, and when.
   post "/login" do
     return_to = safe_return_to(conn.body_params["return_to"])
 
     case SakeDev.Accounts.authenticate(conn.body_params["email"], conn.body_params["password"]) do
       {:ok, person} ->
+        acr = if conn.body_params["otp"] == SakeDev.Accounts.otp(), do: "mfa", else: "pwd"
+
         conn
         |> put_session(:user_id, person.id)
+        |> put_session(:acr, acr)
+        |> put_session(:auth_time, System.system_time(:second))
         |> redirect_to(return_to)
 
       :error ->

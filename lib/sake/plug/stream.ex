@@ -60,10 +60,11 @@ defmodule Sake.Plug.Stream do
 
   @asks ["elicitation", "sampling", "roots"]
 
-  # A call refused for its scopes is never streamed, whatever asked for a
-  # stream: the refusal is a plain JSON-RPC response with the usual status
-  # (a 403 with its challenge, for a client to step up), instead of a 200
-  # stream carrying the error as its only message.
+  # A call refused for its scopes, or for how the person signed in, is
+  # never streamed, whatever asked for a stream: the refusal is a plain
+  # JSON-RPC response with the usual status (a 403 or a 401 with its
+  # challenge, for a client to step up), instead of a 200 stream carrying
+  # the error as its only message.
   defp stream?(method, params, ctx),
     do: not refused?(method, params, ctx) and streamed?(method, params, ctx)
 
@@ -85,7 +86,7 @@ defmodule Sake.Plug.Stream do
 
   defp refused?(method, params, ctx) do
     case component(method, params, ctx) do
-      {:ok, spec} -> not Sake.Server.allowed?(spec, ctx)
+      {:ok, spec} -> Sake.Server.permit(spec, ctx) != :ok
       _ -> false
     end
   end
@@ -226,6 +227,9 @@ defmodule Sake.Plug.Stream do
       {:forbidden, scopes} ->
         %{"jsonrpc" => "2.0", "id" => id, "error" => forbidden(scopes)}
 
+      {:insufficient_user_authentication, _refusal} ->
+        %{"jsonrpc" => "2.0", "id" => id, "error" => insufficient_user_authentication()}
+
       :noreply ->
         JSONRPC.result(id, %{})
 
@@ -247,6 +251,14 @@ defmodule Sake.Plug.Stream do
 
   def forbidden(_scopes),
     do: %{"code" => JSONRPC.code(:invalid_request), "message" => "Insufficient scope"}
+
+  @doc false
+  # The error of a refusal for how the person signed in (RFC 9470).
+  def insufficient_user_authentication,
+    do: %{
+      "code" => JSONRPC.code(:invalid_request),
+      "message" => "Insufficient user authentication"
+    }
 
   @doc false
   def progress(token, current, total, message) do
@@ -350,6 +362,9 @@ defmodule Sake.Plug.Stream do
   end
 
   defp refusal_outcome({:forbidden, scopes}), do: {:forbidden, scopes}
+
+  defp refusal_outcome({:insufficient_user_authentication, refusal}),
+    do: {:insufficient_user_authentication, refusal}
 
   defp refusal_outcome({:error, code, message}),
     do: {:error, %{"code" => code, "message" => message}}

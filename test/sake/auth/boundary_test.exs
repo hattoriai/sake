@@ -67,6 +67,7 @@ defmodule Sake.Auth.BoundaryTest do
   # `Plug.Conn`, nor the plugs that parse a request or check its CSRF
   # token. Its compiled imports say what it calls.
   @cores [
+    Sake.Auth.Authentication,
     Sake.Auth.AuthorizationRequest,
     Sake.Auth.Grant,
     Sake.Auth.TokenGrants,

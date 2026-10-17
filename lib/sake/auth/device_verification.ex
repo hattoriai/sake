@@ -22,12 +22,21 @@ defmodule Sake.Auth.DeviceVerification do
   expires after ten minutes, and the host's CSRF token when its pipeline
   runs `Plug.CSRFProtection`, as `Sake.Auth.Authorize`'s form does. The
   pages refuse to be framed.
+
+  A device request may say how the person must have signed in (RFC
+  9470: `acr_values`, `max_age`). Once the person submits its code, a
+  sign-in that does not meet it (by the subject module's
+  `authentication/1`) is sent to `reauthenticate/2`, with the conn's
+  query string set to the code (`user_code=...`), so that coming back to
+  `request_path?query_string` shows the form with the code filled in;
+  the grant stays pending meanwhile. The approval records the `acr` and
+  `auth_time` of the person's sign-in, which the tokens carry.
   """
   @behaviour Plug
   import Plug.Conn
 
   alias Sake.Auth
-  alias Sake.Auth.{Device, Page}
+  alias Sake.Auth.{Device, Page, Subject}
 
   # The adapter: it reads the user code and the signed-in person, asks
   # `Sake.Auth.Device`, and renders the code entry form, the consent page
@@ -124,7 +133,9 @@ defmodule Sake.Auth.DeviceVerification do
   end
 
   defp prompted(conn, config, principal, user_code) do
-    case Device.prompt(config, user_code, principal) do
+    authentication = Subject.authentication(config.subject, conn)
+
+    case Device.prompt(config, user_code, principal, authentication) do
       {:consent, assigns} ->
         blob =
           Plug.Crypto.sign(Page.secret(config), @consent_salt, %{
@@ -141,6 +152,11 @@ defmodule Sake.Auth.DeviceVerification do
 
         Page.html(conn, 200, config.consent.render(assigns))
 
+      {:reauthenticate, requirement} ->
+        conn
+        |> back_to_code(user_code)
+        |> Page.reauthenticate(config, requirement)
+
       :error ->
         invalid(conn, config, principal, user_code)
 
@@ -148,6 +164,12 @@ defmodule Sake.Auth.DeviceVerification do
         Page.error(conn, config, 403, "Not allowed", description <> ". Nothing was authorized.")
     end
   end
+
+  # The code was posted; the URL to come back to after signing in again
+  # is the page that shows it in the form, as `verification_uri_complete`
+  # does.
+  defp back_to_code(conn, user_code) when is_binary(user_code),
+    do: %{conn | query_string: URI.encode_query(%{"user_code" => user_code})}
 
   defp invalid(conn, config, principal, user_code) do
     entry(
@@ -175,7 +197,9 @@ defmodule Sake.Auth.DeviceVerification do
   end
 
   defp outcome(conn, config, principal, user_code, "approve") do
-    case Device.decide(config, user_code, principal, :approve) do
+    authentication = Subject.authentication(config.subject, conn)
+
+    case Device.decide(config, user_code, principal, :approve, authentication) do
       :ok ->
         Page.error(conn, config, 200, "Device connected", "You can return to your device now.")
 

@@ -49,6 +49,10 @@ if Code.ensure_loaded?(Ecto.Migration) do
         # The thumbprint of the DPoP key the code is bound to (RFC 9449
         # §10), whose proof must come with the token request.
         add(:dpop_jkt, :string)
+        # How and when the person who approved it signed in (RFC 9470),
+        # which its tokens carry.
+        add(:acr, :string)
+        add(:auth_time, :utc_datetime)
         add(:expires_at, :utc_datetime, null: false)
         # A consumed code is kept until it expires, as the fence between
         # issuing its tokens and revoking its family on a replay.
@@ -88,6 +92,11 @@ if Code.ensure_loaded?(Ecto.Migration) do
         add(:resource, :text, null: false)
         add(:status, :string, null: false)
         add(:subject_id, :string)
+        # The request's acr_values and max_age (RFC 9470), and how and
+        # when the person who approved it signed in.
+        add(:extra, :map, null: false, default: %{})
+        add(:acr, :string)
+        add(:auth_time, :utc_datetime)
         add(:interval, :integer, null: false)
         add(:expires_at, :utc_datetime, null: false)
         add(:last_polled_at, :utc_datetime_usec)
@@ -116,6 +125,10 @@ if Code.ensure_loaded?(Ecto.Migration) do
         # The thumbprint of the DPoP key a token is bound to (RFC 9449
         # `cnf.jkt`); a bearer token has none.
         add(:jkt, :string)
+        # How and when the person signed in to approve the grant (RFC
+        # 9470); a refresh keeps them.
+        add(:acr, :string)
+        add(:auth_time, :utc_datetime)
       end
 
       create(unique_index(:sake_oauth_tokens, [:hash], prefix: prefix))

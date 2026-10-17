@@ -18,7 +18,9 @@ defmodule Sake.Tool do
   for a client that takes one, see `Sake.Tasks`), `ui` (a `Sake.UI`
   module: the app the host shows with the tool's result), `visibility`
   (`[:model, :app]` by default; `[:app]` for a tool only an app calls,
-  which a client without MCP Apps does not see).
+  which a client without MCP Apps does not see), `authentication`
+  (`[acr: ["mfa"], max_age: 300]`: how the person must have signed in
+  to call it, see "Step-up authentication" in `Sake.Server`).
   """
 
   alias Sake.Schema
@@ -66,6 +68,7 @@ defmodule Sake.Tool do
       input_schema: %{},
       annotations: %{},
       scopes: [],
+      authentication: nil,
       stream: false,
       ttl: nil,
       task: nil,
@@ -171,6 +174,8 @@ defmodule Sake.Tool do
       output_schema: output_schema,
       annotations: Map.new(opts[:annotations] || []),
       scopes: List.wrap(opts[:scope]),
+      authentication:
+        Sake.Auth.Authentication.requirement!(opts[:authentication], inspect(module)),
       stream: opts[:stream] || false,
       ttl: opts[:ttl],
       task: task_support!(module, opts[:task]),

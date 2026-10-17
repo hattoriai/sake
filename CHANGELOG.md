@@ -95,6 +95,40 @@ the token endpoint:
   only `client_id` and `request_uri`. `par: false` keeps them in the
   URL, unless the server requires pushed requests.
 
+Step-up on how the person signed in (#70, RFC 9470) adds to the
+records, the store and the client's errors. Nothing changes on the wire
+for a server that declares no `authentication:` and a client that sends
+no `acr_values` or `max_age`:
+
+- `Sake.Auth.Code`, `Sake.Auth.TokenRecord` and `Sake.Auth.DeviceGrant`
+  have `acr` and `auth_time` fields, and `Sake.Auth.DeviceGrant` an
+  `extra` map (the device request's `acr_values` and `max_age`, as
+  `Sake.Auth.PushedRequest`'s), which a store must keep.
+  `c:Sake.Auth.Store.decide_device_grant/3`'s approval is now
+  `{:approved, subject_id, scopes, %{acr: acr, auth_time: datetime}}`
+  (was `{:approved, subject_id, scopes}`), and sets both on the grant: a
+  store of your own needs the new shape. `Sake.Auth.Migration.up/1` adds
+  `acr` and `auth_time` to `sake_oauth_codes`, `sake_oauth_tokens` and
+  `sake_oauth_device_grants`, and `extra` to the last: an existing
+  database needs them (in a migration of your own, or `down/1` and
+  `up/1` again where losing the data does not matter).
+- The authorize endpoint, a pushed request and the device authorization
+  endpoint take `acr_values` and `max_age` (before, ignored as unknown
+  parameters): a `max_age` that is not a non-negative integer is
+  refused with `invalid_request`, and a person whose sign-in does not
+  meet them is sent to `c:Sake.Auth.Subject.reauthenticate/2`, or, by
+  default, shown the error page "Sign in again to continue". Without
+  `c:Sake.Auth.Subject.authentication/1` no sign-in meets them. A
+  subject module that already defines `authentication/1` or
+  `reauthenticate/2` for something else must rename them.
+- `Sake.Client` without `auth:` returns a 401 whose challenge is
+  `insufficient_user_authentication` as
+  `{:error, {:insufficient_user_authentication, challenge}}` (was
+  `{:error, {:unauthorized, challenge}}`), and with `auth:` steps up on
+  it (below) instead of trying the refresh token and the whole flow. A
+  machine grant ends with `{:error, {:auth,
+  {:insufficient_user_authentication, challenge}}}`.
+
 ### Authorization
 
 - The device authorization grant (RFC 8628), for a CLI, a headless agent
@@ -135,6 +169,27 @@ the token endpoint:
   `require_pushed_authorization_requests`. Without `par:` nothing
   changes. See "Pushed authorization requests (PAR)" in
   `guides/authorization.md`.
+- Step-up authentication (RFC 9470). Two optional callbacks on the
+  subject module:
+  `authentication/1` says how and when the signed-in person signed in
+  (`%{acr: acr, auth_time: datetime}`, by default both `nil`; Sake runs
+  no MFA itself), and `reauthenticate/2` sends them to sign in again, or
+  to do MFA, and back to the current URL (by default an error page).
+  The authorize endpoint, a pushed request (the `request_uri` is kept for
+  the return) and the device verification page (back to the page with
+  the code filled in) check a request's `acr_values` (any one of them)
+  and `max_age` (seconds; `0` is a sign-in within the last minute)
+  against it before anything is decided. The code and the device grant
+  carry the approval's `acr` and `auth_time` into the tokens, and a
+  refresh keeps them: a refresh is no new sign-in. `acr_values: [...]`
+  in the auth config lists the classes the host's login offers: the
+  metadata says `acr_values_supported`, a request's values are narrowed
+  to them, and one that names none is `invalid_request`.
+  `Sake.Auth.External` reads the `acr` and `auth_time` claims of JWT,
+  introspection and callback tokens into `Sake.Auth.TokenRecord`. See
+  "Step-up authentication: MFA for a dangerous tool" in
+  `guides/authorization.md`, and "Step-up authentication: the claims to
+  issue" in `guides/external_auth.md`.
 
 ### Client
 
@@ -160,6 +215,14 @@ the token endpoint:
 - `Sake.Client.Auth`'s `static: true`, which `Sake.Test` uses, is a
   documented option: the token the `:store` holds is sent as it is, and
   a 401 or a 403 comes back to the caller instead of running the flow.
+- `Sake.Client.Auth` steps up on a 401 `insufficient_user_authentication`
+  (RFC 9470): the code flow (pushed or not) or the device flow runs again
+  with the challenge's `acr_values` and `max_age`, the scopes asked for
+  so far and any the challenge names, once for one request (a DPoP nonce
+  retry does not count); a sign-in still refused comes back as
+  `{:error, {:insufficient_user_authentication, challenge}, session}`.
+  `Sake.Auth.Challenge` has `acr_values` and `max_age`. See "Step-up on
+  how the person signed in" in `guides/client.md`.
 
 ### Server
 
@@ -168,6 +231,22 @@ the token endpoint:
   JSON, with `structuredContent` unchanged: the model reads a summary
   while an MCP App renders the full data. Without `text:` nothing
   changes. See "Output and results" in `guides/tools.md`.
+- `authentication: [acr: ["mfa"], max_age: 300]` on a tool, a resource
+  or a prompt (and on `use Sake.Server`, for all its components, mounted
+  ones included) asks how the token's person signed in (RFC 9470): with
+  one of those authentication context classes, at most that many seconds
+  ago. A token that does not meet it gets a 401 with `Bearer` (or
+  `DPoP`) `error="insufficient_user_authentication"`, `acr_values` and
+  `max_age`, built as a `Sake.Auth.Challenge` and sent by `Sake.Plug` as
+  `insufficient_scope` is; one that lacks the component's scopes as well
+  gets that challenge with their `scope`, so one new grant covers both.
+  The components stay listed, and an endpoint without authorization is
+  not gated. `Sake.Middleware.require_authentication/2` asks for a
+  requirement that depends on the arguments, and the halt reason
+  `{:insufficient_user_authentication, requirement}` is the same
+  refusal. `Sake.Test.connect/2` and `Sake.Test.access_token/1` take
+  `acr:` and `auth_time:`. See "Step-up authentication" in
+  `guides/tools.md`.
 
 ### Security
 

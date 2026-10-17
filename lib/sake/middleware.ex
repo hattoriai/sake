@@ -104,6 +104,11 @@ defmodule Sake.Middleware do
       client can step up to them.
     * `:forbidden` — a 403 (on HTTP) with no challenge, for a refusal no
       scope would lift.
+    * `{:insufficient_user_authentication, %{acr_values: [acr], max_age:
+      seconds | nil}}` — the answer for a sign-in too weak or too old
+      (RFC 9470): on HTTP a 401 whose `insufficient_user_authentication`
+      challenge carries `acr_values` and `max_age`, so the client can have
+      the person sign in again. `require_authentication/2` returns it.
     * `{:error, message}` — a `-32600` error with `message`.
     * `{:tool_error, message}` — on `:before_call` and `:after_call`, a
       tool result with `isError: true` and `message`, which the model
@@ -122,6 +127,20 @@ defmodule Sake.Middleware do
   and the request's `method`, `component`, `era`, `protocol_version`
   and `client_name`. With OpenTelemetry, the request's span gets
   `sake.middleware.event` and `sake.middleware.plug`.
+
+  ## Step-up authentication
+
+  A tool, resource or prompt declares how the person must have signed in
+  with `authentication:` (see "Step-up authentication" in
+  `Sake.Server`). When that depends on the arguments, a `:before_call`
+  (or `:before_read`, `:before_get`) plug asks for it with
+  `require_authentication/2`:
+
+      def call(%{tool: %{name: "transfer"}, arguments: %{amount: amount}} = payload, _opts)
+          when amount > 1_000,
+          do: Sake.Middleware.require_authentication(payload, acr: ["mfa"], max_age: 300)
+
+      def call(payload, _opts), do: {:cont, payload}
 
   See `guides/middleware.md` for worked examples.
   """
@@ -151,6 +170,8 @@ defmodule Sake.Middleware do
           :not_found
           | :forbidden
           | {:forbidden, [String.t()]}
+          | {:insufficient_user_authentication,
+             %{acr_values: [String.t()], max_age: non_neg_integer() | nil}}
           | {:error, String.t()}
           | {:tool_error, String.t()}
           | term()
@@ -173,4 +194,29 @@ defmodule Sake.Middleware do
   @doc "The events a server can declare middleware for."
   @spec events() :: [event()]
   def events, do: @events
+
+  @doc """
+  Continues with `payload` when the request's token says its person
+  signed in as `requirement` asks (`acr: ["mfa"]`, any one of the list,
+  and `max_age: seconds`, either optional), and halts with
+  `{:insufficient_user_authentication, ...}` otherwise, for a 401 the
+  client can step up from. A request without a token (an endpoint
+  without authorization) is not gated, as for `authentication:`.
+  """
+  @spec require_authentication(payload(), keyword()) :: {:cont, payload()} | {:halt, reason()}
+  def require_authentication(%{ctx: ctx} = payload, requirement) do
+    requirement =
+      Sake.Auth.Authentication.requirement!(
+        requirement,
+        "Sake.Middleware.require_authentication/2"
+      )
+
+    case Sake.Server.authenticate(requirement, ctx) do
+      :ok ->
+        {:cont, payload}
+
+      {:insufficient_user_authentication, refusal} ->
+        {:halt, {:insufficient_user_authentication, Map.delete(refusal, :scopes)}}
+    end
+  end
 end

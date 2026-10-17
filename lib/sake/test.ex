@@ -47,6 +47,11 @@ defmodule Sake.Test do
       principals are different people; `nil` makes it a machine client's
       token (the client credentials grant), owned by `:client_id`.
     * `:client_id` — the token's client. Default `"sake-test"`.
+    * `:acr`, `:auth_time` — how and when the token's person signed in
+      (RFC 9470): the authentication context class and a `DateTime`, for
+      components with `authentication:`. Default `nil` (unknown), which
+      meets no requirement: such a call answers
+      `{:error, {:insufficient_user_authentication, challenge}}`.
     * `:reraise` — whether an exception raised by a component fails the
       test with that exception (the default), or becomes the error result
       a client would get (`false`).
@@ -264,7 +269,9 @@ defmodule Sake.Test do
   Options: `subject:` (required: the ID your subject module's `fetch/1`
   takes, or `nil` for a machine client's token), `client_id:` (default
   `"sake-test"`; a machine client's must be registered, see
-  `Sake.Auth.Clients.create/2`), `scopes:` (default none), `resource:`
+  `Sake.Auth.Clients.create/2`), `scopes:` (default none), `acr:` and
+  `auth_time:` (how and when the person signed in, RFC 9470; default
+  unknown), `resource:`
   (the endpoint's URL, which the token is for; default
   `"http://www.example.com/mcp"`, the endpoint of a test request at
   `/mcp`).
@@ -283,7 +290,9 @@ defmodule Sake.Test do
       subject_id: opts[:subject] && to_string(opts[:subject]),
       scopes: opts[:scopes] || [],
       resource: opts[:resource] || @origin <> "/mcp",
-      jkt: jkt
+      jkt: jkt,
+      acr: opts[:acr],
+      auth_time: opts[:auth_time] && DateTime.truncate(opts[:auth_time], :second)
     })
   end
 
@@ -299,7 +308,9 @@ defmodule Sake.Test do
           kind: :access,
           client_id: opts[:client_id] || "sake-test",
           subject_id: subject(opts),
-          scopes: scopes
+          scopes: scopes,
+          acr: opts[:acr],
+          auth_time: opts[:auth_time]
         }
     end
   end

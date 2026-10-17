@@ -3,7 +3,10 @@ defmodule Sake.Resource do
   A resource: a fixed `uri:` or a template with `{name}` placeholders, and
   `read/2`. A template resource may implement `list/1` to enumerate concrete
   resources. `subscribe: true` lets clients subscribe to updates, which the
-  host announces with `Sake.Server.resource_updated/2`.
+  host announces with `Sake.Server.resource_updated/2`. `scope:` (one or
+  many) gates it by the token's scopes, and `authentication:`
+  (`[acr: ["mfa"], max_age: 300]`) by how the person signed in, for a
+  read (see "Step-up authentication" in `Sake.Server`).
   """
 
   @callback spec() :: Sake.Resource.Spec.t()
@@ -41,6 +44,7 @@ defmodule Sake.Resource do
       template: false,
       icons: [],
       scopes: [],
+      authentication: nil,
       subscribe: false,
       annotations: %{},
       ttl: nil,
@@ -153,6 +157,8 @@ defmodule Sake.Resource do
       mime_type: opts[:mime_type],
       icons: opts[:icons] || [],
       scopes: List.wrap(opts[:scope]),
+      authentication:
+        Sake.Auth.Authentication.requirement!(opts[:authentication], inspect(env.module)),
       subscribe: opts[:subscribe] || false,
       annotations: Map.new(opts[:annotations] || []),
       ttl: opts[:ttl],

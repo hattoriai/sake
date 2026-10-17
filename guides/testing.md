@@ -125,6 +125,22 @@ The token is a `Sake.Auth.TokenRecord` in `ctx.token`, as Sake's bearer
 check leaves it; nothing is stored, and `Sake.Auth` need not be
 configured.
 
+`acr:` and `auth_time:` say how and when the token's person signed in,
+for components with `authentication:` (see "Step-up authentication" in
+`guides/tools.md`). A token without them meets no requirement:
+
+```elixir
+client = connect(MyApp.MCP, scopes: ["repos:admin"], acr: "pwd", auth_time: DateTime.utc_now())
+assert {:error, {:insufficient_user_authentication, %Sake.Auth.Challenge{acr_values: ["mfa"]}}} =
+         call_tool(client, "delete_repo", %{"name" => "x"})
+
+client = connect(MyApp.MCP, scopes: ["repos:admin"], acr: "mfa", auth_time: DateTime.utc_now())
+assert {:ok, _} = call_tool(client, "delete_repo", %{"name" => "x"})
+```
+
+`Sake.Test.access_token/1` takes the same two, for a test through the
+whole stack.
+
 ## Answering the server
 
 `on_input:`, `sampling:` and `roots:` answer the server's elicitation,

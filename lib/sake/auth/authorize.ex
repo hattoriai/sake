@@ -32,12 +32,22 @@ defmodule Sake.Auth.Authorize do
   back with `invalid_request`. The consent form carries the request
   itself, so approving or denying needs the `request_uri` no more; a
   reload of the page after it was taken shows the error page.
+
+  A request may say how the person must have signed in (RFC 9470):
+  `acr_values` (space-separated, any one will do) and `max_age` (in
+  seconds), sent directly or pushed. Before anything is decided, the
+  subject module's `authentication/1` says how the signed-in person did;
+  when that does not meet the request, its `reauthenticate/2` sends them
+  to sign in again and back to this URL (a pushed request is kept for
+  the return, until it expires), or, without it, an error page says so.
+  The code carries the `acr` and `auth_time` of the approval into the
+  tokens. See `Sake.Auth.Subject`.
   """
   @behaviour Plug
   import Plug.Conn
 
   alias Sake.Auth
-  alias Sake.Auth.{AuthorizationRequest, Config, Grant, Page, PAR}
+  alias Sake.Auth.{Authentication, AuthorizationRequest, Config, Grant, Page, PAR, Subject}
 
   # The adapter: it reads the request and the signed-in person, asks
   # `Sake.Auth.AuthorizationRequest` and `Sake.Auth.Grant`, and renders
@@ -80,10 +90,14 @@ defmodule Sake.Auth.Authorize do
   # them to sign in.
   defp pushed(conn, config, p) do
     with {:ok, principal} <- config.subject.from_conn(conn),
-         {:ok, client, request} <- PAR.take(config, p["client_id"], p["request_uri"]) do
-      decided(conn, config, request, principal, Grant.decide(config, client, request, principal))
+         authentication = Subject.authentication(config.subject, conn),
+         {:ok, client, request} <-
+           PAR.take(config, p["client_id"], p["request_uri"], authentication) do
+      decision = Grant.decide(config, client, request, principal)
+      decided(conn, config, {request, authentication}, principal, decision)
     else
       :error -> sign_in(conn, config)
+      {:reauthenticate, requirement} -> Page.reauthenticate(conn, config, requirement)
       {:error, :request_uri} -> request_uri_error(conn, config)
       {:error, :client_mismatch} -> request_uri_error(conn, config)
       error -> client_error(conn, config, error)
@@ -144,17 +158,25 @@ defmodule Sake.Auth.Authorize do
 
   defp authenticated(conn, config, client, request) do
     case config.subject.from_conn(conn) do
-      {:ok, principal} ->
-        decided(
-          conn,
-          config,
-          request,
-          principal,
-          Grant.decide(config, client, request, principal)
-        )
+      {:ok, principal} -> signed_in(conn, config, client, request, principal)
+      :error -> sign_in(conn, config)
+    end
+  end
 
-      :error ->
-        sign_in(conn, config)
+  # RFC 9470: a request with `acr_values` or `max_age` the person's
+  # sign-in does not meet sends them to sign in again first; they come
+  # back to this URL.
+  defp signed_in(conn, config, client, request, principal) do
+    authentication = Subject.authentication(config.subject, conn)
+    requirement = Authentication.requested(request.extra)
+
+    case Authentication.check(authentication, requirement) do
+      :ok ->
+        decision = Grant.decide(config, client, request, principal)
+        decided(conn, config, {request, authentication}, principal, decision)
+
+      {:error, _reason} ->
+        Page.reauthenticate(conn, config, requirement)
     end
   end
 
@@ -168,12 +190,13 @@ defmodule Sake.Auth.Authorize do
     )
   end
 
-  defp decided(conn, config, _request, principal, {:issue, request}) do
-    {:ok, code} = Grant.issue(config, request, config.subject.id(principal))
+  # `asked` is the request as validated, and how the person signed in.
+  defp decided(conn, config, {_request, authentication}, principal, {:issue, request}) do
+    {:ok, code} = Grant.issue(config, request, config.subject.id(principal), authentication)
     redirect_code(conn, config, request, code)
   end
 
-  defp decided(conn, config, _request, principal, {:consent, %{request: request} = assigns}) do
+  defp decided(conn, config, _asked, principal, {:consent, %{request: request} = assigns}) do
     subject_id = config.subject.id(principal)
     blob = Plug.Crypto.sign(secret(config), @salt, %{request: request, subject_id: subject_id})
 
@@ -183,7 +206,7 @@ defmodule Sake.Auth.Authorize do
     html(conn, 200, config.consent.render(assigns))
   end
 
-  defp decided(conn, config, request, _principal, {:error, code, description}),
+  defp decided(conn, config, {request, _authentication}, _principal, {:error, code, description}),
     do: redirect_error(conn, config, request.redirect_uri, code, description, request.state)
 
   # ---- POST
@@ -209,8 +232,12 @@ defmodule Sake.Auth.Authorize do
     end
   end
 
+  # The code carries how the person signed in as they approve, read
+  # again: the session the form was posted from is theirs (its subject
+  # was checked), and what it says now is what the tokens should say.
   defp decision(conn, config, "approve", request, subject_id) do
-    {:ok, code} = Grant.approve(config, request, subject_id)
+    authentication = Subject.authentication(config.subject, conn)
+    {:ok, code} = Grant.approve(config, request, subject_id, authentication)
     redirect_code(conn, config, request, code)
   end
 
@@ -227,9 +254,14 @@ defmodule Sake.Auth.Authorize do
 
   # ---- codes
 
-  @doc "Issues a code for `request` (a map with client_id, redirect_uri, code_challenge, scopes, resource) and `subject_id`; returns the plain code."
-  @spec issue_code(Config.t(), map(), String.t()) :: String.t()
-  defdelegate issue_code(config, request, subject_id), to: Grant
+  @doc """
+  Issues a code for `request` (a map with client_id, redirect_uri,
+  code_challenge, scopes, resource) and `subject_id`; returns the plain
+  code. `authentication`, `%{acr: acr, auth_time: datetime}`, is how
+  the person signed in, which the code's tokens carry (RFC 9470).
+  """
+  @spec issue_code(Config.t(), map(), String.t(), map()) :: String.t()
+  defdelegate issue_code(config, request, subject_id, authentication \\ %{}), to: Grant
 
   # ---- responses
 

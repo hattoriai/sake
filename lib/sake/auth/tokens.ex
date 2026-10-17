@@ -11,8 +11,9 @@ defmodule Sake.Auth.Tokens do
   @doc """
   Issues and stores an access/refresh pair. `attrs`: client_id,
   subject_id, scopes, resource, family_id, and optionally `jkt` (the DPoP
-  key the access token is bound to) and `refresh_jkt` (the one the
-  refresh token is).
+  key the access token is bound to), `refresh_jkt` (the one the
+  refresh token is), and `acr` and `auth_time` (how and when the person
+  signed in, RFC 9470).
   """
   @spec issue_pair(Config.t(), map()) ::
           {String.t(), String.t(), %{access: TokenRecord.t(), refresh: TokenRecord.t()}}
@@ -38,6 +39,8 @@ defmodule Sake.Auth.Tokens do
       subject_id: attrs.subject_id,
       scopes: attrs.scopes,
       resource: attrs.resource,
+      acr: attrs[:acr],
+      auth_time: attrs[:auth_time],
       inserted_at: now
     }
 
@@ -66,7 +69,7 @@ defmodule Sake.Auth.Tokens do
   Issues and stores an access token alone, for the grants that get no
   refresh token (client credentials, JWT bearer); it is a family of its
   own. `attrs`: client_id, subject_id (nil for a machine client), scopes,
-  resource, and optionally `jkt`.
+  resource, and optionally `jkt`, `acr` and `auth_time`.
   """
   @spec issue_access(Config.t(), map()) :: {String.t(), TokenRecord.t()}
   def issue_access(config, attrs) do
@@ -84,6 +87,8 @@ defmodule Sake.Auth.Tokens do
       scopes: attrs.scopes,
       resource: attrs.resource,
       jkt: attrs[:jkt],
+      acr: attrs[:acr],
+      auth_time: attrs[:auth_time],
       inserted_at: now,
       expires_at: DateTime.add(now, config.access_token_ttl)
     }
