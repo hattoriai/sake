@@ -434,8 +434,9 @@ extension (`io.modelcontextprotocol/oauth-client-credentials`,
 `io.modelcontextprotocol/enterprise-managed-authorization`) in the
 client's capabilities: in every request's `_meta` on 2026-07-28 and in
 `initialize` on the legacy revisions, next to the tasks and MCP Apps
-extensions. `grant: :jwt_bearer` declares none, since the workload
-identity grant has no extension identifier, and neither does DPoP.
+extensions (`Sake.Protocol.auth_extension/1` gives the identifiers).
+`grant: :jwt_bearer` declares none, since the workload identity grant
+has no extension identifier, and neither does DPoP.
 
 None of these grants returns a refresh token. An expiring token is
 replaced by running the grant again (straight at the token endpoint it
@@ -529,20 +530,21 @@ authorization response), `:pkce_not_supported`, `:missing_iss`,
 ### Without `auth:`
 
 A 401 comes back to you as
-`{:error, {:unauthorized, %Sake.Client.Challenge{}}}`, and nothing else
+`{:error, {:unauthorized, %Sake.Auth.Challenge{}}}`, and nothing else
 happens — no browser opens that nobody asked for:
 
 ```elixir
 case Sake.Client.connect(url) do
   {:ok, session} -> session
-  {:error, {:unauthorized, %Sake.Client.Challenge{resource_metadata: url, scope: scopes}}} ->
+  {:error, {:unauthorized, %Sake.Auth.Challenge{resource_metadata: url, scope: scopes}}} ->
     # url is the protected resource metadata document; scopes is what the
     # server asks for.
     raise "authorization required at #{url} for #{Enum.join(scopes, " ")}"
 end
 ```
 
-`Sake.Client.Challenge` parses the `WWW-Authenticate` header (scheme,
-`resource_metadata`, `scope`, `error`, `error_description`, `realm`, and
-the `DPoP-Nonce` header as `nonce`). A
+`Sake.Auth.Challenge` (formerly `Sake.Client.Challenge`) parses the
+`WWW-Authenticate` header (scheme, `resource_metadata`, `scope`,
+`error`, `error_description`, `realm`, and the `DPoP-Nonce` header as
+`nonce`). A
 bearer token you obtained some other way goes in `headers:`.

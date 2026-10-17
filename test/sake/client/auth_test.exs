@@ -59,7 +59,7 @@ defmodule Sake.Client.AuthTest do
     test "a 401 comes back to the caller as a challenge", ctx do
       {_base, url} = serve(ctx, challenge_scope: "files:read")
 
-      assert {:error, {:unauthorized, %Client.Challenge{scope: ["files:read"]} = challenge}} =
+      assert {:error, {:unauthorized, %Sake.Auth.Challenge{scope: ["files:read"]} = challenge}} =
                Client.connect(url)
 
       assert challenge.resource_metadata =~ "/.well-known/oauth-protected-resource/mcp"
@@ -396,7 +396,7 @@ defmodule Sake.Client.AuthTest do
 
       assert {:ok, session} = Client.connect(url, auth: @auth)
 
-      assert {:error, {:insufficient_scope, %Client.Challenge{scope: ["admin"]}}, _session} =
+      assert {:error, {:insufficient_scope, %Sake.Auth.Challenge{scope: ["admin"]}}, _session} =
                Client.call_tool(session, "echo", %{})
 
       assert count(requests(), "GET", "/authorize") == 3

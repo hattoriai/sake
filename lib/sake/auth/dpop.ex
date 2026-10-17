@@ -260,7 +260,7 @@ defmodule Sake.Auth.DPoP do
 
   @doc "The secret of the server's nonces when the configuration requires them, else nil."
   @spec nonce_secret(Sake.Auth.Config.t() | Sake.Auth.External.t()) :: binary() | nil
-  def nonce_secret(%{dpop: %{nonce: true}}), do: Sake.Secret.fetch!()
+  def nonce_secret(%{dpop: %{nonce: true}, secret: secret}), do: secret
   def nonce_secret(_config), do: nil
 
   @doc """
@@ -270,9 +270,18 @@ defmodule Sake.Auth.DPoP do
   """
   @spec put_nonce(Plug.Conn.t(), Sake.Auth.Config.t() | Sake.Auth.External.t()) :: Plug.Conn.t()
   def put_nonce(conn, config) do
-    case nonce_secret(config) do
+    case current_nonce(config) do
       nil -> conn
-      secret -> put_resp_header(conn, "dpop-nonce", nonce(secret))
+      nonce -> put_resp_header(conn, "dpop-nonce", nonce)
+    end
+  end
+
+  @doc "The server's current nonce when the configuration requires them, else nil."
+  @spec current_nonce(Sake.Auth.Config.t() | Sake.Auth.External.t()) :: String.t() | nil
+  def current_nonce(config) do
+    case nonce_secret(config) do
+      nil -> nil
+      secret -> nonce(secret)
     end
   end
 

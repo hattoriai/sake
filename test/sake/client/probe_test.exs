@@ -202,7 +202,7 @@ defmodule Sake.Client.ProbeTest do
       |> Plug.Conn.resp(401, "")
     end)
 
-    assert {:error, {:unauthorized, %Sake.Client.Challenge{scope: ["a"]}}} = Client.connect(url)
+    assert {:error, {:unauthorized, %Sake.Auth.Challenge{scope: ["a"]}}} = Client.connect(url)
   end
 
   test "method not found or invalid params from discover means legacy, over 200 or 4xx", %{

@@ -16,7 +16,8 @@ defmodule Sake.Test.Endpoint do
   # A legacy session lives where it does on HTTP: in the signed session
   # ID (`Sake.Server.Session`), which the client keeps.
 
-  alias Sake.Client.{Challenge, Session, Transport}
+  alias Sake.Auth.Challenge
+  alias Sake.Client.{Session, Transport}
   alias Sake.{Context, JSONRPC, Protocol, Trace}
   alias Sake.Plug.{Stream, Streams}
   alias Sake.Server.{Dispatch, Legacy}

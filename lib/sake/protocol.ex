@@ -1,6 +1,7 @@
 defmodule Sake.Protocol do
   @moduledoc """
-  The protocol revisions Sake speaks and the `_meta` keys the protocol reserves.
+  The protocol revisions Sake speaks, the `_meta` keys the protocol
+  reserves, and the identifiers of the authorization extensions.
 
   Revision `2026-07-28` is the *modern* era: stateless, one request at a time,
   the protocol version and the client capabilities in every request. The
@@ -51,4 +52,15 @@ defmodule Sake.Protocol do
 
   @spec meta(atom()) :: String.t()
   def meta(key), do: Map.fetch!(@meta, key)
+
+  @doc """
+  The identifier of an authorization extension: `:client_credentials`
+  (`io.modelcontextprotocol/oauth-client-credentials`) or `:enterprise`
+  (`io.modelcontextprotocol/enterprise-managed-authorization`).
+  """
+  @spec auth_extension(:client_credentials | :enterprise) :: String.t()
+  def auth_extension(:client_credentials), do: "io.modelcontextprotocol/oauth-client-credentials"
+
+  def auth_extension(:enterprise),
+    do: "io.modelcontextprotocol/enterprise-managed-authorization"
 end

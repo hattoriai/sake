@@ -4,7 +4,8 @@ defmodule Sake.MiddlewareTest do
   import ExUnit.CaptureLog
   import Sake.Test
 
-  alias Sake.Client.{Challenge, ToolResult}
+  alias Sake.Auth.Challenge
+  alias Sake.Client.ToolResult
   alias SakeTest.{LegacyClient, ModernClient}
 
   # The principal (`ctx.scope`) drives the plugs: `plan:` for the plan

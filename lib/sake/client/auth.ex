@@ -45,6 +45,10 @@ defmodule Sake.Client.Auth do
     * `:store` — `{module, arg}`, a `Sake.Client.Auth.Store` that keeps
       tokens and dynamic registrations across sessions. Without one, they
       live in the session only.
+    * `:static` — `true` sends the token the `:store` holds as it is,
+      for a token issued some other way (a test's, say): it is never
+      refreshed, and a 401 or a 403 comes back to the caller instead of
+      running the flow. Default `false`.
 
   Machine grants, for a client with no person at a browser, run in place
   of the authorization code flow, with the same discovery and the same
@@ -124,13 +128,12 @@ defmodule Sake.Client.Auth do
   expired token is replaced by running the grant again.
 
   Without `auth:`, a 401 is returned as
-  `{:error, {:unauthorized, %Sake.Client.Challenge{}}}` and the caller
+  `{:error, {:unauthorized, %Sake.Auth.Challenge{}}}` and the caller
   handles it. A failure inside the flow is `{:error, {:auth, reason}}`.
   """
 
-  alias Sake.Auth.{DPoP, JWT}
+  alias Sake.Auth.{Challenge, DPoP, JWT}
   alias Sake.Client.Auth.{Browser, Discovery, Enterprise, Grant, Registration}
-  alias Sake.Client.Challenge
 
   @type t :: %__MODULE__{}
 
@@ -141,6 +144,30 @@ defmodule Sake.Client.Auth do
   @expiry_margin 30
 
   @grants [:authorization_code, :client_credentials, :jwt_bearer, :enterprise]
+
+  # ---- the interface
+  #
+  # What `Sake.Client` calls (and `Sake.Client.Transport`, for the
+  # headers and the nonces), and all it calls; each is `@doc false`,
+  # since only the options above are for host code:
+  #
+  #   * `new/3` — the state, from the `auth:` options, when the client
+  #     connects (the client keeps nil without them, which the next four
+  #     take as well, and do nothing with).
+  #   * `extensions/1` — the authorization extensions the client
+  #     declares in its capabilities, as atoms.
+  #   * `headers/4` — a request's headers with the token, and a DPoP
+  #     proof for it.
+  #   * `put_nonce/3` — keeps a server's DPoP nonce, from a challenge or
+  #     a `DPoP-Nonce` header.
+  #   * `fresh/1` — before a request: the token refreshed, or the grant
+  #     run again, when it is about to expire.
+  #   * `unauthorized/3` — on a 401 challenge: the refresh token, else
+  #     the flow; `:exhausted` with `:static`.
+  #   * `insufficient_scope/2` — on a 403 challenge: the flow again for
+  #     more scopes (step-up); `:exhausted` when it would not help.
+  #
+  # The challenges are `Sake.Auth.Challenge`s, parsed by the transport.
 
   defstruct [
     :url,
@@ -198,8 +225,6 @@ defmodule Sake.Client.Auth do
       store: opts[:store],
       dpop: dpop(Keyword.get(opts, :dpop, :auto)),
       req: defaults[:req] || [],
-      # `Sake.Test`'s: the stored token is used as it is, and a 401 or a
-      # 403 comes back to the caller instead of running the flow.
       static: opts[:static] == true
     }
 
@@ -211,14 +236,13 @@ defmodule Sake.Client.Auth do
 
   @doc false
   # The authorization extension the grant belongs to, for the client's
-  # capabilities. A workload's JWT grant and DPoP define none: they are
-  # negotiated in the OAuth metadata alone.
-  @spec extensions(t() | nil) :: map()
-  def extensions(%__MODULE__{grant: :client_credentials}),
-    do: %{Sake.Auth.extension(:client_credentials) => %{}}
+  # capabilities (`Sake.Client` calls it). A workload's JWT grant and DPoP
+  # define none: they are negotiated in the OAuth metadata alone.
+  @spec extensions(t() | nil) :: [:client_credentials | :enterprise]
+  def extensions(%__MODULE__{grant: grant}) when grant in [:client_credentials, :enterprise],
+    do: [grant]
 
-  def extensions(%__MODULE__{grant: :enterprise}), do: %{Sake.Auth.extension(:enterprise) => %{}}
-  def extensions(_auth), do: %{}
+  def extensions(_auth), do: []
 
   defp dpop(:auto), do: :auto
   defp dpop(false), do: false
@@ -409,7 +433,7 @@ defmodule Sake.Client.Auth do
     "#{uri.scheme}://#{uri.host}:#{uri.port}"
   end
 
-  # ---- what Sake.Client calls
+  # ---- before a request, and on a 401 or a 403
 
   @doc false
   @spec fresh(t()) :: t()

@@ -717,8 +717,8 @@ defmodule Sake.Auth.ExternalTest do
       assert conn.status == 200
 
       extensions = ModernClient.json(conn)["result"]["capabilities"]["extensions"]
-      assert Map.has_key?(extensions, Sake.Auth.extension(:client_credentials))
-      assert Map.has_key?(extensions, Sake.Auth.extension(:enterprise))
+      assert Map.has_key?(extensions, Sake.Protocol.auth_extension(:client_credentials))
+      assert Map.has_key?(extensions, Sake.Protocol.auth_extension(:enterprise))
     end
 
     test "by default an external endpoint declares no authorization extension" do
@@ -726,8 +726,8 @@ defmodule Sake.Auth.ExternalTest do
       start_sake(idp: jwt_config(jwk))
       conn = call(:idp, jwt(key), "server/discover")
       extensions = ModernClient.json(conn)["result"]["capabilities"]["extensions"]
-      refute Map.has_key?(extensions, Sake.Auth.extension(:client_credentials))
-      refute Map.has_key?(extensions, Sake.Auth.extension(:enterprise))
+      refute Map.has_key?(extensions, Sake.Protocol.auth_extension(:client_credentials))
+      refute Map.has_key?(extensions, Sake.Protocol.auth_extension(:enterprise))
     end
 
     test "without any authorization server, there is no protected resource" do

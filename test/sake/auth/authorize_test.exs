@@ -238,7 +238,7 @@ defmodule Sake.Auth.AuthorizeTest do
       def render_error(assigns), do: "ERR #{assigns.message}"
     end
 
-    :persistent_term.put({Sake, :auth}, %{Sake.Auth.config() | consent: Plain})
+    :persistent_term.put({Sake.Auth, :config}, %{Sake.Auth.config() | consent: Plain})
     client = public_client(Sake.Auth.config())
     conn = get(params(client))
     assert conn.resp_body =~ "PLAIN Test CLI issues:read"

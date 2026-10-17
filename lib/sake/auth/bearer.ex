@@ -25,13 +25,16 @@ defmodule Sake.Auth.Bearer do
   # store, or an external authorization server's (`auth: name`), which
   # `Sake.Auth.External` verifies. Everything else here is the same for
   # both: the schemes, the DPoP binding, the challenges.
+  #
+  # A refusal is a `Sake.Auth.Challenge`; `Sake.Plug` sends it, with the
+  # JSON-RPC error of an MCP endpoint as the body.
 
   import Plug.Conn
 
   alias Sake.Auth
-  alias Sake.Auth.{Config, DPoP, External, Resource, Tokens}
+  alias Sake.Auth.{Challenge, Config, DPoP, External, Resource, Tokens}
 
-  @spec check(Plug.Conn.t(), map()) :: {:ok, Plug.Conn.t()} | {:error, Plug.Conn.t()}
+  @spec check(Plug.Conn.t(), map()) :: {:ok, Plug.Conn.t()} | {:error, Challenge.t()}
   def check(conn, plug_opts) do
     config = config(plug_opts.auth)
     resource = Resource.canonical(conn, plug_opts)
@@ -190,23 +193,30 @@ defmodule Sake.Auth.Bearer do
   defp nonce(conn, config, :dpop), do: DPoP.put_nonce(conn, config)
   defp nonce(conn, _config, :bearer), do: conn
 
+  # The challenges go out in order, the one with the error first; a
+  # `use_dpop_nonce` error comes with the nonce to use.
   defp unauthorized(conn, config, error) do
-    params = [
-      ~s(resource_metadata="#{Resource.metadata_url(conn)}"),
-      ~s(scope="#{Resource.scopes_string(config)}")
-    ]
+    metadata = Resource.metadata_url(conn)
+    scopes = Resource.scopes_string(config)
+    params = [~s(resource_metadata="#{metadata}"), ~s(scope="#{scopes}")]
+    [first | _] = headers = challenges(config, params, error)
 
-    conn =
+    {code, description} =
       case error do
-        {:dpop, "use_dpop_nonce", _description} -> DPoP.put_nonce(conn, config)
-        _ -> conn
+        {_scheme, code, description} -> {code, description}
+        nil -> {nil, nil}
       end
 
-    conn
-    |> prepend_resp_headers(
-      for(c <- challenges(config, params, error), do: {"www-authenticate", c})
-    )
-    |> Sake.Plug.send_error(401, nil, Sake.JSONRPC.code(:invalid_request), "Unauthorized")
+    %Challenge{
+      status: 401,
+      www_authenticate: headers,
+      scheme: first |> String.split(" ", parts: 2) |> hd(),
+      resource_metadata: metadata,
+      scope: String.split(scopes, " ", trim: true),
+      error: code,
+      error_description: description,
+      nonce: if(code == "use_dpop_nonce", do: DPoP.current_nonce(config))
+    }
   end
 
   defp challenges(%{dpop: false}, params, error), do: [challenge(:bearer, params, error)]
@@ -240,15 +250,25 @@ defmodule Sake.Auth.Bearer do
   The 403 challenge for a component the token's scopes do not cover, in
   the scheme the token came with.
   """
-  @spec insufficient_scope(Plug.Conn.t(), [String.t()]) :: Plug.Conn.t()
+  @spec insufficient_scope(Plug.Conn.t(), [String.t()]) :: Challenge.t()
   def insufficient_scope(conn, scopes) do
+    metadata = Resource.metadata_url(conn)
+
     params = [
       ~s(error="insufficient_scope"),
       ~s(scope="#{Enum.join(scopes, " ")}"),
-      ~s(resource_metadata="#{Resource.metadata_url(conn)}")
+      ~s(resource_metadata="#{metadata}")
     ]
 
     scheme = if conn.assigns[:sake_dpop], do: :dpop, else: :bearer
-    put_resp_header(conn, "www-authenticate", challenge(scheme, params, nil))
+
+    %Challenge{
+      status: 403,
+      www_authenticate: [challenge(scheme, params, nil)],
+      scheme: if(scheme == :dpop, do: "DPoP", else: "Bearer"),
+      resource_metadata: metadata,
+      scope: scopes,
+      error: "insufficient_scope"
+    }
   end
 end

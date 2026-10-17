@@ -1,25 +1,24 @@
 defmodule Sake.Auth.Token do
-  @moduledoc """
-  The token endpoint: the authorization code grant with PKCE, refresh
-  token rotation with reuse detection, the client credentials grant for
-  machine clients, and the JWT bearer grant (RFC 7523) for JWTs from a
-  `Sake.Auth.TrustedIssuer`: an enterprise ID-JAG, or a workload identity
-  token.
-
-  The last two issue an access token alone. A machine client asks again
-  with its credentials when it needs a new one (RFC 6749 §4.4.3), and a
-  JWT grant goes back through its issuer, so that the issuer's policy
-  (a person removed from the directory, a revoked workload) applies at
-  every renewal rather than only at the first.
-
-  A token request with a DPoP proof (RFC 9449) gets tokens bound to the
-  proof's key: `token_type` is `DPoP`, and the access token is accepted
-  only with a proof made with the same key. A public client's refresh
-  token is bound to it too, so refreshing needs a proof with that key;
-  a confidential client's is bound to its credentials already (RFC 9449
-  §5), and each refresh binds the new access token to whichever key the
-  proof that comes with it shows.
-  """
+  @moduledoc false
+  # The token endpoint: the authorization code grant with PKCE, refresh
+  # token rotation with reuse detection, the client credentials grant for
+  # machine clients, and the JWT bearer grant (RFC 7523) for JWTs from a
+  # `Sake.Auth.TrustedIssuer`: an enterprise ID-JAG, or a workload identity
+  # token.
+  #
+  # The last two issue an access token alone. A machine client asks again
+  # with its credentials when it needs a new one (RFC 6749 §4.4.3), and a
+  # JWT grant goes back through its issuer, so that the issuer's policy
+  # (a person removed from the directory, a revoked workload) applies at
+  # every renewal rather than only at the first.
+  #
+  # A token request with a DPoP proof (RFC 9449) gets tokens bound to the
+  # proof's key: `token_type` is `DPoP`, and the access token is accepted
+  # only with a proof made with the same key. A public client's refresh
+  # token is bound to it too, so refreshing needs a proof with that key;
+  # a confidential client's is bound to its credentials already (RFC 9449
+  # §5), and each refresh binds the new access token to whichever key the
+  # proof that comes with it shows.
   @behaviour Plug
   import Plug.Conn
 

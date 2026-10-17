@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### Breaking
+
+Authorization now depends on nothing else in Sake (#66): the rest of
+Sake calls `Sake.Auth` and `Sake.Client.Auth`, never the other way
+round, and a test fails on any call out of them. Nothing changes on the
+wire: the 401 and 403 responses are the same bytes.
+
+- `Sake.Client.Challenge` is now `Sake.Auth.Challenge`, a parsed
+  `WWW-Authenticate` challenge on the client and the challenge an
+  endpoint refuses a token with on the server (`status`,
+  `www_authenticate`). Match `%Sake.Auth.Challenge{}` in place of
+  `%Sake.Client.Challenge{}`; the old name is gone.
+- `Sake.Auth.extension/1` is now `Sake.Protocol.auth_extension/1`.
+- `Sake.Auth.Token`, `Sake.Auth.DCR`, `Sake.Auth.Revoke` and
+  `Sake.Auth.CIMD` are internal (`@moduledoc false`): mount the token,
+  registration and revocation endpoints with `Sake.Router` or
+  `Sake.Auth.RouterPlug`. The public modules are listed in the
+  `Sake.Auth` documentation.
+- `Sake` reads the signing secret (`secret_key_base:`, else
+  `config :sake, :secret_key_base`) once, when it starts with `auth:`
+  or `external_auth:`, and keeps it in the configuration (the new
+  `secret` field of `Sake.Auth.Config` and `Sake.Auth.External`).
+  Before, the authorize page and the DPoP nonces read it at every
+  request, so a secret set in the application environment after `Sake`
+  started was picked up; now it must be there when `Sake` starts.
+- `Sake` starts authorization as one child, `Sake.Auth.Supervisor`, in
+  place of the store, the CIMD cache, the replay table and the
+  introspection cache side by side, and keeps its configuration under
+  the `persistent_term` keys `{Sake.Auth, :config}` and
+  `{Sake.Auth.External, :configs}` (were `{Sake, :auth}` and
+  `{Sake, :external_auth}`). Code that read or wrote those keys, or
+  looked for the processes under `Sake.Supervisor`, needs the new ones.
+
+### Client
+
+- `Sake.Client.Auth`'s `static: true`, which `Sake.Test` uses, is a
+  documented option: the token the `:store` holds is sent as it is, and
+  a 401 or a 403 comes back to the caller instead of running the flow.
+
 ### Server
 
 - A tool's `{:ok, map_or_list, text: text}` sends `text` (a string or a

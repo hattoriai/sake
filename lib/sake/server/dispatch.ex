@@ -116,12 +116,14 @@ defmodule Sake.Server.Dispatch do
   # which is not this endpoint's to advertise. An endpoint on an external
   # authorization server declares what its configuration says.
   def auth_extensions(%Context{conn_assigns: %{sake_auth: true}}),
-    do: Sake.Auth.extensions(Sake.Auth.config())
+    do: Sake.Auth.config() |> Sake.Auth.extensions() |> extension_map()
 
   def auth_extensions(%Context{conn_assigns: %{sake_auth: name}}) when name not in [nil, false],
-    do: Sake.Auth.External.extensions(Sake.Auth.External.fetch!(name))
+    do: name |> Sake.Auth.External.fetch!() |> Sake.Auth.External.extensions() |> extension_map()
 
   def auth_extensions(_ctx), do: %{}
+
+  defp extension_map(names), do: Map.new(names, &{Protocol.auth_extension(&1), %{}})
 
   # ---- lists
 

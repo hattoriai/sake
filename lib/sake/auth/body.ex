@@ -1,4 +1,4 @@
-defmodule Sake.Plug.Body do
+defmodule Sake.Auth.Body do
   @moduledoc false
   # The JSON body of a request. A Phoenix endpoint's `Plug.Parsers` (the
   # generated `:json` parser with `pass: ["*/*"]`) reads and decodes the
@@ -7,6 +7,9 @@ defmodule Sake.Plug.Body do
   # (an array, for a batch) is under the `"_json"` key. When no parser ran,
   # or a parser let the content type pass without reading it (the params
   # are then an empty map), Sake reads and decodes the raw body itself.
+  #
+  # `Sake.Plug` reads an MCP request with it, and `Sake.Auth.DCR` a
+  # registration.
 
   import Plug.Conn
 

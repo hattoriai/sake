@@ -15,7 +15,8 @@ defmodule Sake.Client.Transport do
   # dropped, which tells the server the call was abandoned, and the throw
   # carries on from `post/3`, out of Req.
 
-  alias Sake.Client.{Auth, Challenge, Inputs, Session}
+  alias Sake.Auth.Challenge
+  alias Sake.Client.{Auth, Inputs, Session}
   alias Sake.JSONRPC
   alias Sake.Plug.Headers
   alias Sake.Protocol

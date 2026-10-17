@@ -97,11 +97,11 @@ A `Sake.Auth.Client` comes from one of three places (`kind:` records
 which):
 
 - **Client ID Metadata Document (CIMD)** — the client's `client_id` is an
-  HTTPS URL; `Sake.Auth.CIMD.fetch/2` downloads the JSON document there and
+  HTTPS URL; Sake downloads the JSON document there and
   builds a client from it, caching the result for its `max-age` (clamped
   to one minute–one day). No registration step at all.
 - **Dynamically registered (DCR)** — `POST /oauth/register`
-  (`Sake.Auth.DCR`, RFC 7591) creates a public client from a JSON body;
+  (RFC 7591) creates a public client from a JSON body;
   put a rate limit in front of it, since it is unauthenticated by design.
 - **Host-registered** — your own code calls `Sake.Auth.Clients.create/2`
   for a CLI or a partner integration you control; `confidential: true`
@@ -261,8 +261,9 @@ legacy revisions), next to the server's own:
 module defines `client_principal/1`, and
 `io.modelcontextprotocol/enterprise-managed-authorization` when a
 trusted issuer has `profile: :id_jag`. Each has an empty settings
-object. A workload's JWT grant and DPoP have no extension identifier;
-the authorization server's metadata is where a client learns of them.
+object (`Sake.Protocol.auth_extension/1` gives each identifier). A
+workload's JWT grant and DPoP have no extension identifier; the
+authorization server's metadata is where a client learns of them.
 
 Nothing depends on the declaration, since the grants happen at the
 token endpoint before any MCP request; it lets a host see what the
@@ -347,7 +348,8 @@ the server sets the time instead: the token endpoint and the MCP endpoint
 answer a proof without the current nonce with `use_dpop_nonce` and a
 `DPoP-Nonce` header (400 at the token endpoint, 401 at the MCP
 endpoint), and send the latest nonce on every DPoP answer. A nonce is a
-MAC of the time under the Sake secret: nothing is stored, every node
+MAC of the time under the Sake secret (which `Sake` reads once, when it
+starts, so `nonce: true` needs it by then): nothing is stored, every node
 with the same secret accepts it, and it is good for five to ten minutes.
 It costs a client one extra round trip now and then. A nonce does not
 make a proof single use: the replay store does (see
@@ -405,8 +407,8 @@ protect against.
 
 ## DCR and rate limiting
 
-`Sake.Auth.DCR` accepts any `POST /oauth/register` and hands back a public
-client, with no authentication of the caller — that is the point of
+The registration endpoint accepts any `POST /oauth/register` and hands
+back a public client, with no authentication of the caller — that is the point of
 dynamic registration, and also its risk: an unrate-limited registration
 endpoint lets anyone mint clients. Put a rate limit in front of it (by
 IP, in your router's pipeline) the same way you would any other

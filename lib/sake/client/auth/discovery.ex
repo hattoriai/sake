@@ -11,8 +11,8 @@ defmodule Sake.Client.Auth.Discovery do
   # `dpop_required` (the resource metadata's
   # `dpop_bound_access_tokens_required`, RFC 9728 §2).
 
+  alias Sake.Auth.Challenge
   alias Sake.Client.Auth.HTTP
-  alias Sake.Client.Challenge
 
   @resource_well_known "/.well-known/oauth-protected-resource"
   @oauth_well_known "/.well-known/oauth-authorization-server"
