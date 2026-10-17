@@ -84,8 +84,18 @@ The result does two jobs. A map returned from `execute/2` goes out as
 `content`, which is what the model reads, and what a client that shows no
 app gets: the specification requires a tool with a UI to return
 meaningful content all the same. Keep the result small enough for the
-model to read; anything only the app needs can come from a second tool
-the app calls.
+model to read, or give the model its own text with `text:`, and the app
+still gets the whole map:
+
+```elixir
+def execute(args, ctx) do
+  chart = build_chart(args, ctx)
+  {:ok, chart, text: "Bar chart of signups by week: #{length(chart.rows)} rows"}
+end
+```
+
+Anything only the app needs can also come from a second tool the app
+calls.
 
 ## App-only tools
 

@@ -23,13 +23,18 @@ defmodule Sake.Server.Results do
           json = Sake.JSON.encode!(structured)
 
           %{
-            "content" => [Content.to_wire(Content.text(json))],
+            "content" => model_content(opts[:text], json),
             "structuredContent" => JSON.decode!(json)
           }
 
         other ->
           %{"content" => [Content.to_wire(Content.text(to_string(other)))]}
       end
+
+    if opts[:text] && not Map.has_key?(base, "structuredContent") do
+      raise ArgumentError,
+            "a tool's `text:` needs a map or a list result, got: #{inspect(value)}"
+    end
 
     base = Map.put(base, "isError", false)
     if meta = opts[:meta], do: Map.put(base, "_meta", meta), else: base
@@ -38,6 +43,12 @@ defmodule Sake.Server.Results do
   def tool({:error, text}, _spec, _ctx) when is_binary(text) do
     %{"content" => [Content.to_wire(Content.text(text))], "isError" => true}
   end
+
+  # What the model reads next to `structuredContent`: the data's JSON by
+  # default, or the tool's own `text:` (a string or a content list).
+  defp model_content(nil, json), do: [Content.to_wire(Content.text(json))]
+  defp model_content(text, _json) when is_binary(text), do: [Content.to_wire(Content.text(text))]
+  defp model_content(list, _json) when is_list(list), do: Enum.map(list, &Content.to_wire/1)
 
   @spec resource(term(), Sake.Resource.Spec.t(), String.t(), Sake.Context.t()) ::
           {:ok, map()} | {:error, :not_found | String.t() | {:missing_capability, map()}}

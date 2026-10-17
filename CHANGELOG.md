@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Server
+
+- A tool's `{:ok, map_or_list, text: text}` sends `text` (a string or a
+  list of `%Sake.Content{}`) as the result's `content` in place of the
+  JSON, with `structuredContent` unchanged: the model reads a summary
+  while an MCP App renders the full data. Without `text:` nothing
+  changes. See "Output and results" in `guides/tools.md`.
+
 ## 0.3.0 (2026-10-17)
 
 For hosts that give different people different access, and for
