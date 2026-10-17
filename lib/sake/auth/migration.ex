@@ -33,6 +33,8 @@ if Code.ensure_loaded?(Ecto.Migration) do
         add(:application_type, :string)
         # RFC 9449 §5.2: the client's token requests must carry a DPoP proof.
         add(:dpop_bound_access_tokens, :boolean, null: false, default: false)
+        # RFC 9126 §6: the client's authorization requests must be pushed.
+        add(:require_pushed_authorization_requests, :boolean, null: false, default: false)
         timestamps(type: :utc_datetime)
       end
 
@@ -44,6 +46,9 @@ if Code.ensure_loaded?(Ecto.Migration) do
         add(:scopes, {:array, :string}, null: false, default: [])
         add(:resource, :text, null: false)
         add(:subject_id, :string, null: false)
+        # The thumbprint of the DPoP key the code is bound to (RFC 9449
+        # §10), whose proof must come with the token request.
+        add(:dpop_jkt, :string)
         add(:expires_at, :utc_datetime, null: false)
         # A consumed code is kept until it expires, as the fence between
         # issuing its tokens and revoking its family on a replay.
@@ -53,6 +58,23 @@ if Code.ensure_loaded?(Ecto.Migration) do
       end
 
       create(index(:sake_oauth_codes, [:expires_at], prefix: prefix))
+
+      # Pushed authorization requests (RFC 9126), by the hash of their
+      # request_uri, until the authorize endpoint takes them, once.
+      create table(:sake_oauth_pushed_requests, primary_key: false, prefix: prefix) do
+        add(:hash, :string, primary_key: true)
+        add(:client_id, :string, null: false)
+        add(:redirect_uri, :text, null: false)
+        add(:state, :text)
+        add(:code_challenge, :string, null: false)
+        add(:scopes, {:array, :string}, null: false, default: [])
+        add(:resource, :text, null: false)
+        add(:extra, :map, null: false, default: %{})
+        add(:expires_at, :utc_datetime, null: false)
+        add(:inserted_at, :utc_datetime, null: false)
+      end
+
+      create(index(:sake_oauth_pushed_requests, [:expires_at], prefix: prefix))
 
       # Device authorization grants (RFC 8628), by the device code's hash,
       # with the user code's hash for the verification page. Like a
@@ -133,6 +155,7 @@ if Code.ensure_loaded?(Ecto.Migration) do
       drop(table(:sake_oauth_consents, prefix: prefix))
       drop(table(:sake_oauth_tokens, prefix: prefix))
       drop(table(:sake_oauth_device_grants, prefix: prefix))
+      drop(table(:sake_oauth_pushed_requests, prefix: prefix))
       drop(table(:sake_oauth_codes, prefix: prefix))
       drop(table(:sake_oauth_clients, prefix: prefix))
       :ok

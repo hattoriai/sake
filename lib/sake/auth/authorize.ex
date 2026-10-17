@@ -21,12 +21,23 @@ defmodule Sake.Auth.Authorize do
 
   The consent and error pages refuse to be framed (`x-frame-options:
   DENY` and `content-security-policy: frame-ancestors 'none'`).
+
+  With `par:` (RFC 9126), a request with a `request_uri` is the pushed
+  request it names, taken once: its `client_id` must be the client that
+  pushed it, and every other parameter of the query is ignored. A
+  `request_uri` that is unknown, expired, already used or another
+  client's gets an error page. When pushed requests are required (`par:
+  [required: true]`, or a client registered with
+  `require_pushed_authorization_requests`), any other request is sent
+  back with `invalid_request`. The consent form carries the request
+  itself, so approving or denying needs the `request_uri` no more; a
+  reload of the page after it was taken shows the error page.
   """
   @behaviour Plug
   import Plug.Conn
 
   alias Sake.Auth
-  alias Sake.Auth.{AuthorizationRequest, Config, Grant, Page}
+  alias Sake.Auth.{AuthorizationRequest, Config, Grant, Page, PAR}
 
   # The adapter: it reads the request and the signed-in person, asks
   # `Sake.Auth.AuthorizationRequest` and `Sake.Auth.Grant`, and renders
@@ -50,44 +61,82 @@ defmodule Sake.Auth.Authorize do
     conn = fetch_query_params(conn)
     p = conn.query_params
 
+    if config.par != false and Map.has_key?(p, "request_uri"),
+      do: pushed(conn, config, p),
+      else: direct(conn, config, p)
+  end
+
+  defp direct(conn, config, p) do
     case AuthorizationRequest.client(config, p["client_id"], p["redirect_uri"]) do
-      {:ok, client} ->
-        validated(conn, config, client, p)
-
-      {:error, :unknown_client} ->
-        error_page(
-          conn,
-          config,
-          400,
-          "Unknown client",
-          "The app that sent you here is an unknown client. Nothing was authorized."
-        )
-
-      {:error, :client, reason} ->
-        error_page(
-          conn,
-          config,
-          400,
-          "Client not accepted",
-          "The app's client identity could not be verified (#{reason}). Nothing was authorized."
-        )
-
-      {:error, :redirect_uri} ->
-        error_page(
-          conn,
-          config,
-          400,
-          "Redirect not allowed",
-          "The app asked to send the code to a redirect address it did not register. Nothing was authorized."
-        )
+      {:ok, client} -> validated(conn, config, client, p)
+      error -> client_error(conn, config, error)
     end
   end
 
-  defp validated(conn, config, client, p) do
-    case AuthorizationRequest.validate(config, client, p) do
-      {:ok, request} ->
-        authenticated(conn, config, client, request)
+  # RFC 9126 §4: a pushed request, by its request_uri. Every parameter
+  # but client_id, which must name the client that pushed it, is the
+  # pushed request's; the rest of the query is ignored. The person is
+  # read first, so a request_uri is not spent on a page that only asks
+  # them to sign in.
+  defp pushed(conn, config, p) do
+    with {:ok, principal} <- config.subject.from_conn(conn),
+         {:ok, client, request} <- PAR.take(config, p["client_id"], p["request_uri"]) do
+      decided(conn, config, request, principal, Grant.decide(config, client, request, principal))
+    else
+      :error -> sign_in(conn, config)
+      {:error, :request_uri} -> request_uri_error(conn, config)
+      {:error, :client_mismatch} -> request_uri_error(conn, config)
+      error -> client_error(conn, config, error)
+    end
+  end
 
+  defp client_error(conn, config, {:error, :unknown_client}) do
+    error_page(
+      conn,
+      config,
+      400,
+      "Unknown client",
+      "The app that sent you here is an unknown client. Nothing was authorized."
+    )
+  end
+
+  defp client_error(conn, config, {:error, :client, reason}) do
+    error_page(
+      conn,
+      config,
+      400,
+      "Client not accepted",
+      "The app's client identity could not be verified (#{reason}). Nothing was authorized."
+    )
+  end
+
+  defp client_error(conn, config, {:error, :redirect_uri}) do
+    error_page(
+      conn,
+      config,
+      400,
+      "Redirect not allowed",
+      "The app asked to send the code to a redirect address it did not register. Nothing was authorized."
+    )
+  end
+
+  # Unknown, expired, already used or another client's: the page says
+  # the same of each.
+  defp request_uri_error(conn, config) do
+    error_page(
+      conn,
+      config,
+      400,
+      "Request expired",
+      "This authorization request is no longer valid. Start again from the app."
+    )
+  end
+
+  defp validated(conn, config, client, p) do
+    with :ok <- PAR.direct(config, client),
+         {:ok, request} <- AuthorizationRequest.validate(config, client, p) do
+      authenticated(conn, config, client, request)
+    else
       {:error, code, description} ->
         redirect_error(conn, config, p["redirect_uri"], code, description, p["state"])
     end
@@ -105,14 +154,18 @@ defmodule Sake.Auth.Authorize do
         )
 
       :error ->
-        error_page(
-          conn,
-          config,
-          401,
-          "Sign in first",
-          "Sign in to your account, then start the connection again from the app."
-        )
+        sign_in(conn, config)
     end
+  end
+
+  defp sign_in(conn, config) do
+    error_page(
+      conn,
+      config,
+      401,
+      "Sign in first",
+      "Sign in to your account, then start the connection again from the app."
+    )
   end
 
   defp decided(conn, config, _request, principal, {:issue, request}) do

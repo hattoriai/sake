@@ -6,7 +6,9 @@ defmodule Sake.Client.Auth.Grant do
   # exchange and refresh, the client credentials and JWT bearer grants,
   # with the client authentication the registration calls for). The
   # device authorization grant's two requests too (RFC 8628): the device
-  # authorization request, and one poll of the token endpoint.
+  # authorization request, and one poll of the token endpoint. And the
+  # pushed authorization request (RFC 9126), which starts the code flow
+  # at the server in place of the browser.
   #
   # Every token request takes `dpop`: nil, or `%{key: key, nonce: nonce}`
   # to send a DPoP proof (RFC 9449 §5) made with `key`, and so ask for a
@@ -42,6 +44,46 @@ defmodule Sake.Client.Auth.Grant do
   """
   @spec request(map(), map(), String.t(), [String.t()]) :: {String.t(), map()}
   def request(server, registration, redirect_uri, scopes) do
+    {params, request} = authorization(server, registration, redirect_uri, scopes)
+    {authorize_url(server, params), request}
+  end
+
+  @doc """
+  Starts an authorization request by pushing it (RFC 9126) to the
+  server's `pushed_authorization_request_endpoint`, with the client
+  authentication of the token endpoint, and a DPoP proof with `dpop`
+  (which binds the code to its key, RFC 9449 §10). Returns the URL to
+  send the person to, which carries only the `client_id` and the
+  `request_uri`, and the record the answer is checked against, as
+  `request/4` does.
+  """
+  @spec push(map(), map(), String.t(), [String.t()], keyword(), dpop()) ::
+          {:ok, String.t(), map()} | {:error, term()}
+  def push(server, registration, redirect_uri, scopes, req, dpop \\ nil) do
+    {params, request} = authorization(server, registration, redirect_uri, scopes)
+    endpoint = server.metadata["pushed_authorization_request_endpoint"]
+
+    # The client authentication adds the client_id where it goes.
+    params = Keyword.delete(params, :client_id)
+    audience = server.metadata["token_endpoint"]
+
+    case post(endpoint, params, registration, req, dpop, false, audience) do
+      {:ok, status, %{"request_uri" => request_uri}, _headers}
+      when status in [200, 201] and is_binary(request_uri) ->
+        url =
+          authorize_url(server, client_id: registration["client_id"], request_uri: request_uri)
+
+        {:ok, url, request}
+
+      {:ok, status, body, _headers} ->
+        {:error, {:par_failed, status, body}}
+
+      {:error, reason} ->
+        {:error, {:par_failed, reason}}
+    end
+  end
+
+  defp authorization(server, registration, redirect_uri, scopes) do
     {verifier, challenge} = pkce()
     state = 24 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
 
@@ -56,13 +98,7 @@ defmodule Sake.Client.Auth.Grant do
         resource: server.resource
       ] ++ if(scopes == [], do: [], else: [scope: Enum.join(scopes, " ")])
 
-    url =
-      server.metadata["authorization_endpoint"]
-      |> URI.parse()
-      |> URI.append_query(URI.encode_query(params, :rfc3986))
-      |> URI.to_string()
-
-    {url,
+    {params,
      %{
        state: state,
        verifier: verifier,
@@ -70,6 +106,13 @@ defmodule Sake.Client.Auth.Grant do
        issuer: server.issuer,
        iss_required: server.metadata["authorization_response_iss_parameter_supported"] == true
      }}
+  end
+
+  defp authorize_url(server, params) do
+    server.metadata["authorization_endpoint"]
+    |> URI.parse()
+    |> URI.append_query(URI.encode_query(params, :rfc3986))
+    |> URI.to_string()
   end
 
   @doc """
@@ -266,13 +309,17 @@ defmodule Sake.Client.Auth.Grant do
   # is made once more with it. The client authenticates afresh for the
   # retry: a client assertion is single use, and the server may have
   # recorded the first one before it looked at the proof.
-  defp post(endpoint, params, registration, req, dpop, retried?) do
-    {form, headers} = authenticate(params, registration, endpoint)
+  #
+  # `audience` is the token endpoint a client assertion names when it is
+  # not the server's issuer: the endpoint itself, but for a push, whose
+  # assertion is the token endpoint's (RFC 9126 §2).
+  defp post(endpoint, params, registration, req, dpop, retried?, audience \\ nil) do
+    {form, headers} = authenticate(params, registration, audience || endpoint)
 
     case HTTP.post(endpoint, [form: form], proof(dpop, endpoint) ++ headers, req) do
       {:ok, 400, %{"error" => "use_dpop_nonce"}, %{"dpop-nonce" => [nonce | _]}}
       when dpop != nil and not retried? ->
-        post(endpoint, params, registration, req, %{dpop | nonce: nonce}, true)
+        post(endpoint, params, registration, req, %{dpop | nonce: nonce}, true, audience)
 
       other ->
         other

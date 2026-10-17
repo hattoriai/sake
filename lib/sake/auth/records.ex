@@ -1,5 +1,10 @@
 defmodule Sake.Auth.Code do
-  @moduledoc "An authorization code (stored hashed)."
+  @moduledoc """
+  An authorization code (stored hashed). `dpop_jkt` is the thumbprint of
+  the DPoP key the code is bound to (RFC 9449 §10), or nil: the token
+  request that redeems a bound code must carry a proof made with that
+  key.
+  """
   @type t :: %__MODULE__{}
   defstruct [
     :hash,
@@ -9,7 +14,32 @@ defmodule Sake.Auth.Code do
     :resource,
     :subject_id,
     :expires_at,
+    :dpop_jkt,
     scopes: []
+  ]
+end
+
+defmodule Sake.Auth.PushedRequest do
+  @moduledoc """
+  A pushed authorization request (RFC 9126), stored by the hash of its
+  `request_uri` until the authorize endpoint consumes it, once, or it
+  expires. The other fields are the validated request's: `extra` holds
+  the parameters a later feature adds (`"dpop_jkt"`, the thumbprint of
+  the DPoP key the code will be bound to), with string keys and JSON
+  values, so a store can keep it as JSON.
+  """
+  @type t :: %__MODULE__{}
+  defstruct [
+    :hash,
+    :client_id,
+    :redirect_uri,
+    :state,
+    :code_challenge,
+    :resource,
+    :expires_at,
+    :inserted_at,
+    scopes: [],
+    extra: %{}
   ]
 end
 

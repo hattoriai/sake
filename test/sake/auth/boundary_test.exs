@@ -74,7 +74,8 @@ defmodule Sake.Auth.BoundaryTest do
     Sake.Auth.Registration,
     Sake.Auth.Metadata,
     Sake.Auth.Bearer,
-    Sake.Auth.Device
+    Sake.Auth.Device,
+    Sake.Auth.PAR
   ]
 
   test "the endpoint cores call no Plug.Conn function" do

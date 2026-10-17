@@ -7,7 +7,7 @@ if Code.ensure_loaded?(Ecto.Query) do
     @behaviour Sake.Auth.Store
     import Ecto.Query
 
-    alias Sake.Auth.{Client, Code, Consent, DeviceGrant, TokenRecord}
+    alias Sake.Auth.{Client, Code, Consent, DeviceGrant, PushedRequest, TokenRecord}
     alias Sake.Auth.Store.Ecto, as: S
 
     @impl true
@@ -30,6 +30,7 @@ if Code.ensure_loaded?(Ecto.Query) do
         jwks_uri: c.jwks_uri,
         application_type: c.application_type,
         dpop_bound_access_tokens: c.dpop_bound_access_tokens,
+        require_pushed_authorization_requests: c.require_pushed_authorization_requests,
         inserted_at: c.inserted_at
       }
 
@@ -77,6 +78,7 @@ if Code.ensure_loaded?(Ecto.Query) do
         jwks_uri: r.jwks_uri,
         application_type: r.application_type,
         dpop_bound_access_tokens: r.dpop_bound_access_tokens,
+        require_pushed_authorization_requests: r.require_pushed_authorization_requests,
         inserted_at: r.inserted_at
       }
     end
@@ -91,6 +93,7 @@ if Code.ensure_loaded?(Ecto.Query) do
         scopes: c.scopes,
         resource: c.resource,
         subject_id: c.subject_id,
+        dpop_jkt: c.dpop_jkt,
         expires_at: DateTime.truncate(c.expires_at, :second)
       }
 
@@ -116,6 +119,7 @@ if Code.ensure_loaded?(Ecto.Query) do
              scopes: r.scopes,
              resource: r.resource,
              subject_id: r.subject_id,
+             dpop_jkt: r.dpop_jkt,
              expires_at: r.expires_at
            }}
 
@@ -146,6 +150,52 @@ if Code.ensure_loaded?(Ecto.Query) do
         end)
 
       result
+    end
+
+    @impl true
+    def put_pushed_request(%{repo: repo} = s, %PushedRequest{} = p) do
+      row = %S.PushedRequest{
+        hash: p.hash,
+        client_id: p.client_id,
+        redirect_uri: p.redirect_uri,
+        state: p.state,
+        code_challenge: p.code_challenge,
+        scopes: p.scopes,
+        resource: p.resource,
+        extra: p.extra,
+        expires_at: DateTime.truncate(p.expires_at, :second),
+        inserted_at: DateTime.truncate(p.inserted_at || DateTime.utc_now(), :second)
+      }
+
+      {:ok, _} = repo.insert(row, prefix: s.prefix)
+      :ok
+    end
+
+    # One statement, which deletes the row and returns it: of two
+    # concurrent takes, the second finds nothing to delete.
+    @impl true
+    def consume_pushed_request(%{repo: repo} = s, hash) do
+      query = from(p in S.PushedRequest, where: p.hash == ^hash, select: p)
+
+      case repo.delete_all(query, prefix: s.prefix) do
+        {1, [r]} ->
+          {:ok,
+           %PushedRequest{
+             hash: r.hash,
+             client_id: r.client_id,
+             redirect_uri: r.redirect_uri,
+             state: r.state,
+             code_challenge: r.code_challenge,
+             scopes: r.scopes,
+             resource: r.resource,
+             extra: r.extra,
+             expires_at: r.expires_at,
+             inserted_at: r.inserted_at
+           }}
+
+        _ ->
+          :error
+      end
     end
 
     @impl true
@@ -515,6 +565,7 @@ if Code.ensure_loaded?(Ecto.Query) do
     @impl true
     def prune(%{repo: repo} = s, now, before) do
       repo.delete_all(from(c in S.Code, where: c.expires_at <= ^now), prefix: s.prefix)
+      repo.delete_all(from(p in S.PushedRequest, where: p.expires_at <= ^now), prefix: s.prefix)
       repo.delete_all(from(g in S.DeviceGrant, where: g.expires_at <= ^now), prefix: s.prefix)
       repo.delete_all(from(t in S.Token, where: t.expires_at <= ^now), prefix: s.prefix)
       repo.delete_all(from(r in S.Replay, where: r.expires_at < ^now), prefix: s.prefix)
@@ -540,9 +591,9 @@ if Code.ensure_loaded?(Ecto.Query) do
       prune_unused_clients(s, now, before.unused_clients)
     end
 
-    # What is left of the codes, device grants and tokens is unexpired: a
-    # client with a code, a device grant, an unrevoked token or a consent
-    # is in use.
+    # What is left of the codes, pushed requests, device grants and tokens
+    # is unexpired: a client with a code, a pushed request, a device
+    # grant, an unrevoked token or a consent is in use.
     defp prune_unused_clients(%{repo: repo} = s, now, registered_before) do
       token =
         from(t in S.Token,
@@ -556,13 +607,16 @@ if Code.ensure_loaded?(Ecto.Query) do
       code = from(c in S.Code, where: c.client_id == parent_as(:client).id, select: 1)
       device = from(g in S.DeviceGrant, where: g.client_id == parent_as(:client).id, select: 1)
 
+      pushed =
+        from(p in S.PushedRequest, where: p.client_id == parent_as(:client).id, select: 1)
+
       repo.delete_all(
         from(c in S.Client,
           as: :client,
           where:
             c.kind == "dynamic" and c.inserted_at < ^registered_before and
               not exists(token) and not exists(consent) and not exists(code) and
-              not exists(device)
+              not exists(device) and not exists(pushed)
         ),
         prefix: s.prefix
       )

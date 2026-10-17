@@ -31,7 +31,7 @@ defmodule Sake.Auth.Registration do
         :ok = module.put_client(state, client)
 
         {:ok,
-         %{
+         par_field(config, client, %{
            "client_id" => client.id,
            "client_id_issued_at" => System.system_time(:second),
            "client_name" => client.name,
@@ -41,7 +41,7 @@ defmodule Sake.Auth.Registration do
            "token_endpoint_auth_method" => "none",
            "application_type" => client.application_type,
            "dpop_bound_access_tokens" => client.dpop_bound_access_tokens
-         }}
+         })}
 
       {:error, code} ->
         {:error, code}
@@ -49,6 +49,18 @@ defmodule Sake.Auth.Registration do
   end
 
   def register(_config, _doc), do: {:error, "invalid_client_metadata"}
+
+  # The response says whether the client's requests must be pushed only
+  # on a server that takes pushed requests at all.
+  defp par_field(%{par: false}, _client, response), do: response
+
+  defp par_field(_config, client, response),
+    do:
+      Map.put(
+        response,
+        "require_pushed_authorization_requests",
+        client.require_pushed_authorization_requests
+      )
 
   defp build(config, doc) do
     with :ok <- validate(config, doc) do
@@ -62,7 +74,7 @@ defmodule Sake.Auth.Registration do
     with :ok <- validate_redirect_uris(doc["redirect_uris"], grants),
          :ok <- validate_name(doc["client_name"] || "Unnamed client"),
          :ok <- validate_auth_method(doc["token_endpoint_auth_method"]),
-         :ok <- validate_types(doc) do
+         :ok <- validate_types(config, doc) do
       validate_grants(grants, allowed_grants(config))
     end
   end
@@ -73,10 +85,11 @@ defmodule Sake.Auth.Registration do
   defp response_types(client),
     do: if("authorization_code" in client.grant_types, do: ["code"], else: [])
 
-  defp validate_types(doc) do
-    if Sake.Auth.Clients.metadata_types_valid?(doc),
-      do: :ok,
-      else: {:error, "invalid_client_metadata"}
+  defp validate_types(config, doc) do
+    if Sake.Auth.Clients.metadata_types_valid?(doc) and
+         Sake.Auth.Clients.par_metadata_valid?(config, doc),
+       do: :ok,
+       else: {:error, "invalid_client_metadata"}
   end
 
   # A device client, which never asks for a code, has no redirect URI.
@@ -128,6 +141,7 @@ defmodule Sake.Auth.Registration do
       scopes: if(is_binary(doc["scope"]), do: String.split(doc["scope"]), else: nil),
       application_type: doc["application_type"] || "native",
       dpop_bound_access_tokens: doc["dpop_bound_access_tokens"] == true,
+      require_pushed_authorization_requests: doc["require_pushed_authorization_requests"] == true,
       inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
     }
   end

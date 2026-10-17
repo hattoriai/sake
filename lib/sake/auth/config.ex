@@ -14,6 +14,16 @@ defmodule Sake.Auth.Config do
   default). It is off by default: the verification page has to be
   mounted inside the host's signed-in pipeline first (see
   `Sake.Auth.DeviceVerification`). It needs the Sake secret.
+
+  `par:` turns on pushed authorization requests (RFC 9126): `true`, or
+  `[required: boolean, expires_in: seconds]`. A client then pushes its
+  authorization request to `POST {oauth_path}/par`, authenticated as at
+  the token endpoint, and sends the person to the authorize endpoint
+  with the `request_uri` it got back, good once, for `expires_in`
+  seconds (60 by default). `required: true` refuses every authorization
+  request that was not pushed, as a client registered with
+  `require_pushed_authorization_requests` has its own refused. It is off
+  by default, and the metadata then says nothing about it.
   """
 
   @type t :: %__MODULE__{}
@@ -36,6 +46,7 @@ defmodule Sake.Auth.Config do
             oauth_path: "/oauth",
             dpop: true,
             device: false,
+            par: false,
             name: nil,
             secret: nil
 
@@ -64,6 +75,7 @@ defmodule Sake.Auth.Config do
         trusted_issuers: trusted_issuers(config),
         dpop: dpop_option(config.dpop, config.secret),
         device: device_option(config.device, config.secret),
+        par: par_option(config.par),
         store_state: module.init(store_opts),
         name: config.name || uri.host
     }
@@ -164,6 +176,45 @@ defmodule Sake.Auth.Config do
         "device: must be true, false or [expires_in: seconds, interval: seconds], got #{inspect(other)}"
       )
 
+  @par_defaults %{required: false, expires_in: 60}
+
+  # Pushed authorization requests: false, or whether every authorization
+  # request must be pushed, and how long a request_uri lasts.
+  defp par_option(false), do: false
+  defp par_option(true), do: par_option([])
+
+  defp par_option(opts) when is_list(opts) do
+    par = Map.merge(@par_defaults, Map.new(opts))
+
+    unless Keyword.keys(opts) -- [:required, :expires_in] == [] and is_boolean(par.required) and
+             is_integer(par.expires_in) and par.expires_in > 0,
+           do:
+             raise(
+               ArgumentError,
+               "par: takes [required: boolean, expires_in: seconds], got #{inspect(opts)}"
+             )
+
+    par
+  end
+
+  defp par_option(other),
+    do:
+      raise(
+        ArgumentError,
+        "par: must be true, false or [required: boolean, expires_in: seconds], got #{inspect(other)}"
+      )
+
+  @doc """
+  Whether `client`'s authorization requests must be pushed: with `par:
+  [required: true]`, or a client registered with
+  `require_pushed_authorization_requests`. Never without `par:`.
+  """
+  @spec par_required?(t(), Sake.Auth.Client.t()) :: boolean()
+  def par_required?(%{par: false}, _client), do: false
+
+  def par_required?(%{par: %{required: required}}, client),
+    do: required or client.require_pushed_authorization_requests == true
+
   @doc "Whether every access token must be DPoP-bound (`dpop: [required: true]`)."
   @spec dpop_required?(t() | Sake.Auth.External.t()) :: boolean()
   def dpop_required?(%{dpop: %{required: true}}), do: true
@@ -180,4 +231,5 @@ defmodule Sake.Auth.Config do
   def revoke_url(c), do: c.issuer <> c.oauth_path <> "/revoke"
   def device_authorization_url(c), do: c.issuer <> c.oauth_path <> "/device_authorization"
   def device_url(c), do: c.issuer <> c.oauth_path <> "/device"
+  def par_url(c), do: c.issuer <> c.oauth_path <> "/par"
 end

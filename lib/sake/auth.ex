@@ -19,10 +19,11 @@ defmodule Sake.Auth do
     * `Sake.Auth.Consent` and `Sake.Auth.Consent.Default` — the consent
       and error pages.
     * `Sake.Auth.Store`, `Sake.Auth.Store.ETS`, `Sake.Auth.Store.Ecto`
-      and `Sake.Auth.Migration` — where clients, codes, device grants,
-      tokens and consents live; `Sake.Auth.Code` and
-      `Sake.Auth.DeviceGrant` are the code and the device grant a store
-      keeps.
+      and `Sake.Auth.Migration` — where clients, codes, pushed
+      authorization requests, device grants, tokens and consents live;
+      `Sake.Auth.Code`, `Sake.Auth.PushedRequest` and
+      `Sake.Auth.DeviceGrant` are the code, the pushed request and the
+      device grant a store keeps.
     * `Sake.Auth.External` — an endpoint on another authorization server.
     * `Sake.Auth.TokenRecord` — the token of a request, in `ctx.token`.
     * `Sake.Auth.Client` and `Sake.Auth.Clients` — the registered clients.
@@ -56,6 +57,11 @@ defmodule Sake.Auth do
       signed request and CSRF token.
     * Tokens: `token_grants.ex`, whose `exchange/4` has one clause per
       grant type; `token.ex` is the adapter.
+    * Pushed authorization requests (RFC 9126): `par.ex` validates and
+      stores a pushed request as an authorization request, and takes it
+      back for the authorize endpoint; `pushed_authorization.ex` (the
+      client's push) is the adapter, and `Sake.Auth.Authorize` takes a
+      `request_uri`.
     * Device authorization (RFC 8628): `device.ex` starts a device grant
       and takes the person's decision through `grant.ex`;
       `device_authorization.ex` (the client's request) and

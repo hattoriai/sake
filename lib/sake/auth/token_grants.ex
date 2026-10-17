@@ -207,7 +207,8 @@ defmodule Sake.Auth.TokenGrants do
         {:error, "invalid_grant", "The code is invalid, expired or already used"}
 
       {:ok, record} ->
-        with :ok <- check_code(record, client, uri, verifier, p["resource"]) do
+        with :ok <- check_code(record, client, uri, verifier, p["resource"]),
+             :ok <- code_key(record, jkt) do
           issue_for_code(config, {module, state}, hash, %{
             client_id: client.id,
             subject_id: record.subject_id,
@@ -503,6 +504,19 @@ defmodule Sake.Auth.TokenGrants do
 
   defp same_key(_record, _jkt),
     do: {:error, "invalid_grant", "The refresh token is bound to another DPoP key"}
+
+  # RFC 9449 §10: a code bound to a DPoP key (by `dpop_jkt`, or the proof
+  # of the pushed request it came from) is redeemed only with a proof
+  # made with that key. The code is spent either way, as it is on a
+  # wrong code_verifier.
+  defp code_key(%{dpop_jkt: nil}, _jkt), do: :ok
+  defp code_key(%{dpop_jkt: jkt}, jkt), do: :ok
+
+  defp code_key(_record, nil),
+    do: {:error, "invalid_grant", "The code is bound to a DPoP key: send a proof with it"}
+
+  defp code_key(_record, _jkt),
+    do: {:error, "invalid_grant", "The code is bound to another DPoP key"}
 
   defp token_type(%{jkt: jkt}) when is_binary(jkt), do: "DPoP"
   defp token_type(_attrs), do: "Bearer"

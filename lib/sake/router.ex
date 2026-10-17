@@ -24,7 +24,9 @@ if Code.ensure_loaded?(Phoenix.Router) do
         end
 
     The authorize routes (with the device verification page, for
-    `device:`) go inside the pipeline that requires a signed-in person; the API routes need no session; the well-known routes need no
+    `device:`) go inside the pipeline that requires a signed-in person;
+    the API routes (the pushed authorization request endpoint among them,
+    for `par:`) need no session; the well-known routes need no
     pipeline at all; the endpoint needs no pipeline either (Sake checks the
     bearer token itself).
 
@@ -50,6 +52,7 @@ if Code.ensure_loaded?(Phoenix.Router) do
         Phoenix.Router.post("/register", Sake.Auth.DCR, [])
         Phoenix.Router.post("/revoke", Sake.Auth.Revoke, [])
         Phoenix.Router.post("/device_authorization", Sake.Auth.DeviceAuthorization, [])
+        Phoenix.Router.post("/par", Sake.Auth.PushedAuthorization, [])
       end
     end
 

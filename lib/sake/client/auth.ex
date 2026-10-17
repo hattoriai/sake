@@ -145,6 +145,20 @@ defmodule Sake.Client.Auth do
   is. Machine grants get no refresh token: an
   expired token is replaced by running the grant again.
 
+  Pushed authorization requests (RFC 9126) keep the authorization
+  request out of the browser:
+
+    * `:par` — `:auto` (the default) pushes the request to the server's
+      `pushed_authorization_request_endpoint` whenever its metadata
+      lists one, authenticated as at the token endpoint and with a DPoP
+      proof when the client uses DPoP (the code is then bound to the
+      key), and opens the authorization endpoint with only the
+      `client_id` and the `request_uri` it got back. `false` sends the
+      request through the browser, unless the metadata says
+      `require_pushed_authorization_requests`: such a server gets it
+      pushed anyway. A push the server refuses ends the flow with
+      `{:error, {:auth, {:par_failed, status, body}}}`.
+
   Without `auth:`, a 401 is returned as
   `{:error, {:unauthorized, %Sake.Auth.Challenge{}}}` and the caller
   handles it. A failure inside the flow is `{:error, {:auth, reason}}`.
@@ -217,6 +231,7 @@ defmodule Sake.Client.Auth do
     :sleep,
     grant: :authorization_code,
     dpop: :auto,
+    par: :auto,
     clients: %{},
     nonces: %{},
     req: []
@@ -251,6 +266,7 @@ defmodule Sake.Client.Auth do
       client_name: opts[:client_name] || defaults[:client_name] || "Sake",
       store: opts[:store],
       dpop: dpop(Keyword.get(opts, :dpop, :auto)),
+      par: par(Keyword.get(opts, :par, :auto)),
       req: defaults[:req] || [],
       static: opts[:static] == true
     }
@@ -287,6 +303,11 @@ defmodule Sake.Client.Auth do
 
   defp dpop(other),
     do: raise(ArgumentError, "auth: :dpop must be :auto, true or false, got #{inspect(other)}")
+
+  defp par(par) when par in [:auto, false], do: par
+
+  defp par(other),
+    do: raise(ArgumentError, "auth: :par must be :auto or false, got #{inspect(other)}")
 
   defp grant(opts) do
     grant = Keyword.get(opts, :grant, :authorization_code)
@@ -629,10 +650,10 @@ defmodule Sake.Client.Auth do
   defp authorize_code(auth, server, scopes) do
     case Registration.client(auth, server) do
       {:ok, registration, auth} ->
-        {url, request} = Grant.request(server, registration, auth.redirect_uri, scopes)
         pem = new_key(auth, server)
 
-        with {:ok, params} <- interact(auth.authorize, url),
+        with {:ok, url, request} <- start_code(auth, server, registration, scopes, pem),
+             {:ok, params} <- interact(auth.authorize, url),
              {:ok, code} <- Grant.callback(params, request),
              {:ok, body} <-
                Grant.exchange(
@@ -651,6 +672,27 @@ defmodule Sake.Client.Auth do
       {:error, reason, auth} ->
         {:error, reason, auth}
     end
+  end
+
+  # RFC 9126: the request is pushed to the server, with a DPoP proof
+  # when the client uses DPoP (which binds the code to its key), and the
+  # browser carries only its request_uri.
+  defp start_code(auth, server, registration, scopes, pem) do
+    if push?(auth, server.metadata) do
+      endpoint = server.metadata["pushed_authorization_request_endpoint"]
+      dpop = proofs(auth, pem, endpoint)
+      Grant.push(server, registration, auth.redirect_uri, scopes, auth.req, dpop)
+    else
+      {url, request} = Grant.request(server, registration, auth.redirect_uri, scopes)
+      {:ok, url, request}
+    end
+  end
+
+  # Whenever the server takes pushed requests, unless `par: false`; a
+  # server that requires them gets them whatever `par:` says.
+  defp push?(auth, metadata) do
+    is_binary(metadata["pushed_authorization_request_endpoint"]) and
+      (auth.par == :auto or metadata["require_pushed_authorization_requests"] == true)
   end
 
   # RFC 8628: the device authorization request, the person told where to
