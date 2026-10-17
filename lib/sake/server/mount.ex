@@ -21,16 +21,19 @@ defmodule Sake.Server.Mount do
 
   @type chain :: [{module(), keyword()}]
 
-  @doc "Checks a mount's options and returns them with the scopes as a list."
+  @doc """
+  Checks a mount's options and returns them with the scopes as a list,
+  and `only:` or `except:` as `filter: {:only | :except, entries}`.
+  """
   @spec options!(module(), module(), keyword()) :: keyword()
   def options!(parent, server, opts) do
-    case Keyword.keys(opts) -- [:prefix, :scope] do
+    case Keyword.keys(opts) -- [:prefix, :scope, :only, :except] do
       [] ->
         :ok
 
       keys ->
         raise ArgumentError,
-              "#{inspect(parent)}: mount takes prefix: and scope:, got #{inspect(keys)}"
+              "#{inspect(parent)}: mount takes prefix:, scope:, only: and except:, got #{inspect(keys)}"
     end
 
     prefix = opts[:prefix]
@@ -41,8 +44,66 @@ defmodule Sake.Server.Mount do
               "starting with a letter or digit, got #{inspect(prefix)}"
     end
 
-    [prefix: prefix, scopes: List.wrap(opts[:scope])]
+    [prefix: prefix, scopes: List.wrap(opts[:scope]), filter: filter!(parent, server, opts)]
   end
+
+  # `only:` or `except:`: a list of the mounted server's components, each
+  # a module or the name (tool, prompt) or URI (resource) it declares.
+  # An entry that names nothing is a mistake, not a no-op: an `except:`
+  # with a typo would serve what it meant to hide.
+  defp filter!(parent, server, opts) do
+    case {Keyword.fetch(opts, :only), Keyword.fetch(opts, :except)} do
+      {:error, :error} ->
+        nil
+
+      {{:ok, _}, {:ok, _}} ->
+        raise ArgumentError, "#{inspect(parent)}: mount takes only: or except:, not both"
+
+      {{:ok, entries}, :error} ->
+        {:only, entries!(parent, server, :only, entries)}
+
+      {:error, {:ok, entries}} ->
+        {:except, entries!(parent, server, :except, entries)}
+    end
+  end
+
+  defp entries!(parent, server, key, entries) do
+    if not (is_list(entries) and Enum.all?(entries, &(is_atom(&1) or is_binary(&1)))) do
+      raise ArgumentError,
+            "#{inspect(parent)}: #{key}: takes a list of modules, names and URIs, got #{inspect(entries)}"
+    end
+
+    if server.__sake__(:sources) != [] do
+      raise ArgumentError,
+            "#{inspect(parent)}: #{key}: cannot filter #{inspect(server)}, which lists a proxy's " <>
+              "upstream components: those are known only at runtime"
+    end
+
+    specs = Enum.flat_map([:tools, :resources, :prompts], &server.__sake__/1)
+
+    case Enum.reject(entries, fn entry -> Enum.any?(specs, &names?(&1, entry)) end) do
+      [] ->
+        entries
+
+      unknown ->
+        raise ArgumentError,
+              "#{inspect(parent)}: #{key}: names nothing #{inspect(server)} lists: #{inspect(unknown)}"
+    end
+  end
+
+  @doc "Whether the mount's `only:` or `except:` keeps the spec (as the mounted server has it)."
+  @spec keep?(struct(), keyword()) :: boolean()
+  def keep?(spec, opts) do
+    case opts[:filter] do
+      nil -> true
+      {:only, entries} -> Enum.any?(entries, &names?(spec, &1))
+      {:except, entries} -> not Enum.any?(entries, &names?(spec, &1))
+    end
+  end
+
+  defp names?(spec, entry) when is_atom(entry), do: spec.module == entry
+  defp names?(%Sake.Resource.Spec{uri: uri}, entry), do: uri == entry
+  defp names?(spec, entry), do: spec.name == entry
 
   @doc "A component's name under the mount's prefix."
   @spec name(String.t() | nil, String.t()) :: String.t()

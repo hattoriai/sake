@@ -44,7 +44,7 @@ defmodule Sake.Auth.Bearer do
        conn
        |> nonce(config, scheme)
        |> assign(:sake_token, record)
-       |> assign(:sake_scopes, record.scopes)
+       |> assign(:sake_scopes, scopes(config, principal, record))
        |> assign(:sake_scope, principal)
        |> assign(:sake_dpop, scheme == :dpop)}
     else
@@ -171,6 +171,21 @@ defmodule Sake.Auth.Bearer do
   end
 
   defp principal(config, record, nil), do: config.subject.fetch(record.subject_id)
+
+  # The token's scopes, narrowed to those its principal may hold now
+  # (`c:Sake.Auth.Subject.scopes_for/2`), so a person whose role changed
+  # loses a scope before the token expires. An external server's token
+  # holds what that server granted.
+  defp scopes(%External{}, _principal, record), do: record.scopes
+
+  defp scopes(config, principal, record),
+    do:
+      Sake.Auth.Subject.permitted_scopes(
+        config.subject,
+        principal,
+        record.resource,
+        record.scopes
+      )
 
   defp nonce(conn, config, :dpop), do: DPoP.put_nonce(conn, config)
   defp nonce(conn, _config, :bearer), do: conn

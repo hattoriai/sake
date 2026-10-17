@@ -93,7 +93,7 @@ defmodule Sake.Auth.Authorize do
     case config.subject.from_conn(conn) do
       {:ok, principal} ->
         if Sake.Auth.Subject.authorize_resource?(config.subject, principal, request.resource),
-          do: consent_or_issue(conn, config, client, request, principal),
+          do: permitted(conn, config, client, request, principal),
           else:
             redirect_error(
               conn,
@@ -113,6 +113,31 @@ defmodule Sake.Auth.Authorize do
           "Sign in to your account, then start the connection again from the app."
         )
     end
+  end
+
+  # The request narrowed to the scopes the person may hold
+  # (`c:Sake.Auth.Subject.scopes_for/2`): the consent page shows those, and
+  # the code carries them. Nothing left of a request for some is refused.
+  defp permitted(conn, config, client, request, principal) do
+    scopes =
+      Sake.Auth.Subject.permitted_scopes(
+        config.subject,
+        principal,
+        request.resource,
+        request.scopes
+      )
+
+    if scopes == [] and request.scopes != [],
+      do:
+        redirect_error(
+          conn,
+          config,
+          request.redirect_uri,
+          "access_denied",
+          "You may not hold any of the requested scopes",
+          request.state
+        ),
+      else: consent_or_issue(conn, config, client, %{request | scopes: scopes}, principal)
   end
 
   defp client(config, id) do

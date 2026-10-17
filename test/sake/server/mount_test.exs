@@ -213,6 +213,19 @@ defmodule Sake.Server.MountTest do
     mount Support
   end
 
+  defmodule Except do
+    use Sake.Server, name: "except", version: "1"
+
+    mount Billing,
+      prefix: "billing",
+      except: [DraftInvoice, "touch", "billing://terms", Remind]
+  end
+
+  defmodule Only do
+    use Sake.Server, name: "only", version: "1"
+    mount Billing, prefix: "billing", only: ["create_invoice", ShowBoard, Board, Invoice]
+  end
+
   defp scope(extra \\ []), do: Map.new([test: self()] ++ extra)
   defp names(list), do: Enum.map(list, &(Map.get(&1, :name) || &1["name"]))
 
@@ -530,6 +543,88 @@ defmodule Sake.Server.MountTest do
     end
   end
 
+  describe "only: and except:" do
+    test "except: leaves out the components it names, by module, name or URI" do
+      client = connect(Except, scope: scope(drafts: true), ui: true)
+
+      assert {:ok, tools} = list_tools(client)
+
+      assert names(tools) == [
+               "billing_create_invoice",
+               "billing_show_board",
+               "billing_whoami",
+               "billing_export"
+             ]
+
+      assert {:ok, resources} = list_resources(client)
+
+      assert Enum.map(resources, & &1["uri"]) == [
+               "invoice://billing/1",
+               "invoice://billing/2",
+               "ui://billing/board"
+             ]
+
+      assert {:ok, []} = list_prompts(client)
+
+      assert {:error, {:rpc, %{"code" => -32_602}}} =
+               call_tool(client, "billing_draft_invoice", %{})
+
+      assert {:error, _} = read_resource(client, "billing://billing/terms")
+
+      assert {:ok, %ToolResult{text: "Invoice 7 for 5 [billing]"}} =
+               call_tool(client, "billing_create_invoice", %{"amount" => 5})
+    end
+
+    test "only: mounts the components it names and nothing else" do
+      client = connect(Only, scope: scope(), ui: true)
+
+      assert {:ok, tools} = list_tools(client)
+      assert names(tools) == ["billing_create_invoice", "billing_show_board"]
+      assert {:ok, resources} = list_resources(client)
+
+      assert Enum.map(resources, & &1["uri"]) == [
+               "invoice://billing/1",
+               "invoice://billing/2",
+               "ui://billing/board"
+             ]
+
+      assert {:ok, []} = list_prompts(client)
+    end
+
+    test "an entry that names nothing, both options, a bad entry, a UI left behind" do
+      assert_raise ArgumentError, ~r/except: names nothing .* \["draft_invoce"\]/, fn ->
+        defmodule Typo do
+          use Sake.Server, name: "typo", version: "1"
+          mount Sake.Server.MountTest.Billing, except: ["draft_invoce"]
+        end
+      end
+
+      assert_raise ArgumentError, ~r/only: or except:, not both/, fn ->
+        defmodule Both do
+          use Sake.Server, name: "both", version: "1"
+          mount Sake.Server.MountTest.Billing, only: ["touch"], except: ["export"]
+        end
+      end
+
+      assert_raise ArgumentError, ~r/only: takes a list/, fn ->
+        defmodule NotAList do
+          use Sake.Server, name: "not-a-list", version: "1"
+          mount Sake.Server.MountTest.Billing, only: "touch"
+        end
+      end
+
+      assert_raise ArgumentError, ~r/shows the UI "ui:\/\/billing\/board"/, fn ->
+        defmodule NoBoard do
+          use Sake.Server, name: "no-board", version: "1"
+
+          mount Sake.Server.MountTest.Billing,
+            prefix: "billing",
+            except: [Sake.Server.MountTest.Board]
+        end
+      end
+    end
+  end
+
   describe "compile-time checks" do
     test "a name listed twice across mounted servers" do
       assert_raise ArgumentError, ~r/tool "create_invoice" is listed twice/, fn ->
@@ -557,7 +652,7 @@ defmodule Sake.Server.MountTest do
         end
       end
 
-      assert_raise ArgumentError, ~r/mount takes prefix: and scope:/, fn ->
+      assert_raise ArgumentError, ~r/mount takes prefix:, scope:, only: and except:/, fn ->
         defmodule BadOption do
           use Sake.Server, name: "bad", version: "1"
           mount Sake.Server.MountTest.Support, name: "x"

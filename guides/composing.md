@@ -40,13 +40,49 @@ defmodule MyApp.MCP do
 end
 ```
 
-`mount` takes two options:
+`mount` takes these options:
 
 - `prefix:` puts the mounted server's components under a name of their
   own (see below). Without it they keep their names, which must then not
   clash with anything else the server lists.
 - `scope:` (one scope or a list) adds required scopes to every component
   mounted, on top of each component's own `scope:`.
+- `only:` or `except:` mounts some of the mounted server's components:
+  only those listed, or all but those (see below).
+
+## Mounting some of a server
+
+A server from a library, or another team's, may list components you
+do not want to serve. `except:` leaves them out; `only:` takes the ones
+you name and nothing else:
+
+```elixir
+mount MyApp.MCP.Billing, prefix: "billing", except: [MyApp.MCP.Billing.Refund]
+mount MyApp.MCP.Support, prefix: "support", only: ["open_ticket", "ticket://{id}"]
+```
+
+Each entry names a component as the mounted server declares it, before
+any prefix: its module, a tool or prompt name, or a resource URI (a
+template's too). A name that a tool and a prompt share names both. A left
+out component is not listed, called, read or got through the server, and
+counts for nothing else (the capabilities, the tasks and MCP Apps
+extensions it would turn on, a list's `ttlMs`); the mounted server
+serves it as before on an endpoint of its own.
+
+Both options are checked when the server compiles:
+
+- an entry that names nothing the mounted server lists is an error, so a
+  typo in `except:` cannot leave serving what it meant to hide;
+- a kept tool that shows an MCP App left out is an error, as it is for
+  any server that does not list a tool's UI;
+- `only:` and `except:` together are an error;
+- a server that lists a proxy's upstream components cannot be filtered,
+  since those are known only at runtime: mount the proxy's server with
+  a middleware that filters the list instead (`guides/middleware.md`).
+
+The scopes the mounted server declares are still listed, for the
+authorization server's metadata and consent page, whichever of its
+components are mounted.
 
 Mounting is resolved when `MyApp.MCP` compiles: the mounted server's
 components become part of its lists, and a name listed twice anywhere in

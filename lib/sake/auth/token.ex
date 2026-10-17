@@ -235,8 +235,8 @@ defmodule Sake.Auth.Token do
 
       {:ok, record} ->
         with {:ok, attrs} <- rotate(client, record, p, jkt),
-             :ok <- still_authorized(config, {module, state}, client, record) do
-          issue_rotated(config, {module, state}, hash, attrs)
+             {:ok, scopes} <- still_authorized(config, {module, state}, client, record, attrs) do
+          issue_rotated(config, {module, state}, hash, %{attrs | scopes: scopes})
         end
     end
   end
@@ -251,7 +251,8 @@ defmodule Sake.Auth.Token do
          {:ok, principal} <- machine_principal(config, client),
          {:ok, scopes} <- granted_scopes(config, p["scope"], [client.scopes]),
          {:ok, resource} <- target(config, p["resource"]),
-         :ok <- resource_allowed(config, principal, resource) do
+         :ok <- resource_allowed(config, principal, resource),
+         {:ok, scopes} <- principal_scopes(config, principal, resource, scopes) do
       {:ok,
        issue_access(config, %{
          client_id: client.id,
@@ -268,7 +269,8 @@ defmodule Sake.Auth.Token do
     with {:ok, grant} <- JWTGrant.verify(config, client, assertion),
          {:ok, scopes} <- granted_scopes(config, p["scope"], JWTGrant.scope_limits(client, grant)),
          {:ok, resource} <- JWTGrant.resource(config, grant, p["resource"]),
-         :ok <- resource_allowed(config, grant.principal, resource) do
+         :ok <- resource_allowed(config, grant.principal, resource),
+         {:ok, scopes} <- principal_scopes(config, grant.principal, resource, scopes) do
       {:ok,
        issue_access(config, %{
          client_id: client.id,
@@ -309,6 +311,19 @@ defmodule Sake.Auth.Token do
     if Subject.authorize_resource?(config.subject, principal, resource),
       do: :ok,
       else: {:error, "invalid_grant", "The principal may not use this resource"}
+  end
+
+  # The scopes narrowed to those the principal may hold for the resource
+  # (`c:Sake.Auth.Subject.scopes_for/2`), refused when none of a request
+  # for some is left, as `granted_scopes/3` refuses.
+  defp principal_scopes(config, principal, resource, scopes) do
+    case Subject.permitted_scopes(config.subject, principal, resource, scopes) do
+      [] when scopes != [] ->
+        {:error, "invalid_scope", "The scope exceeds what this grant allows"}
+
+      permitted ->
+        {:ok, permitted}
+    end
   end
 
   # The scopes a grant without a person gets: the ones asked for (by
@@ -443,14 +458,19 @@ defmodule Sake.Auth.Token do
   end
 
   # A refresh renews the grant only while the person may still have it:
-  # their account still loads, and `authorize_resource?/2` still allows
-  # the resource (someone removed from a tenant, say). Otherwise the whole
-  # family is revoked, its live access token included, and the client has
-  # to send the person through authorization again.
-  defp still_authorized(config, {module, state}, client, record) do
+  # their account still loads, `authorize_resource?/2` still allows the
+  # resource (someone removed from a tenant, say), and `scopes_for/2`
+  # still allows some of the scopes renewed, which are narrowed to those.
+  # Otherwise the whole family is revoked, its live access token included,
+  # and the client has to send the person through authorization again.
+  # Returns the scopes to renew.
+  defp still_authorized(config, {module, state}, client, record, attrs) do
     with {:ok, principal} <- refresh_principal(config, client, record),
-         true <- Subject.authorize_resource?(config.subject, principal, record.resource) do
-      :ok
+         true <- Subject.authorize_resource?(config.subject, principal, record.resource),
+         scopes =
+           Subject.permitted_scopes(config.subject, principal, record.resource, attrs.scopes),
+         true <- scopes != [] or attrs.scopes == [] do
+      {:ok, scopes}
     else
       _ ->
         module.revoke_family(state, record.family_id)
