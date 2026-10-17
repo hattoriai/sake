@@ -7,6 +7,12 @@ Logger.configure(level: :info)
 
 secret = String.duplicate("dev-secret-", 6)
 
+# The key ID tokens are signed with (OpenID Connect), new at each start.
+signing_key =
+  {:rsa, 2048, 65_537}
+  |> :public_key.generate_key()
+  |> then(&:public_key.pem_encode([:public_key.pem_entry_encode(:RSAPrivateKey, &1)]))
+
 children = [
   {Sake,
    secret_key_base: secret,
@@ -21,7 +27,11 @@ children = [
      device: true,
      # Pushed authorization requests (RFC 9126), at /oauth/par: a client
      # may push its request, and Sake.Client does.
-     par: true
+     par: true,
+     # OpenID Connect: an ID token for the openid scope, the person's name
+     # and address at /oauth/userinfo, the key at /oauth/jwks.
+     openid: true,
+     signing_keys: [[kid: "dev", pem: signing_key]]
    ]},
   {Bandit, plug: SakeDev.Router, port: 4000},
   # The gateway's proxy, whose upstream is this server's /open/mcp.

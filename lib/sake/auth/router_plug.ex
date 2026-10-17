@@ -1,8 +1,8 @@
 defmodule Sake.Auth.RouterPlug do
   @moduledoc """
   The token, registration, revocation, device authorization and pushed
-  authorization request endpoints as one Plug router for hosts without
-  Phoenix:
+  authorization request endpoints, and with `openid:` the JWKS and
+  userinfo endpoints, as one Plug router for hosts without Phoenix:
 
       forward "/oauth", to: Sake.Auth.RouterPlug
 
@@ -20,5 +20,8 @@ defmodule Sake.Auth.RouterPlug do
   post "/revoke", to: Sake.Auth.Revoke
   post "/device_authorization", to: Sake.Auth.DeviceAuthorization
   post "/par", to: Sake.Auth.PushedAuthorization
+  get "/jwks", to: Sake.Auth.PublicKeys
+  get "/userinfo", to: Sake.Auth.UserInfo
+  post "/userinfo", to: Sake.Auth.UserInfo
   match _, do: send_resp(conn, 404, "")
 end

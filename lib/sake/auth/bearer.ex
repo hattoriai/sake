@@ -66,12 +66,21 @@ defmodule Sake.Auth.Bearer do
   configuration or an external server's. `context` goes to an external
   server's `c:Sake.Auth.External.verify_token/2` as it is, and nowhere
   else.
+
+  Options, for an endpoint of the authorization server itself (the
+  userinfo endpoint):
+
+    * `any_resource: true` takes a token of Sake's own whatever resource
+      it is bound to; `resource` is then the endpoint's URL, which a
+      DPoP proof may name.
+    * `scope:` — the scopes a 401's challenge names (default the
+      servers').
   """
-  @spec check(Config.t() | External.t(), request(), String.t(), term()) ::
+  @spec check(Config.t() | External.t(), request(), String.t(), term(), keyword()) ::
           {:ok, accepted()} | {:error, Challenge.t()}
-  def check(config, request, resource, context) do
+  def check(config, request, resource, context, opts \\ []) do
     with {:ok, scheme, token} <- credentials(request, config),
-         {:ok, record, found} <- record(config, scheme, token, resource, context),
+         {:ok, record, found} <- record(config, scheme, token, audience(resource, opts), context),
          :ok <- possession(request, config, scheme, token, record, resource),
          {:ok, principal} <- principal(config, record, found) do
       {:ok,
@@ -84,12 +93,14 @@ defmodule Sake.Auth.Bearer do
        }}
     else
       {:error, scheme, code, description} ->
-        {:error, unauthorized(request, config, {scheme, code, description})}
+        {:error, unauthorized(request, config, {scheme, code, description}, opts[:scope])}
 
       _ ->
-        {:error, unauthorized(request, config, nil)}
+        {:error, unauthorized(request, config, nil, opts[:scope])}
     end
   end
+
+  defp audience(resource, opts), do: if(opts[:any_resource] == true, do: :any, else: resource)
 
   # The scheme name is case-insensitive (RFC 9110 §11.1); one space
   # separates it from the token.
@@ -129,7 +140,7 @@ defmodule Sake.Auth.Bearer do
 
     with {:ok, record} <- module.get_token(state, :access, Tokens.hash(token)),
          true <- Tokens.valid?(record, DateTime.utc_now()),
-         true <- record.resource == resource do
+         true <- resource == :any or record.resource == resource do
       {:ok, record, nil}
     else
       _ -> invalid(scheme)
@@ -221,9 +232,9 @@ defmodule Sake.Auth.Bearer do
 
   # The challenges go out in order, the one with the error first; a
   # `use_dpop_nonce` error comes with the nonce to use.
-  defp unauthorized(request, config, error) do
+  defp unauthorized(request, config, error, scope) do
     metadata = Resource.metadata_url(request.url)
-    scopes = Resource.scopes_string(config)
+    scopes = if scope, do: Enum.join(scope, " "), else: Resource.scopes_string(config)
     params = [~s(resource_metadata="#{metadata}"), ~s(scope="#{scopes}")]
     [first | _] = headers = challenges(config, params, error)
 

@@ -55,6 +55,7 @@ defmodule SakeTest.StoreCases do
           dpop_jkt: "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I",
           acr: "mfa",
           auth_time: DateTime.utc_now() |> DateTime.add(-30) |> DateTime.truncate(:second),
+          nonce: "n-0S6_WzA2Mj",
           expires_at: DateTime.utc_now() |> DateTime.add(600) |> DateTime.truncate(:second)
         }
 

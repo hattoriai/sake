@@ -6,14 +6,18 @@ defmodule Sake.Auth.Metadata do
   # Each document is a base map and a list of contributors, small
   # functions of the configuration that return the fields of one feature
   # (DPoP, client ID metadata documents, dynamic registration, ID-JAGs,
-  # the device grant, pushed authorization requests, the acr values), or
-  # nothing when it is off. A feature adds its fields by adding a
-  # contributor.
+  # the device grant, pushed authorization requests, the acr values, the
+  # signing keys), or nothing when it is off. A feature adds its fields by
+  # adding a contributor.
+  #
+  # With `openid:`, the OpenID Provider metadata (OpenID Connect
+  # Discovery 1.0 §3) is the authorization server's, with the fields that
+  # are OpenID Connect's alone added.
   #
   # Core: it takes the configuration and plain data, and never sees the
   # conn; `Sake.Auth.WellKnown` serves the documents.
 
-  alias Sake.Auth.{Config, DPoP, External, JWT, TokenGrants}
+  alias Sake.Auth.{Config, DPoP, External, JWT, SigningKeys, TokenGrants}
 
   @id_jag_profile "urn:ietf:params:oauth:grant-profile:id-jag"
 
@@ -26,7 +30,7 @@ defmodule Sake.Auth.Metadata do
         "authorization_endpoint" => Config.authorize_url(config),
         "token_endpoint" => Config.token_url(config),
         "revocation_endpoint" => Config.revoke_url(config),
-        "scopes_supported" => scopes(config),
+        "scopes_supported" => request_scopes(config),
         "response_types_supported" => ["code"],
         "grant_types_supported" => TokenGrants.grant_types(config),
         "code_challenge_methods_supported" => ["S256"],
@@ -43,9 +47,36 @@ defmodule Sake.Auth.Metadata do
         &device/1,
         &par/1,
         &dpop_algs/1,
-        &acr_values/1
+        &acr_values/1,
+        &jwks/1
       ]
     )
+  end
+
+  # The claims an ID token or the userinfo endpoint may carry: the ID
+  # token's own, and those of the `profile` and `email` scopes
+  # (OpenID Connect Core §5.4), which `c:Sake.Auth.Subject.claims/2` may
+  # return.
+  @claims ~w(sub iss aud azp exp iat auth_time acr nonce at_hash
+             name family_name given_name middle_name nickname preferred_username
+             profile picture website gender birthdate zoneinfo locale updated_at
+             email email_verified)
+
+  @doc """
+  The OpenID Provider metadata (OpenID Connect Discovery 1.0 §3), with
+  `openid:`: the authorization server's, and the fields of OpenID
+  Connect alone. nil without it.
+  """
+  @spec openid_configuration(Config.t()) :: map() | nil
+  def openid_configuration(%Config{openid: false}), do: nil
+
+  def openid_configuration(config) do
+    Map.merge(authorization_server(config), %{
+      "userinfo_endpoint" => Config.userinfo_url(config),
+      "subject_types_supported" => ["public"],
+      "id_token_signing_alg_values_supported" => SigningKeys.algs(config),
+      "claims_supported" => @claims
+    })
   end
 
   @doc """
@@ -69,6 +100,7 @@ defmodule Sake.Auth.Metadata do
     do: Enum.reduce(contributors, base, &Map.merge(&2, &1.(config)))
 
   defp scopes(config), do: config |> Config.scopes() |> Enum.map(&elem(&1, 0))
+  defp request_scopes(config), do: config |> Config.request_scopes() |> Enum.map(&elem(&1, 0))
 
   defp resource_name(%Config{name: name}), do: name
   defp resource_name(%External{resource_name: name}), do: name
@@ -135,6 +167,10 @@ defmodule Sake.Auth.Metadata do
   # context classes the host's login offers, when it said.
   defp acr_values(%{acr_values: nil}), do: %{}
   defp acr_values(config), do: %{"acr_values_supported" => config.acr_values}
+
+  # RFC 8414 §2: where the keys that sign the server's ID tokens are.
+  defp jwks(%{openid: false}), do: %{}
+  defp jwks(config), do: %{"jwks_uri" => Config.jwks_url(config)}
 
   # RFC 9728 §2: the resource takes DPoP-bound tokens only.
   defp dpop_required(config) do

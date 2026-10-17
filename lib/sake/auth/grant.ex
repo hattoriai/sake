@@ -94,7 +94,7 @@ defmodule Sake.Auth.Grant do
   end
 
   defp assigns(config, client, request, principal) do
-    known = Map.new(Config.scopes(config))
+    known = Map.new(Config.request_scopes(config))
 
     Map.merge(redirect(request), %{
       flow: AuthorizationRequest.flow(request),
@@ -166,13 +166,15 @@ defmodule Sake.Auth.Grant do
   Issues a code for `request` (a map with client_id, redirect_uri,
   code_challenge, scopes, resource, and optionally `extra`) and
   `subject_id`; returns the plain code. A `"dpop_jkt"` in `extra` binds
-  the code to that DPoP key (RFC 9449 §10). `authentication` is how and
+  the code to that DPoP key (RFC 9449 §10), and a `"nonce"` goes in the
+  ID token issued for it (OpenID Connect). `authentication` is how and
   when the person signed in (`%{acr: acr, auth_time: datetime}`, either
   nil), which the code's tokens carry (RFC 9470).
   """
   @spec issue_code(Config.t(), map(), String.t(), map()) :: String.t()
   def issue_code(config, request, subject_id, authentication \\ Authentication.none()) do
     authentication = Authentication.context(authentication)
+    extra = Map.get(request, :extra) || %{}
     {module, state} = Auth.store(config)
     code = Tokens.generate()
 
@@ -185,7 +187,8 @@ defmodule Sake.Auth.Grant do
         scopes: request.scopes,
         resource: request.resource,
         subject_id: subject_id,
-        dpop_jkt: (Map.get(request, :extra) || %{})["dpop_jkt"],
+        dpop_jkt: extra["dpop_jkt"],
+        nonce: extra["nonce"],
         acr: authentication.acr,
         auth_time: authentication.auth_time,
         expires_at: DateTime.add(DateTime.utc_now(), @code_ttl)

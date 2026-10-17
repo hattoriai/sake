@@ -53,6 +53,8 @@ if Code.ensure_loaded?(Ecto.Migration) do
         # which its tokens carry.
         add(:acr, :string)
         add(:auth_time, :utc_datetime)
+        # The OpenID Connect nonce of the request, for its ID token.
+        add(:nonce, :text)
         add(:expires_at, :utc_datetime, null: false)
         # A consumed code is kept until it expires, as the fence between
         # issuing its tokens and revoking its family on a replay.

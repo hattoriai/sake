@@ -21,6 +21,19 @@ defmodule SakeDev.Subject do
   @impl true
   def display(%{name: name, email: email}), do: "#{name} (#{email})"
 
+  # OpenID Connect: the person's name for `profile`, their address for
+  # `email`, at the userinfo endpoint.
+  @impl true
+  def claims(person, scopes) do
+    %{}
+    |> Map.merge(if "profile" in scopes, do: %{"name" => person.name}, else: %{})
+    |> Map.merge(
+      if "email" in scopes,
+        do: %{"email" => person.email, "email_verified" => true},
+        else: %{}
+    )
+  end
+
   # A machine client acts as itself: tools see the client, not a person.
   @impl true
   def client_principal(client), do: {:ok, %{id: client.id, name: client.name, client: true}}
