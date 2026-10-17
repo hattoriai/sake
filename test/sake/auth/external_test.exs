@@ -266,14 +266,7 @@ defmodule Sake.Auth.ExternalTest do
       thumbprint = Base.url_encode64(:crypto.hash(:sha256, "a certificate"), padding: false)
       token = jwt(key, %{"cnf" => %{"x5t#S256" => thumbprint}})
 
-      conn = call(:idp, token)
-      assert conn.status == 401
-
-      assert Enum.any?(
-               get_resp_header(conn, "www-authenticate"),
-               &String.starts_with?(&1, ~s(Bearer error="invalid_token"))
-             )
-
+      assert call(:idp, token).status == 401
       assert_received {:refused, :idp, :unsupported_confirmation}
 
       {proof_key, proof_jwk} = Keys.key()

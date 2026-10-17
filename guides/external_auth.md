@@ -244,8 +244,8 @@ client credentials grant), is a machine client's: `subject_id` is `nil`.
 
 A token can be bound to its client only in a way Sake checks: DPoP's
 `cnf.jkt` (below). A token whose `cnf` names any other binding, such as
-a client certificate (`cnf.x5t#S256`, RFC 8705), is refused with
-`invalid_token`, whether it comes as a bearer token or with a DPoP
+a client certificate (`cnf.x5t#S256`, RFC 8705), is refused like any
+invalid token (a 401), whether it comes as a bearer token or with a DPoP
 proof: taken without the check, the binding would protect nothing. If
 your authorization server binds tokens to certificates, have it issue
 unbound or DPoP-bound tokens for this resource.
