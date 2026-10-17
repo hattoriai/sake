@@ -8,35 +8,7 @@ defmodule Sake.Server.Results do
   def tool({:ok, value}, spec, ctx), do: tool({:ok, value, []}, spec, ctx)
 
   def tool({:ok, value, opts}, _spec, _ctx) do
-    base =
-      case value do
-        text when is_binary(text) ->
-          %{"content" => [Content.to_wire(Content.text(text))]}
-
-        [%Content{} | _] = list ->
-          %{"content" => Enum.map(list, &Content.to_wire/1)}
-
-        [] ->
-          %{"content" => []}
-
-        structured when is_map(structured) or is_list(structured) ->
-          json = Sake.JSON.encode!(structured)
-
-          %{
-            "content" => model_content(opts[:text], json),
-            "structuredContent" => JSON.decode!(json)
-          }
-
-        other ->
-          %{"content" => [Content.to_wire(Content.text(to_string(other)))]}
-      end
-
-    if opts[:text] && not Map.has_key?(base, "structuredContent") do
-      raise ArgumentError,
-            "a tool's `text:` needs a map or a list result, got: #{inspect(value)}"
-    end
-
-    base = Map.put(base, "isError", false)
+    base = value |> tool_content(opts[:text]) |> Map.put("isError", false)
     if meta = opts[:meta], do: Map.put(base, "_meta", meta), else: base
   end
 
@@ -44,10 +16,32 @@ defmodule Sake.Server.Results do
     %{"content" => [Content.to_wire(Content.text(text))], "isError" => true}
   end
 
+  defp tool_content(text, nil) when is_binary(text), do: %{"content" => [text_block(text)]}
+
+  defp tool_content([%Content{} | _] = list, nil),
+    do: %{"content" => Enum.map(list, &Content.to_wire/1)}
+
+  defp tool_content([], nil), do: %{"content" => []}
+  defp tool_content([%Content{} | _] = value, _text), do: text_needs_data!(value)
+
+  defp tool_content(structured, text) when is_map(structured) or is_list(structured) do
+    json = Sake.JSON.encode!(structured)
+    %{"content" => model_content(text, json), "structuredContent" => JSON.decode!(json)}
+  end
+
+  defp tool_content(other, nil), do: %{"content" => [text_block(to_string(other))]}
+  defp tool_content(value, _text), do: text_needs_data!(value)
+
+  defp text_needs_data!(value) do
+    raise ArgumentError, "a tool's `text:` needs a map or a list result, got: #{inspect(value)}"
+  end
+
+  defp text_block(text), do: Content.to_wire(Content.text(text))
+
   # What the model reads next to `structuredContent`: the data's JSON by
   # default, or the tool's own `text:` (a string or a content list).
-  defp model_content(nil, json), do: [Content.to_wire(Content.text(json))]
-  defp model_content(text, _json) when is_binary(text), do: [Content.to_wire(Content.text(text))]
+  defp model_content(nil, json), do: [text_block(json)]
+  defp model_content(text, _json) when is_binary(text), do: [text_block(text)]
   defp model_content(list, _json) when is_list(list), do: Enum.map(list, &Content.to_wire/1)
 
   @spec resource(term(), Sake.Resource.Spec.t(), String.t(), Sake.Context.t()) ::
