@@ -4,16 +4,28 @@ defmodule Sake.Auth.ClientAuth do
   # client by client_id, a confidential client by its secret (basic or
   # post), or by a JWT it signed with its own key (`private_key_jwt`,
   # RFC 7523 §2.2).
+  #
+  # It takes the credentials `credentials/1` reads from the request's
+  # headers, never the conn, so that the token and revocation cores can
+  # call it.
 
   alias Sake.Auth.{Clients, Config, JWKS, JWT, Replay, Tokens}
 
   @assertion_type "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 
-  @spec authenticate(Config.t(), Plug.Conn.t(), map()) ::
-          {:ok, Sake.Auth.Client.t()} | {:error, :invalid_client}
-  def authenticate(config, conn, params) do
-    basic = Plug.Conn.get_req_header(conn, "authorization")
+  @typedoc """
+  What a request says about its client outside its parameters: the
+  values of its `Authorization` header, for HTTP Basic.
+  """
+  @type credentials :: [String.t()]
 
+  @doc "The client credentials of a request, from its headers."
+  @spec credentials(Plug.Conn.t()) :: credentials()
+  def credentials(conn), do: Plug.Conn.get_req_header(conn, "authorization")
+
+  @spec authenticate(Config.t(), credentials(), map()) ::
+          {:ok, Sake.Auth.Client.t()} | {:error, :invalid_client}
+  def authenticate(config, basic, params) do
     cond do
       # RFC 6749 §2.3: a client uses one authentication method per request.
       params["client_assertion_type"] != nil and basic != [] -> {:error, :invalid_client}
@@ -23,9 +35,9 @@ defmodule Sake.Auth.ClientAuth do
   end
 
   @doc "Whether the request carries any client identification at all."
-  @spec client_given?(Plug.Conn.t(), map()) :: boolean()
-  def client_given?(conn, params) do
-    match?(["Basic " <> _], Plug.Conn.get_req_header(conn, "authorization")) or
+  @spec client_given?(credentials(), map()) :: boolean()
+  def client_given?(basic, params) do
+    match?(["Basic " <> _], basic) or
       is_binary(params["client_id"]) or is_binary(params["client_assertion"])
   end
 

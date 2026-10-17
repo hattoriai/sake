@@ -98,14 +98,19 @@ defmodule Sake.Auth.DPoP do
 
   # ---- the server's side
 
-  @doc """
-  The request's DPoP proof: `:none` without one, `{:ok, proof}`, or an
-  error for several (RFC 9449 §4.3 allows exactly one). A compact JWS has
-  no commas, so a header with one is several proofs joined.
-  """
+  @doc "The request's DPoP proof, as `from_headers/1` reads it."
   @spec from_conn(Plug.Conn.t()) :: :none | {:ok, String.t()} | {:error, String.t(), String.t()}
-  def from_conn(conn) do
-    case get_req_header(conn, "dpop") do
+  def from_conn(conn), do: from_headers(get_req_header(conn, "dpop"))
+
+  @doc """
+  The DPoP proof of a request whose `DPoP` header has these values:
+  `:none` without one, `{:ok, proof}`, or an error for several (RFC 9449
+  §4.3 allows exactly one). A compact JWS has no commas, so a header with
+  one is several proofs joined.
+  """
+  @spec from_headers([String.t()]) :: :none | {:ok, String.t()} | {:error, String.t(), String.t()}
+  def from_headers(headers) do
+    case headers do
       [] ->
         :none
 

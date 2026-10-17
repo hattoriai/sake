@@ -13,11 +13,21 @@ defmodule Sake.Auth.Resource do
     String.downcase("#{conn.scheme}://#{conn.host}") <> port
   end
 
-  @spec metadata_url(Plug.Conn.t()) :: String.t()
-  def metadata_url(conn),
-    do:
-      origin(conn) <>
-        "/.well-known/oauth-protected-resource" <> String.trim_trailing(conn.request_path, "/")
+  @doc """
+  The URL of the protected resource metadata (RFC 9728 §3.1) of the
+  endpoint at `url` (an origin and a path), or that a request reached.
+  """
+  @spec metadata_url(String.t() | Plug.Conn.t()) :: String.t()
+  def metadata_url(%Plug.Conn{} = conn), do: metadata_url(url(conn))
+
+  def metadata_url(url) do
+    [_, origin, path] = Regex.run(~r{\A([^:/]+://[^/]*)(.*)\z}s, url)
+    origin <> "/.well-known/oauth-protected-resource" <> String.trim_trailing(path, "/")
+  end
+
+  @doc "The URL a request reached: its origin and path, without the query."
+  @spec url(Plug.Conn.t()) :: String.t()
+  def url(conn), do: origin(conn) <> conn.request_path
 
   @spec scopes_string(Sake.Auth.Config.t() | Sake.Auth.External.t()) :: String.t()
   def scopes_string(config),

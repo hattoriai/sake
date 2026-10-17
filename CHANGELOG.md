@@ -35,6 +35,19 @@ wire: the 401 and 403 responses are the same bytes.
   `{Sake, :external_auth}`). Code that read or wrote those keys, or
   looked for the processes under `Sake.Supervisor`, needs the new ones.
 
+Each OAuth endpoint is now a core and an adapter (#67): the OAuth rules
+are pure functions over the configuration and plain data, and the plugs
+only parse the request, call them and render the answer (see "Cores
+and adapters" in the `Sake.Auth` documentation). The plugs keep their
+names and routes, and nothing changes on the wire: every response is
+the same bytes. Two undocumented functions moved with the rules:
+
+- `Sake.Auth.Authorize.resource/2` is now
+  `Sake.Auth.AuthorizationRequest.resource/2`, and
+  `Sake.Auth.Token.grant_types/1` is now
+  `Sake.Auth.TokenGrants.grant_types/1`. Both are internal; code that
+  called them anyway needs the new names.
+
 ### Client
 
 - `Sake.Client.Auth`'s `static: true`, which `Sake.Test` uses, is a

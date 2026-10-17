@@ -1,18 +1,12 @@
 defmodule Sake.Auth.DCR do
   @moduledoc false
-  # Dynamic Client Registration (RFC 7591) for clients that do not use Client
-  # ID Metadata Documents. Public clients only; no authentication. Put a rate
-  # limit in front of it.
-  #
-  # A client that sends no `grant_types` is registered for both the
-  # authorization code and the refresh token grants, and the response says
-  # so.
+  # The registration endpoint's adapter (RFC 7591): it reads the metadata
+  # document, hands it to `Sake.Auth.Registration`, and renders the
+  # answer. No authentication; put a rate limit in front of it.
   @behaviour Plug
   import Plug.Conn
 
-  alias Sake.Auth.{Client, Redirect, Tokens}
-
-  @grant_types ["authorization_code", "refresh_token"]
+  alias Sake.Auth.Registration
 
   @impl true
   def init(opts), do: opts
@@ -25,8 +19,7 @@ defmodule Sake.Auth.DCR do
       # Every answer goes out on the conn the body read returned: the one
       # `call/2` was given is stale once the body has been read.
       case Sake.Auth.Body.json(conn, 65_536) do
-        {:ok, doc, conn} when is_map(doc) -> register(conn, config, doc)
-        {:ok, _doc, conn} -> error(conn, "invalid_client_metadata")
+        {:ok, doc, conn} -> respond(conn, Registration.register(config, doc))
         {:error, _reason, conn} -> error(conn, "invalid_client_metadata")
       end
     else
@@ -36,100 +29,14 @@ defmodule Sake.Auth.DCR do
 
   def call(conn, _opts), do: send_resp(conn, 405, "")
 
-  defp register(conn, config, doc) do
-    case build(doc) do
-      {:ok, client} ->
-        {module, state} = Sake.Auth.store(config)
-        :ok = module.put_client(state, client)
-
-        response = %{
-          "client_id" => client.id,
-          "client_id_issued_at" => System.system_time(:second),
-          "client_name" => client.name,
-          "redirect_uris" => client.redirect_uris,
-          "grant_types" => client.grant_types,
-          "response_types" => ["code"],
-          "token_endpoint_auth_method" => "none",
-          "application_type" => client.application_type,
-          "dpop_bound_access_tokens" => client.dpop_bound_access_tokens
-        }
-
-        conn
-        |> put_resp_header("cache-control", "no-store")
-        |> put_resp_content_type("application/json")
-        |> send_resp(201, JSON.encode!(response))
-
-      {:error, code} ->
-        error(conn, code)
-    end
+  defp respond(conn, {:ok, response}) do
+    conn
+    |> put_resp_header("cache-control", "no-store")
+    |> put_resp_content_type("application/json")
+    |> send_resp(201, JSON.encode!(response))
   end
 
-  defp build(doc) do
-    with :ok <- validate(doc) do
-      {:ok, client_from(doc)}
-    end
-  end
-
-  defp validate(doc) do
-    with :ok <- validate_redirect_uris(doc["redirect_uris"]),
-         :ok <- validate_name(doc["client_name"] || "Unnamed client"),
-         :ok <- validate_auth_method(doc["token_endpoint_auth_method"]),
-         :ok <- validate_types(doc) do
-      validate_grants(doc["grant_types"] || @grant_types)
-    end
-  end
-
-  defp validate_types(doc) do
-    if Sake.Auth.Clients.metadata_types_valid?(doc),
-      do: :ok,
-      else: {:error, "invalid_client_metadata"}
-  end
-
-  defp validate_redirect_uris(uris) do
-    cond do
-      not (is_list(uris) and uris != [] and Enum.all?(uris, &Redirect.valid?/1)) ->
-        {:error, "invalid_redirect_uri"}
-
-      length(uris) > 10 ->
-        {:error, "invalid_client_metadata"}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp validate_name(name) do
-    if is_binary(name) and String.length(name) in 1..100,
-      do: :ok,
-      else: {:error, "invalid_client_metadata"}
-  end
-
-  defp validate_auth_method(method) do
-    if (method || "none") == "none", do: :ok, else: {:error, "invalid_client_metadata"}
-  end
-
-  defp validate_grants(grants) do
-    if is_list(grants) and grants -- @grant_types == [],
-      do: :ok,
-      else: {:error, "invalid_client_metadata"}
-  end
-
-  defp client_from(doc) do
-    %Client{
-      id: "dc_" <> Tokens.generate(),
-      name: doc["client_name"] || "Unnamed client",
-      kind: :dynamic,
-      redirect_uris: doc["redirect_uris"],
-      grant_types: doc["grant_types"] || @grant_types,
-      token_endpoint_auth_method: "none",
-      client_uri: doc["client_uri"],
-      logo_uri: doc["logo_uri"],
-      scopes: if(is_binary(doc["scope"]), do: String.split(doc["scope"]), else: nil),
-      application_type: doc["application_type"] || "native",
-      dpop_bound_access_tokens: doc["dpop_bound_access_tokens"] == true,
-      inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
-    }
-  end
+  defp respond(conn, {:error, code}), do: error(conn, code)
 
   defp error(conn, code) do
     conn

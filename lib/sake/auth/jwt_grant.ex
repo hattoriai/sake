@@ -15,7 +15,7 @@ defmodule Sake.Auth.JWTGrant do
   # and is single use when it has a `jti`. Either may be valid for no
   # longer than the issuer's `max_lifetime` from now.
 
-  alias Sake.Auth.{Authorize, Config, JWKS, JWT, Replay, Subject, TrustedIssuer}
+  alias Sake.Auth.{AuthorizationRequest, Config, JWKS, JWT, Replay, Subject, TrustedIssuer}
 
   @type grant :: %{principal: term(), claims: map(), issuer: TrustedIssuer.t()}
 
@@ -67,7 +67,7 @@ defmodule Sake.Auth.JWTGrant do
   end
 
   defp served(config, resource) do
-    case Authorize.resource(config, resource) do
+    case AuthorizationRequest.resource(config, resource) do
       {:ok, resource} ->
         {:ok, resource}
 

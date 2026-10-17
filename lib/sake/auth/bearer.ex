@@ -28,41 +28,73 @@ defmodule Sake.Auth.Bearer do
   #
   # A refusal is a `Sake.Auth.Challenge`; `Sake.Plug` sends it, with the
   # JSON-RPC error of an MCP endpoint as the body.
+  #
+  # Core: the request is described by a plain map (`t:request/0`), never
+  # the conn; `Sake.Auth.authenticate/2` reads it from the conn and puts
+  # the answer on it.
 
-  import Plug.Conn
-
-  alias Sake.Auth
   alias Sake.Auth.{Challenge, Config, DPoP, External, Resource, Tokens}
 
-  @spec check(Plug.Conn.t(), map()) :: {:ok, Plug.Conn.t()} | {:error, Challenge.t()}
-  def check(conn, plug_opts) do
-    config = config(plug_opts.auth)
-    resource = Resource.canonical(conn, plug_opts)
+  @typedoc """
+  The request whose token is checked: the values of its `Authorization`
+  and `DPoP` headers, its method, and the URL it reached (origin and
+  path, without the query).
+  """
+  @type request :: %{
+          authorization: [String.t()],
+          dpop: [String.t()],
+          method: String.t(),
+          url: String.t()
+        }
 
-    with {:ok, scheme, token} <- credentials(conn, config),
-         {:ok, record, found} <- record(conn, config, scheme, token, resource),
-         :ok <- possession(conn, config, scheme, token, record, resource),
+  @typedoc """
+  An accepted token: its record, the scopes it holds now, its principal,
+  whether it came with the DPoP scheme, and the DPoP nonce to send back
+  (when the server requires them and it did).
+  """
+  @type accepted :: %{
+          token: Sake.Auth.TokenRecord.t(),
+          scopes: [String.t()],
+          principal: term(),
+          dpop: boolean(),
+          nonce: String.t() | nil
+        }
+
+  @doc """
+  Checks the token of `request` for the endpoint at `resource` (its
+  canonical URL, the token's audience). `config` is Sake's own
+  configuration or an external server's. `context` goes to an external
+  server's `c:Sake.Auth.External.verify_token/2` as it is, and nowhere
+  else.
+  """
+  @spec check(Config.t() | External.t(), request(), String.t(), term()) ::
+          {:ok, accepted()} | {:error, Challenge.t()}
+  def check(config, request, resource, context) do
+    with {:ok, scheme, token} <- credentials(request, config),
+         {:ok, record, found} <- record(config, scheme, token, resource, context),
+         :ok <- possession(request, config, scheme, token, record, resource),
          {:ok, principal} <- principal(config, record, found) do
       {:ok,
-       conn
-       |> nonce(config, scheme)
-       |> assign(:sake_token, record)
-       |> assign(:sake_scopes, scopes(config, principal, record))
-       |> assign(:sake_scope, principal)
-       |> assign(:sake_dpop, scheme == :dpop)}
+       %{
+         token: record,
+         scopes: scopes(config, principal, record),
+         principal: principal,
+         dpop: scheme == :dpop,
+         nonce: if(scheme == :dpop, do: DPoP.current_nonce(config))
+       }}
     else
       {:error, scheme, code, description} ->
-        {:error, unauthorized(conn, config, {scheme, code, description})}
+        {:error, unauthorized(request, config, {scheme, code, description})}
 
       _ ->
-        {:error, unauthorized(conn, config, nil)}
+        {:error, unauthorized(request, config, nil)}
     end
   end
 
   # The scheme name is case-insensitive (RFC 9110 §11.1); one space
   # separates it from the token.
-  defp credentials(conn, config) do
-    case get_req_header(conn, "authorization") do
+  defp credentials(request, config) do
+    case request.authorization do
       [header] -> scheme(header, config)
       _ -> :error
     end
@@ -92,11 +124,8 @@ defmodule Sake.Auth.Bearer do
 
   defp dpop(_header, _config), do: :error
 
-  defp config(true), do: Auth.config()
-  defp config(name), do: External.fetch!(name)
-
-  defp record(_conn, %Config{} = config, scheme, token, resource) do
-    {module, state} = Auth.store(config)
+  defp record(%Config{} = config, scheme, token, resource, _context) do
+    {module, state} = Sake.Auth.store(config)
 
     with {:ok, record} <- module.get_token(state, :access, Tokens.hash(token)),
          true <- Tokens.valid?(record, DateTime.utc_now()),
@@ -107,8 +136,8 @@ defmodule Sake.Auth.Bearer do
     end
   end
 
-  defp record(conn, %External{} = config, scheme, token, resource) do
-    case External.verify(config, token, resource, conn) do
+  defp record(%External{} = config, scheme, token, resource, context) do
+    case External.verify(config, token, resource, context) do
       {:ok, record, found} -> {:ok, record, found}
       :error -> invalid(scheme)
     end
@@ -117,18 +146,18 @@ defmodule Sake.Auth.Bearer do
   defp invalid(:dpop), do: {:error, :dpop, "invalid_token", "The access token is not valid"}
   defp invalid(:bearer), do: :error
 
-  defp possession(_conn, %{dpop: %{required: true}}, :bearer, _token, _record, _resource),
+  defp possession(_request, %{dpop: %{required: true}}, :bearer, _token, _record, _resource),
     do: {:error, :dpop, "invalid_token", "This server takes DPoP-bound tokens only"}
 
-  defp possession(_conn, _config, :bearer, _token, %{jkt: nil}, _resource), do: :ok
+  defp possession(_request, _config, :bearer, _token, %{jkt: nil}, _resource), do: :ok
 
-  defp possession(_conn, _config, :bearer, _token, _record, _resource),
+  defp possession(_request, _config, :bearer, _token, _record, _resource),
     do: {:error, :dpop, "invalid_token", "The access token is DPoP-bound: send it with a proof"}
 
-  defp possession(_conn, %{dpop: %{required: true}}, :dpop, _token, %{jkt: nil}, _resource),
+  defp possession(_request, %{dpop: %{required: true}}, :dpop, _token, %{jkt: nil}, _resource),
     do: {:error, :dpop, "invalid_token", "The access token is not DPoP-bound"}
 
-  defp possession(_conn, _config, :dpop, _token, %{jkt: nil}, _resource),
+  defp possession(_request, _config, :dpop, _token, %{jkt: nil}, _resource),
     do:
       {:error, :bearer, "invalid_token", "The access token is not DPoP-bound: send it as Bearer"}
 
@@ -136,12 +165,12 @@ defmodule Sake.Auth.Bearer do
   # canonical resource: behind a proxy that terminates TLS, the request
   # this node sees is not the one the client made, and the resource is
   # what the host configured it to be.
-  defp possession(conn, config, :dpop, token, record, resource) do
-    with {:ok, proof} <- proof(conn),
+  defp possession(request, config, :dpop, token, record, resource) do
+    with {:ok, proof} <- proof(request),
          {:ok, jkt} <-
            DPoP.verify(proof,
-             htm: conn.method,
-             htu: [Resource.origin(conn) <> conn.request_path, resource],
+             htm: request.method,
+             htu: [request.url, resource],
              access_token: token,
              nonce: DPoP.nonce_secret(config)
            ) do
@@ -153,8 +182,8 @@ defmodule Sake.Auth.Bearer do
     end
   end
 
-  defp proof(conn) do
-    case DPoP.from_conn(conn) do
+  defp proof(request) do
+    case DPoP.from_headers(request.dpop) do
       :none -> {:error, "invalid_dpop_proof", "A DPoP-bound token needs a DPoP proof"}
       other -> other
     end
@@ -190,13 +219,10 @@ defmodule Sake.Auth.Bearer do
         record.scopes
       )
 
-  defp nonce(conn, config, :dpop), do: DPoP.put_nonce(conn, config)
-  defp nonce(conn, _config, :bearer), do: conn
-
   # The challenges go out in order, the one with the error first; a
   # `use_dpop_nonce` error comes with the nonce to use.
-  defp unauthorized(conn, config, error) do
-    metadata = Resource.metadata_url(conn)
+  defp unauthorized(request, config, error) do
+    metadata = Resource.metadata_url(request.url)
     scopes = Resource.scopes_string(config)
     params = [~s(resource_metadata="#{metadata}"), ~s(scope="#{scopes}")]
     [first | _] = headers = challenges(config, params, error)
@@ -247,12 +273,12 @@ defmodule Sake.Auth.Bearer do
     do: "DPoP " <> Enum.join(params ++ [~s(algs="#{Enum.join(DPoP.algs(), " ")}")], ", ")
 
   @doc """
-  The 403 challenge for a component the token's scopes do not cover, in
-  the scheme the token came with.
+  The 403 challenge for a component the token's scopes do not cover, at
+  the endpoint `url` reached, in the scheme the token came with (`dpop?`).
   """
-  @spec insufficient_scope(Plug.Conn.t(), [String.t()]) :: Challenge.t()
-  def insufficient_scope(conn, scopes) do
-    metadata = Resource.metadata_url(conn)
+  @spec insufficient_scope(String.t(), [String.t()], boolean()) :: Challenge.t()
+  def insufficient_scope(url, scopes, dpop?) do
+    metadata = Resource.metadata_url(url)
 
     params = [
       ~s(error="insufficient_scope"),
@@ -260,7 +286,7 @@ defmodule Sake.Auth.Bearer do
       ~s(resource_metadata="#{metadata}")
     ]
 
-    scheme = if conn.assigns[:sake_dpop], do: :dpop, else: :bearer
+    scheme = if dpop?, do: :dpop, else: :bearer
 
     %Challenge{
       status: 403,

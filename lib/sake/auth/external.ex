@@ -310,11 +310,12 @@ defmodule Sake.Auth.External do
 
   @doc false
   # The token's record for the endpoint at `resource`, and the principal
-  # when the host's callback already found it.
-  @spec verify(t(), String.t(), String.t(), Plug.Conn.t()) ::
+  # when the host's callback already found it. `context` is what the
+  # callback gets besides the token (the conn), passed through untouched.
+  @spec verify(t(), String.t(), String.t(), term()) ::
           {:ok, TokenRecord.t(), {:principal, term()} | nil} | :error
-  def verify(config, token, resource, conn) do
-    with {:ok, claims, found} <- claims(config, config.verify, token, conn),
+  def verify(config, token, resource, context) do
+    with {:ok, claims, found} <- claims(config, config.verify, token, context),
          {:ok, record} <- record(config, claims, resource) do
       {:ok, record, found}
     else
@@ -340,8 +341,8 @@ defmodule Sake.Auth.External do
     with {:ok, claims} <- Introspection.introspect(config, opts, token), do: {:ok, claims, nil}
   end
 
-  defp claims(_config, {:callback, fun}, token, conn) do
-    case fun.(token, conn) do
+  defp claims(_config, {:callback, fun}, token, context) do
+    case fun.(token, context) do
       {:ok, claims} when is_map(claims) -> current(normalize(claims), nil)
       {:ok, claims, principal} when is_map(claims) -> current(normalize(claims), principal)
       _ -> {:error, :refused_by_callback}

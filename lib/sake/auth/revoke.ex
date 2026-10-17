@@ -1,13 +1,13 @@
 defmodule Sake.Auth.Revoke do
   @moduledoc false
-  # The revocation endpoint (RFC 7009). Revoking a refresh token revokes its
-  # whole family. Revoking any token of a client also forgets the consents
-  # that person gave that client, so the next connection asks again.
+  # The revocation endpoint's adapter (RFC 7009): it reads the parameters
+  # and the client's credentials, hands them to `Sake.Auth.Revocation`,
+  # and renders its answer.
   @behaviour Plug
   import Plug.Conn
 
   alias Sake.Auth
-  alias Sake.Auth.{ClientAuth, Tokens}
+  alias Sake.Auth.{ClientAuth, Revocation, Token}
 
   @impl true
   def init(opts), do: opts
@@ -15,15 +15,16 @@ defmodule Sake.Auth.Revoke do
   @impl true
   def call(%{method: "POST"} = conn, _opts) do
     config = Auth.config()
-    conn = Sake.Auth.Token.parse(conn)
-    p = conn.body_params
+    conn = Token.parse(conn)
 
-    # A revoke call that names no client at all has nothing to authenticate
-    # against; it is answered like an unknown token, without a 401.
-    if ClientAuth.client_given?(conn, p) do
-      authenticate_and_revoke(conn, config, p)
-    else
-      ok(conn)
+    case Revocation.revoke(config, conn.body_params, ClientAuth.credentials(conn)) do
+      :ok ->
+        conn |> put_resp_header("cache-control", "no-store") |> send_resp(200, "")
+
+      {:error, 401, code, description} ->
+        conn
+        |> put_resp_header("www-authenticate", ~s(Basic realm="sake"))
+        |> Token.error(401, code, description)
     end
   end
 
@@ -33,48 +34,4 @@ defmodule Sake.Auth.Revoke do
     |> put_resp_header("pragma", "no-cache")
     |> send_resp(405, "")
   end
-
-  defp authenticate_and_revoke(conn, config, p) do
-    case ClientAuth.authenticate(config, conn, p) do
-      {:error, :invalid_client} ->
-        conn
-        |> put_resp_header("www-authenticate", ~s(Basic realm="sake"))
-        |> Sake.Auth.Token.error(401, "invalid_client", "Client authentication failed")
-
-      {:ok, client} ->
-        if is_binary(p["token"]),
-          do: revoke(config, client, Tokens.hash(p["token"]), p["token_type_hint"])
-
-        ok(conn)
-    end
-  end
-
-  defp ok(conn), do: conn |> put_resp_header("cache-control", "no-store") |> send_resp(200, "")
-
-  defp revoke(config, client, hash, hint) do
-    {module, state} = Auth.store(config)
-    order = if hint == "access_token", do: [:access, :refresh], else: [:refresh, :access]
-    Enum.each(order, &revoke_owned(module, state, client, hash, &1))
-  end
-
-  defp revoke_owned(module, state, client, hash, kind) do
-    with {:ok, %{client_id: cid} = record} <- module.get_token(state, kind, hash),
-         true <- cid == client.id do
-      revoke_record(module, state, kind, record)
-      forget_consent(module, state, record)
-    else
-      _ -> :ok
-    end
-  end
-
-  # A machine client's token has no subject, and no consent behind it.
-  defp forget_consent(_module, _state, %{subject_id: nil}), do: :ok
-
-  defp forget_consent(module, state, record),
-    do: module.delete_consent(state, record.subject_id, record.client_id, :all)
-
-  defp revoke_record(module, state, :refresh, record),
-    do: module.revoke_family(state, record.family_id)
-
-  defp revoke_record(module, state, _kind, record), do: module.revoke_token(state, record.id)
 end
