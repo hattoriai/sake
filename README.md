@@ -12,7 +12,7 @@ other MCP servers.
 
 ```elixir
 def deps do
-  [{:sake, "~> 0.3"}, {:bandit, "~> 1.5"}]
+  [{:sake, "~> 0.4"}, {:bandit, "~> 1.5"}]
 end
 ```
 
@@ -80,6 +80,10 @@ OTP 27 or later; CI runs Elixir 1.18 (OTP 27), 1.19 (OTP 28) and 1.20
 | Client credentials, enterprise-managed authorization from an OpenID Connect or SAML sign-on (`Sake.Auth`, `Sake.Client`) | yes | yes | yes |
 | DPoP, tokens bound to the client's key, offered or required (`Sake.Auth`, `Sake.Auth.External`, `Sake.Client`) | yes | yes | yes |
 | Your own authorization server (`Sake.Auth.External`: JWT, introspection or a callback) | yes | yes | yes |
+| The device authorization grant, for CLIs and devices without a browser (`Sake.Auth`, `Sake.Client`) | yes | yes | yes |
+| Pushed authorization requests (`Sake.Auth`, `Sake.Client`) | yes | yes | yes |
+| Step-up on how the person signed in: MFA, a recent sign-in (`Sake.Auth`, `Sake.Auth.External`, `Sake.Client`) | yes | yes | yes |
+| OpenID Connect: ID tokens, userinfo, signing keys (`Sake.Auth`, `Sake.Client`) | yes | yes | yes |
 | OpenTelemetry tracing, client to server to tool (trace context in `_meta`) | yes | yes | yes |
 | `Sake.Test`, an in-memory client for a server's tests | yes | yes | yes |
 | Middleware around calls (`Sake.Middleware`: audit, rate limits, plans, rewriting, redaction) | yes | yes | yes |
@@ -123,6 +127,17 @@ JWTs, and DPoP, need the optional `jose` dependency:
 Client credentials with a secret (and the client's `client_secret_jwt`)
 work without it.
 
+Sake's own authorization server also offers, each when the host turns
+it on: the device authorization grant (`device:`), for a CLI or a
+device with no browser, where the person approves on any other device;
+pushed authorization requests (`par:`), so the browser carries only a
+`request_uri`; and OpenID Connect (`openid:`, with `signing_keys:`),
+an ID token and a userinfo endpoint that say who signed in. A tool,
+resource, prompt or server can ask how the person signed in
+(`authentication: [acr: ["mfa"], max_age: 300]`, RFC 9470), and the
+client steps up to meet it. `Sake.Client` speaks all of them. See
+`guides/authorization.md` and `guides/client.md`.
+
 ## Guides
 
 - [Quickstart](guides/quickstart.md)
@@ -161,18 +176,21 @@ request sent on the standalone GET stream).
 
 ## Status
 
-0.3: the server (both eras, one endpoint, and stdio; with elicitation,
+0.4: the server (both eras, one endpoint, and stdio; with elicitation,
 sampling, roots, the tasks extension and MCP Apps), the authorization server
 (bearer and DPoP-bound tokens, CIMD, dynamic registration, consent, token
 rotation, machine clients, trusted identity providers and workloads, and
-the scopes each person may hold), or
+the scopes each person may hold; the device grant, pushed requests,
+step-up on how the person signed in, and OpenID Connect), or
 the host's own authorization server instead (JWT access tokens,
 introspection, or a callback, with scopes, step-up and DPoP), and
 the client (HTTP and stdio), which runs the MCP authorization flow itself
-(discovery, CIMD or dynamic registration, PKCE, refresh, step-up, DPoP
+(discovery, CIMD or dynamic registration, PKCE, pushed requests, refresh,
+step-up on scopes and on how the person signed in, an ID token, DPoP
 with its nonces, or a grant without a person: client credentials, a JWT
 bearer grant, enterprise-managed authorization with an ID token or a
-SAML assertion; `client_secret_jwt` too) and follows tasks; OpenTelemetry traces run from the
+SAML assertion; `client_secret_jwt` too, or the device grant for a person
+on another device) and follows tasks; OpenTelemetry traces run from the
 client's call through the server into the tool; `Sake.Test`, which
 tests a server through an in-memory client; middleware, the host's
 own code around every call; composing, one server mounted inside
@@ -180,7 +198,7 @@ another under a prefix, whole or in part, including a server a library
 ships; and proxying, another MCP server's tools,
 resources and prompts behind your own login, per-user credentials and
 middleware, with input requests, tasks and notifications forwarded
-across eras. Next: the device authorization grant.
+across eras.
 
 ## Security
 
