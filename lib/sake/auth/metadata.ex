@@ -5,9 +5,9 @@ defmodule Sake.Auth.Metadata do
   #
   # Each document is a base map and a list of contributors, small
   # functions of the configuration that return the fields of one feature
-  # (DPoP, client ID metadata documents, dynamic registration, ID-JAGs),
-  # or nothing when it is off. A feature adds its fields by adding a
-  # contributor.
+  # (DPoP, client ID metadata documents, dynamic registration, ID-JAGs,
+  # the device grant), or nothing when it is off. A feature adds its
+  # fields by adding a contributor.
   #
   # Core: it takes the configuration and plain data, and never sees the
   # conn; `Sake.Auth.WellKnown` serves the documents.
@@ -34,7 +34,7 @@ defmodule Sake.Auth.Metadata do
         "authorization_response_iss_parameter_supported" => true
       },
       config,
-      [&cimd/1, &private_key_jwt/1, &id_jag/1, &dcr/1, &dpop_algs/1]
+      [&cimd/1, &private_key_jwt/1, &id_jag/1, &dcr/1, &device/1, &dpop_algs/1]
     )
   end
 
@@ -97,6 +97,12 @@ defmodule Sake.Auth.Metadata do
       do: %{"registration_endpoint" => Config.register_url(config)},
       else: %{}
   end
+
+  # RFC 8628 §4: where a client starts the device authorization grant.
+  defp device(%{device: false}), do: %{}
+
+  defp device(config),
+    do: %{"device_authorization_endpoint" => Config.device_authorization_url(config)}
 
   # RFC 9449 §5.1 (the authorization server) and RFC 9728 §2 (the
   # resource): the algorithms DPoP proofs may use, which is how a client

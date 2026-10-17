@@ -24,6 +24,14 @@ defmodule Sake.Auth.TokenTest.RaceStore do
 
   def put_token(s, token), do: ETS.put_token(s, token)
   def put_code_tokens(s, hash, tokens), do: ETS.put_code_tokens(s, hash, tokens)
+  def put_device_grant(s, g), do: ETS.put_device_grant(s, g)
+  def get_device_grant_by_user_code(s, hash), do: ETS.get_device_grant_by_user_code(s, hash)
+  def decide_device_grant(s, hash, decision), do: ETS.decide_device_grant(s, hash, decision)
+
+  def poll_device_grant(s, hash, client_id, now),
+    do: ETS.poll_device_grant(s, hash, client_id, now)
+
+  def put_device_tokens(s, hash, tokens), do: ETS.put_device_tokens(s, hash, tokens)
 
   def get_token(s, kind, hash), do: ETS.get_token(s, kind, hash)
   def consume_refresh(s, hash), do: ETS.consume_refresh(s, hash)

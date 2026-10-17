@@ -54,6 +54,28 @@ if Code.ensure_loaded?(Ecto.Migration) do
 
       create(index(:sake_oauth_codes, [:expires_at], prefix: prefix))
 
+      # Device authorization grants (RFC 8628), by the device code's hash,
+      # with the user code's hash for the verification page. Like a
+      # consumed code, an issued grant is kept until it expires, as the
+      # fence between issuing its tokens and revoking its family.
+      create table(:sake_oauth_device_grants, primary_key: false, prefix: prefix) do
+        add(:hash, :string, primary_key: true)
+        add(:user_code_hash, :string, null: false)
+        add(:client_id, :string, null: false)
+        add(:scopes, {:array, :string}, null: false, default: [])
+        add(:resource, :text, null: false)
+        add(:status, :string, null: false)
+        add(:subject_id, :string)
+        add(:interval, :integer, null: false)
+        add(:expires_at, :utc_datetime, null: false)
+        add(:last_polled_at, :utc_datetime_usec)
+        add(:revoked_at, :utc_datetime)
+        add(:inserted_at, :utc_datetime, null: false)
+      end
+
+      create(unique_index(:sake_oauth_device_grants, [:user_code_hash], prefix: prefix))
+      create(index(:sake_oauth_device_grants, [:expires_at], prefix: prefix))
+
       create table(:sake_oauth_tokens, primary_key: false, prefix: prefix) do
         add(:id, :string, primary_key: true)
         add(:kind, :string, null: false)
@@ -110,6 +132,7 @@ if Code.ensure_loaded?(Ecto.Migration) do
       drop(table(:sake_oauth_replays, prefix: prefix))
       drop(table(:sake_oauth_consents, prefix: prefix))
       drop(table(:sake_oauth_tokens, prefix: prefix))
+      drop(table(:sake_oauth_device_grants, prefix: prefix))
       drop(table(:sake_oauth_codes, prefix: prefix))
       drop(table(:sake_oauth_clients, prefix: prefix))
       :ok

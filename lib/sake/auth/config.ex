@@ -6,6 +6,14 @@ defmodule Sake.Auth.Config do
   else `config :sake, :secret_key_base`), which `Sake` reads once when
   it starts and puts here: it signs the consent form's request and the
   DPoP nonces.
+
+  `device:` turns on the device authorization grant (RFC 8628), for
+  clients with no browser: `true`, or `[expires_in: seconds, interval:
+  seconds]` (how long a device code lasts, 600 by default, and how long
+  a client waits between two polls of the token endpoint, 5 by
+  default). It is off by default: the verification page has to be
+  mounted inside the host's signed-in pipeline first (see
+  `Sake.Auth.DeviceVerification`). It needs the Sake secret.
   """
 
   @type t :: %__MODULE__{}
@@ -27,6 +35,7 @@ defmodule Sake.Auth.Config do
             allow_insecure: false,
             oauth_path: "/oauth",
             dpop: true,
+            device: false,
             name: nil,
             secret: nil
 
@@ -54,6 +63,7 @@ defmodule Sake.Auth.Config do
       | issuer: String.trim_trailing(config.issuer, "/"),
         trusted_issuers: trusted_issuers(config),
         dpop: dpop_option(config.dpop, config.secret),
+        device: device_option(config.device, config.secret),
         store_state: module.init(store_opts),
         name: config.name || uri.host
     }
@@ -121,6 +131,39 @@ defmodule Sake.Auth.Config do
         "dpop: must be true, false or [nonce: boolean, required: boolean], got #{inspect(other)}"
       )
 
+  @device_defaults %{expires_in: 600, interval: 5}
+
+  # The device grant: false, or its expiry and polling interval in
+  # seconds. The verification page signs its forms with the secret.
+  defp device_option(false, _secret), do: false
+  defp device_option(true, secret), do: device_option([], secret)
+
+  defp device_option(opts, secret) when is_list(opts) do
+    unless Keyword.keys(opts) -- [:expires_in, :interval] == [] and
+             Enum.all?(opts, fn {_k, v} -> is_integer(v) and v > 0 end),
+           do:
+             raise(
+               ArgumentError,
+               "device: takes [expires_in: seconds, interval: seconds], got #{inspect(opts)}"
+             )
+
+    if secret == nil,
+      do:
+        raise(
+          ArgumentError,
+          "device: needs the Sake secret: start {Sake, secret_key_base: ...}"
+        )
+
+    Map.merge(@device_defaults, Map.new(opts))
+  end
+
+  defp device_option(other, _secret),
+    do:
+      raise(
+        ArgumentError,
+        "device: must be true, false or [expires_in: seconds, interval: seconds], got #{inspect(other)}"
+      )
+
   @doc "Whether every access token must be DPoP-bound (`dpop: [required: true]`)."
   @spec dpop_required?(t() | Sake.Auth.External.t()) :: boolean()
   def dpop_required?(%{dpop: %{required: true}}), do: true
@@ -135,4 +178,6 @@ defmodule Sake.Auth.Config do
   def token_url(c), do: c.issuer <> c.oauth_path <> "/token"
   def register_url(c), do: c.issuer <> c.oauth_path <> "/register"
   def revoke_url(c), do: c.issuer <> c.oauth_path <> "/revoke"
+  def device_authorization_url(c), do: c.issuer <> c.oauth_path <> "/device_authorization"
+  def device_url(c), do: c.issuer <> c.oauth_path <> "/device"
 end

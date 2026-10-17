@@ -50,6 +50,24 @@ defmodule Sake.Client.Auth do
       refreshed, and a 401 or a 403 comes back to the caller instead of
       running the flow. Default `false`.
 
+  A person without a browser on the client's machine (a CLI over SSH, a
+  headless agent, a device) authorizes with the device authorization
+  grant (RFC 8628) in place of the code flow:
+
+    * `grant: :device` — the client asks the authorization server's
+      `device_authorization_endpoint` for a user code, shows it with
+      `:device_prompt` (default `Sake.Client.Auth.Device.prompt/1`,
+      which logs it; see there), and polls the token endpoint while the
+      person enters the code and approves on any device where they can
+      sign in. Polling honours the server's `interval`, and `slow_down`
+      adds five seconds to it (RFC 8628 §3.5); a denial or an expiry
+      ends it with `{:error, {:auth, :access_denied}}` or
+      `{:error, {:auth, :expired_token}}`. A server whose metadata has
+      no device endpoint ends it with `{:error, {:auth,
+      :no_device_endpoint}}`. The tokens are refreshed as the code
+      flow's are; a step-up, or a 401 the refresh token does not cure,
+      runs the device flow again.
+
   Machine grants, for a client with no person at a browser, run in place
   of the authorization code flow, with the same discovery and the same
   handling of expiry, 401 and step-up (the grant runs again, with the
@@ -133,7 +151,7 @@ defmodule Sake.Client.Auth do
   """
 
   alias Sake.Auth.{Challenge, DPoP, JWT}
-  alias Sake.Client.Auth.{Browser, Discovery, Enterprise, Grant, Registration}
+  alias Sake.Client.Auth.{Browser, Device, Discovery, Enterprise, Grant, Registration}
 
   @type t :: %__MODULE__{}
 
@@ -143,7 +161,10 @@ defmodule Sake.Client.Auth do
   # does not expire on the way.
   @expiry_margin 30
 
-  @grants [:authorization_code, :client_credentials, :jwt_bearer, :enterprise]
+  @grants [:authorization_code, :device, :client_credentials, :jwt_bearer, :enterprise]
+
+  # RFC 8628 §3.5: `slow_down` makes every later poll this much later.
+  @slow_down 5
 
   # ---- the interface
   #
@@ -190,6 +211,10 @@ defmodule Sake.Client.Auth do
     :static,
     :proof_key,
     :idp_token,
+    :device_prompt,
+    # How the device flow waits between polls, in milliseconds: a test's
+    # stand-in for `Process.sleep/1`.
+    :sleep,
     grant: :authorization_code,
     dpop: :auto,
     clients: %{},
@@ -209,6 +234,8 @@ defmodule Sake.Client.Auth do
       url: Discovery.canonical(url),
       grant: grant(opts),
       authorize: authorize,
+      device_prompt: device_prompt(opts[:device_prompt]),
+      sleep: opts[:sleep] || (&Process.sleep/1),
       redirect_uri: opts[:redirect_uri] || @redirect_uri,
       client_id: opts[:client_id],
       client_secret: opts[:client_secret],
@@ -243,6 +270,12 @@ defmodule Sake.Client.Auth do
     do: [grant]
 
   def extensions(_auth), do: []
+
+  defp device_prompt(nil), do: &Device.prompt/1
+  defp device_prompt(prompt) when is_function(prompt, 1), do: prompt
+
+  defp device_prompt(_prompt),
+    do: raise(ArgumentError, "auth: :device_prompt must be a function of one argument")
 
   defp dpop(:auto), do: :auto
   defp dpop(false), do: false
@@ -451,9 +484,10 @@ defmodule Sake.Client.Auth do
 
   # A machine grant has no refresh token: an expiring token is replaced by
   # running the grant again, against the authorization server it came
-  # from.
+  # from. A person's grant without one waits for the 401, which asks the
+  # person again.
   def fresh(%__MODULE__{grant: grant, token: %{"expires_at" => at} = token} = auth)
-      when grant != :authorization_code and is_integer(at) do
+      when grant not in [:authorization_code, :device] and is_integer(at) do
     if System.system_time(:second) < at - @expiry_margin do
       auth
     else
@@ -576,6 +610,9 @@ defmodule Sake.Client.Auth do
   defp authorize_granted(%__MODULE__{grant: :authorization_code} = auth, server, scopes),
     do: authorize_code(auth, server, scopes)
 
+  defp authorize_granted(%__MODULE__{grant: :device} = auth, server, scopes),
+    do: authorize_device(auth, server, scopes)
+
   # `offline_access` asks for a refresh token, which no machine grant gets.
   defp authorize_granted(auth, server, scopes) do
     scopes = scopes -- ["offline_access"]
@@ -613,6 +650,73 @@ defmodule Sake.Client.Auth do
 
       {:error, reason, auth} ->
         {:error, reason, auth}
+    end
+  end
+
+  # RFC 8628: the device authorization request, the person told where to
+  # go, then the token endpoint polled until they decide.
+  defp authorize_device(auth, server, scopes) do
+    with true <-
+           is_binary(server.metadata["device_authorization_endpoint"]) ||
+             {:error, :no_device_endpoint, auth},
+         {:ok, registration, auth} <- Registration.client(auth, server) do
+      pem = new_key(auth, server)
+
+      with {:ok, start} <- Grant.device_authorization(server, registration, scopes, auth.req),
+           _ = prompt(auth.device_prompt, start),
+           {:ok, body} <-
+             poll(
+               auth,
+               server,
+               registration,
+               start,
+               proofs(auth, pem, server.metadata["token_endpoint"])
+             ) do
+        {:ok, put(auth, {:token, auth.url}, token(body, server, registration, scopes, pem))}
+      else
+        {:error, reason} -> {:error, reason, auth}
+      end
+    end
+  end
+
+  defp prompt(device_prompt, start) do
+    device_prompt.(
+      Map.take(start, [:user_code, :verification_uri, :verification_uri_complete, :expires_in])
+    )
+  end
+
+  # RFC 8628 §3.5: the first poll waits `interval` too, and the device
+  # code is not worth polling with once `expires_in` is over.
+  defp poll(auth, server, registration, start, dpop) do
+    deadline = System.monotonic_time(:millisecond) + start.expires_in * 1_000
+    poll(auth, server, registration, start.device_code, dpop, start.interval, deadline)
+  end
+
+  defp poll(auth, server, registration, code, dpop, interval, deadline) do
+    auth.sleep.(interval * 1_000)
+
+    if System.monotonic_time(:millisecond) >= deadline do
+      {:error, :expired_token}
+    else
+      case Grant.device_token(server, registration, code, auth.req, dpop) do
+        {:ok, body} ->
+          {:ok, body}
+
+        {:error, {:token_failed, 400, %{"error" => "authorization_pending"}}} ->
+          poll(auth, server, registration, code, dpop, interval, deadline)
+
+        {:error, {:token_failed, 400, %{"error" => "slow_down"}}} ->
+          poll(auth, server, registration, code, dpop, interval + @slow_down, deadline)
+
+        {:error, {:token_failed, 400, %{"error" => "access_denied"}}} ->
+          {:error, :access_denied}
+
+        {:error, {:token_failed, 400, %{"error" => "expired_token"}}} ->
+          {:error, :expired_token}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 

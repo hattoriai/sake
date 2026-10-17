@@ -7,7 +7,9 @@ defmodule Sake.Auth.Grant do
   #
   # Core: it takes the configuration, the request and the principal, and
   # never sees the conn. The authorize endpoint reads the principal and
-  # renders the answer; the device flow will reuse both steps.
+  # renders the answer; the device flow (`Sake.Auth.Device`) takes the
+  # same decision and remembers the consent the same way, and records
+  # the approval on its grant in place of a code.
 
   alias Sake.Auth
   alias Sake.Auth.{AuthorizationRequest, Client, Config, Redirect, Subject, Tokens}
@@ -29,6 +31,11 @@ defmodule Sake.Auth.Grant do
   The scopes are narrowed to those the person may hold
   (`c:Sake.Auth.Subject.scopes_for/2`): the consent page shows those, and
   the code carries them. Nothing left of a request for some is refused.
+
+  A device request is always put to the person, remembered consent or
+  not: nothing ties it to the client's redirect URI, so whoever started
+  it may have sent someone else the code to approve (RFC 8628 §5.4), and
+  only the page, which shows the code, gives them the chance to notice.
   """
   @spec decide(Config.t(), Client.t(), AuthorizationRequest.t(), term()) ::
           {:issue, AuthorizationRequest.t()}
@@ -56,9 +63,10 @@ defmodule Sake.Auth.Grant do
   end
 
   defp consent_or_issue(config, client, request, principal) do
-    if remembered?(config, client, request, config.subject.id(principal)),
-      do: {:issue, request},
-      else: {:consent, assigns(config, client, request, principal)}
+    if AuthorizationRequest.flow(request) == :authorization_code and
+         remembered?(config, client, request, config.subject.id(principal)),
+       do: {:issue, request},
+       else: {:consent, assigns(config, client, request, principal)}
   end
 
   defp remembered?(config, client, request, subject_id) do
@@ -73,22 +81,33 @@ defmodule Sake.Auth.Grant do
 
   defp assigns(config, client, request, principal) do
     known = Map.new(Config.scopes(config))
-    redirect = URI.parse(request.redirect_uri)
 
-    %{
+    Map.merge(redirect(request), %{
+      flow: AuthorizationRequest.flow(request),
+      user_code: nil,
       client_name: client.name,
       client_host: client.client_uri && URI.parse(client.client_uri).host,
-      redirect_host:
-        if(redirect.port && redirect.port not in [80, 443],
-          do: "#{redirect.host}:#{redirect.port}",
-          else: redirect.host
-        ),
-      loopback?: Redirect.loopback?(request.redirect_uri),
       subject_display: config.subject.display(principal),
       scopes: Enum.map(request.scopes, &{&1, known[&1]}),
       resource: request.resource,
       request: request,
       issuer_name: config.name
+    })
+  end
+
+  # Where the code goes; a device request sends it nowhere.
+  defp redirect(%{redirect_uri: nil}), do: %{redirect_host: nil, loopback?: nil}
+
+  defp redirect(request) do
+    redirect = URI.parse(request.redirect_uri)
+
+    %{
+      redirect_host:
+        if(redirect.port && redirect.port not in [80, 443],
+          do: "#{redirect.host}:#{redirect.port}",
+          else: redirect.host
+        ),
+      loopback?: Redirect.loopback?(request.redirect_uri)
     }
   end
 
@@ -102,7 +121,9 @@ defmodule Sake.Auth.Grant do
     issue(config, request, subject_id)
   end
 
-  defp remember(config, request, subject_id) do
+  @doc "Remembers the consent to `request` (with `remember_consent`), without issuing anything."
+  @spec remember(Config.t(), AuthorizationRequest.t(), String.t()) :: :ok
+  def remember(config, request, subject_id) do
     if config.remember_consent do
       {module, state} = Auth.store(config)
 
@@ -115,6 +136,8 @@ defmodule Sake.Auth.Grant do
           inserted_at: DateTime.utc_now()
         })
     end
+
+    :ok
   end
 
   @doc "Issues a code for `request` and `subject_id`, without asking: a remembered consent covers it."

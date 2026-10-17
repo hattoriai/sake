@@ -319,6 +319,44 @@ URI — or `{:error, reason}`. Two come with Sake:
 Your own function can do anything else — show the URL in your app's UI
 and wait for the callback on your web server, for instance.
 
+### A person without a browser here: the device grant
+
+On a machine where no browser can open, a CLI over SSH or a headless
+agent, `grant: :device` runs the device authorization grant (RFC 8628)
+in place of the code flow: the client shows the person a code and a URL,
+and they enter the code on any device where they can sign in, their
+laptop or their phone.
+
+```elixir
+Sake.Client.connect(url,
+  auth: [
+    grant: :device,
+    device_prompt: fn %{user_code: code, verification_uri: uri} ->
+      IO.puts("To connect, open #{uri} and enter #{code}")
+    end
+  ]
+)
+```
+
+Discovery is the same, but the authorization server's metadata needs a
+`device_authorization_endpoint` (and a token endpoint, but no
+authorization endpoint and no PKCE); without one the flow stops at once
+with `{:error, {:auth, :no_device_endpoint}}`. The client identity is
+chosen as above, and a dynamic registration asks for the device code
+and refresh token grants, with no redirect URI.
+
+`:device_prompt` receives `user_code`, `verification_uri`,
+`verification_uri_complete` (the URL with the code in it, for a link or
+a QR code, or nil) and `expires_in`; the default,
+`Sake.Client.Auth.Device.prompt/1`, logs them. The client then polls
+the token endpoint every `interval` seconds the server gave (five when
+it gave none), five seconds more after each `slow_down`, until the
+person decides: a denial is `{:error, {:auth, :access_denied}}`, and a
+code that expired first `{:error, {:auth, :expired_token}}`. The tokens
+are DPoP-bound as below, and refreshed as the code flow's are; a
+step-up, or a 401 the refresh token does not cure, shows the person a
+new code.
+
 ### Grants without a person
 
 `grant:` replaces the browser with a grant a program runs on its own.
@@ -522,6 +560,8 @@ authorization response), `:pkce_not_supported`, `:missing_iss`,
 `:state_mismatch`, `{:denied, error, description}`,
 `{:insecure_url, url}`, `:no_client_registration`,
 `{:registration_failed, ...}`, `{:token_failed, ...}`,
+`:no_device_endpoint`, `{:device_authorization_failed, ...}`,
+`:access_denied` and `:expired_token` (the device grant),
 `{:token_exchange_failed, ...}`, `{:saml_exchange_failed, ...}`,
 `{:authorize, reason}` (your `authorize:` function's error),
 `{:assertion, reason}` (your `assertion:`, `id_token:` or

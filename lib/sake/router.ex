@@ -23,8 +23,8 @@ if Code.ensure_loaded?(Phoenix.Router) do
           sake_endpoint "/mcp", server: MyApp.MCP, auth: true
         end
 
-    The authorize routes go inside the pipeline that requires a signed-in
-    person; the API routes need no session; the well-known routes need no
+    The authorize routes (with the device verification page, for
+    `device:`) go inside the pipeline that requires a signed-in person; the API routes need no session; the well-known routes need no
     pipeline at all; the endpoint needs no pipeline either (Sake checks the
     bearer token itself).
 
@@ -49,6 +49,7 @@ if Code.ensure_loaded?(Phoenix.Router) do
         Phoenix.Router.post("/token", Sake.Auth.Token, [])
         Phoenix.Router.post("/register", Sake.Auth.DCR, [])
         Phoenix.Router.post("/revoke", Sake.Auth.Revoke, [])
+        Phoenix.Router.post("/device_authorization", Sake.Auth.DeviceAuthorization, [])
       end
     end
 
@@ -56,6 +57,8 @@ if Code.ensure_loaded?(Phoenix.Router) do
       quote do
         Phoenix.Router.get("/authorize", Sake.Auth.Authorize, unquote(opts))
         Phoenix.Router.post("/authorize", Sake.Auth.Authorize, unquote(opts))
+        Phoenix.Router.get("/device", Sake.Auth.DeviceVerification, unquote(opts))
+        Phoenix.Router.post("/device", Sake.Auth.DeviceVerification, unquote(opts))
       end
     end
 

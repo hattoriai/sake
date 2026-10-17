@@ -7,7 +7,7 @@ if Code.ensure_loaded?(Ecto.Query) do
     @behaviour Sake.Auth.Store
     import Ecto.Query
 
-    alias Sake.Auth.{Client, Code, Consent, TokenRecord}
+    alias Sake.Auth.{Client, Code, Consent, DeviceGrant, TokenRecord}
     alias Sake.Auth.Store.Ecto, as: S
 
     @impl true
@@ -148,6 +148,127 @@ if Code.ensure_loaded?(Ecto.Query) do
       result
     end
 
+    @impl true
+    def put_device_grant(%{repo: repo} = s, %DeviceGrant{} = g) do
+      row = %S.DeviceGrant{
+        hash: g.hash,
+        user_code_hash: g.user_code_hash,
+        client_id: g.client_id,
+        scopes: g.scopes,
+        resource: g.resource,
+        status: to_string(g.status),
+        subject_id: g.subject_id,
+        interval: g.interval,
+        expires_at: DateTime.truncate(g.expires_at, :second),
+        last_polled_at: g.last_polled_at,
+        inserted_at: DateTime.truncate(g.inserted_at || DateTime.utc_now(), :second)
+      }
+
+      {:ok, _} = repo.insert(row, prefix: s.prefix)
+      :ok
+    end
+
+    @impl true
+    def get_device_grant_by_user_code(%{repo: repo} = s, user_code_hash) do
+      case repo.one(from(g in S.DeviceGrant, where: g.user_code_hash == ^user_code_hash),
+             prefix: s.prefix
+           ) do
+        nil -> :error
+        row -> {:ok, device_grant(row)}
+      end
+    end
+
+    # One statement: of two concurrent decisions, the second finds the
+    # row no longer pending.
+    @impl true
+    def decide_device_grant(%{repo: repo} = s, hash, decision) do
+      set =
+        case decision do
+          {:approved, subject_id, scopes} ->
+            [status: "approved", subject_id: subject_id, scopes: scopes]
+
+          :denied ->
+            [status: "denied"]
+        end
+
+      query = from(g in S.DeviceGrant, where: g.hash == ^hash and g.status == "pending")
+
+      case repo.update_all(query, [set: set], prefix: s.prefix) do
+        {1, _} -> :ok
+        {0, _} -> :error
+      end
+    end
+
+    # The grant's row, locked while the poll is answered and recorded: of
+    # two concurrent polls of an approved grant, the second waits, and
+    # finds it issued.
+    @impl true
+    def poll_device_grant(%{repo: repo} = s, hash, client_id, now) do
+      query = from(g in S.DeviceGrant, where: g.hash == ^hash, lock: "FOR UPDATE")
+
+      {:ok, answer} =
+        repo.transaction(fn ->
+          case repo.one(query, prefix: s.prefix) do
+            nil -> :error
+            row -> row |> device_grant() |> DeviceGrant.poll(client_id, now) |> polled(s)
+          end
+        end)
+
+      answer
+    end
+
+    defp polled({answer, nil}, _s), do: answer
+
+    defp polled({answer, grant}, %{repo: repo} = s) do
+      repo.update_all(
+        from(g in S.DeviceGrant, where: g.hash == ^grant.hash),
+        [set: [status: to_string(grant.status), last_polled_at: grant.last_polled_at]],
+        prefix: s.prefix
+      )
+
+      answer
+    end
+
+    # The grant's row, locked, as for `put_code_tokens/3`: a concurrent
+    # `revoke_family/2` waits for this transaction, or left the row
+    # revoked, and nothing is inserted. A row gone (pruned) counts as
+    # revoked.
+    @impl true
+    def put_device_tokens(%{repo: repo} = s, hash, tokens) do
+      fence =
+        from(g in S.DeviceGrant,
+          where: g.hash == ^hash and g.status == "issued" and is_nil(g.revoked_at),
+          lock: "FOR UPDATE",
+          select: g.hash
+        )
+
+      {:ok, result} =
+        repo.transaction(fn ->
+          case repo.one(fence, prefix: s.prefix) do
+            nil -> :revoked
+            _ -> Enum.each(tokens, &(:ok = put_token(s, &1)))
+          end
+        end)
+
+      result
+    end
+
+    defp device_grant(r) do
+      %DeviceGrant{
+        hash: r.hash,
+        user_code_hash: r.user_code_hash,
+        client_id: r.client_id,
+        scopes: r.scopes,
+        resource: r.resource,
+        status: String.to_existing_atom(r.status),
+        subject_id: r.subject_id,
+        interval: r.interval,
+        expires_at: r.expires_at,
+        last_polled_at: r.last_polled_at,
+        inserted_at: r.inserted_at
+      }
+    end
+
     # The replaced refresh token's row, locked: a concurrent
     # `revoke_family/2` locks the family's rows before revoking them, so it
     # waits for this transaction and then revokes the new pair too; one
@@ -245,8 +366,9 @@ if Code.ensure_loaded?(Ecto.Query) do
       :ok
     end
 
-    # A family born of a code also revokes the code's row, under its lock
-    # (see `put_code_tokens/3`), and every family locks its tokens' rows
+    # A family born of a code (or a device grant) also revokes the code's
+    # row, under its lock (see `put_code_tokens/3` and
+    # `put_device_tokens/3`), and every family locks its tokens' rows
     # (see `put_rotated_tokens/3`), before the sweep. A pair being stored
     # for the code or a rotation either is refused, or is committed before
     # the sweep runs: the sweep is a statement of its own, and READ
@@ -259,6 +381,12 @@ if Code.ensure_loaded?(Ecto.Query) do
         repo.transaction(fn ->
           repo.update_all(
             from(c in S.Code, where: c.hash == ^family_id and is_nil(c.revoked_at)),
+            [set: [revoked_at: now()]],
+            prefix: s.prefix
+          )
+
+          repo.update_all(
+            from(g in S.DeviceGrant, where: g.hash == ^family_id and is_nil(g.revoked_at)),
             [set: [revoked_at: now()]],
             prefix: s.prefix
           )
@@ -387,6 +515,7 @@ if Code.ensure_loaded?(Ecto.Query) do
     @impl true
     def prune(%{repo: repo} = s, now, before) do
       repo.delete_all(from(c in S.Code, where: c.expires_at <= ^now), prefix: s.prefix)
+      repo.delete_all(from(g in S.DeviceGrant, where: g.expires_at <= ^now), prefix: s.prefix)
       repo.delete_all(from(t in S.Token, where: t.expires_at <= ^now), prefix: s.prefix)
       repo.delete_all(from(r in S.Replay, where: r.expires_at < ^now), prefix: s.prefix)
 
@@ -411,8 +540,9 @@ if Code.ensure_loaded?(Ecto.Query) do
       prune_unused_clients(s, now, before.unused_clients)
     end
 
-    # What is left of the codes and tokens is unexpired: a client with a
-    # code, an unrevoked token or a consent is in use.
+    # What is left of the codes, device grants and tokens is unexpired: a
+    # client with a code, a device grant, an unrevoked token or a consent
+    # is in use.
     defp prune_unused_clients(%{repo: repo} = s, now, registered_before) do
       token =
         from(t in S.Token,
@@ -424,13 +554,15 @@ if Code.ensure_loaded?(Ecto.Query) do
 
       consent = from(c in S.Consent, where: c.client_id == parent_as(:client).id, select: 1)
       code = from(c in S.Code, where: c.client_id == parent_as(:client).id, select: 1)
+      device = from(g in S.DeviceGrant, where: g.client_id == parent_as(:client).id, select: 1)
 
       repo.delete_all(
         from(c in S.Client,
           as: :client,
           where:
             c.kind == "dynamic" and c.inserted_at < ^registered_before and
-              not exists(token) and not exists(consent) and not exists(code)
+              not exists(token) and not exists(consent) and not exists(code) and
+              not exists(device)
         ),
         prefix: s.prefix
       )

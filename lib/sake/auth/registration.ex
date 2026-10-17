@@ -5,7 +5,9 @@ defmodule Sake.Auth.Registration do
   #
   # A client that sends no `grant_types` is registered for both the
   # authorization code and the refresh token grants, and the response says
-  # so.
+  # so. With `device:`, a client may also register for the device code
+  # grant (RFC 8628); one that does not ask for the authorization code
+  # grant needs no redirect URI (RFC 7591 §2).
   #
   # Core: it takes the configuration and the decoded metadata document,
   # and never sees the conn; `Sake.Auth.DCR` reads the request and renders
@@ -14,6 +16,7 @@ defmodule Sake.Auth.Registration do
   alias Sake.Auth.{Client, Config, Redirect, Tokens}
 
   @grant_types ["authorization_code", "refresh_token"]
+  @device_code "urn:ietf:params:oauth:grant-type:device_code"
 
   @doc """
   Registers a client from its metadata document (RFC 7591 §2): the
@@ -22,7 +25,7 @@ defmodule Sake.Auth.Registration do
   """
   @spec register(Config.t(), term()) :: {:ok, map()} | {:error, String.t()}
   def register(config, doc) when is_map(doc) do
-    case build(doc) do
+    case build(config, doc) do
       {:ok, client} ->
         {module, state} = Sake.Auth.store(config)
         :ok = module.put_client(state, client)
@@ -34,7 +37,7 @@ defmodule Sake.Auth.Registration do
            "client_name" => client.name,
            "redirect_uris" => client.redirect_uris,
            "grant_types" => client.grant_types,
-           "response_types" => ["code"],
+           "response_types" => response_types(client),
            "token_endpoint_auth_method" => "none",
            "application_type" => client.application_type,
            "dpop_bound_access_tokens" => client.dpop_bound_access_tokens
@@ -47,20 +50,28 @@ defmodule Sake.Auth.Registration do
 
   def register(_config, _doc), do: {:error, "invalid_client_metadata"}
 
-  defp build(doc) do
-    with :ok <- validate(doc) do
+  defp build(config, doc) do
+    with :ok <- validate(config, doc) do
       {:ok, client_from(doc)}
     end
   end
 
-  defp validate(doc) do
-    with :ok <- validate_redirect_uris(doc["redirect_uris"]),
+  defp validate(config, doc) do
+    grants = doc["grant_types"] || @grant_types
+
+    with :ok <- validate_redirect_uris(doc["redirect_uris"], grants),
          :ok <- validate_name(doc["client_name"] || "Unnamed client"),
          :ok <- validate_auth_method(doc["token_endpoint_auth_method"]),
          :ok <- validate_types(doc) do
-      validate_grants(doc["grant_types"] || @grant_types)
+      validate_grants(grants, allowed_grants(config))
     end
   end
+
+  defp allowed_grants(%{device: false}), do: @grant_types
+  defp allowed_grants(_config), do: @grant_types ++ [@device_code]
+
+  defp response_types(client),
+    do: if("authorization_code" in client.grant_types, do: ["code"], else: [])
 
   defp validate_types(doc) do
     if Sake.Auth.Clients.metadata_types_valid?(doc),
@@ -68,7 +79,14 @@ defmodule Sake.Auth.Registration do
       else: {:error, "invalid_client_metadata"}
   end
 
-  defp validate_redirect_uris(uris) do
+  # A device client, which never asks for a code, has no redirect URI.
+  defp validate_redirect_uris(uris, grants) when uris in [nil, []] and is_list(grants) do
+    if @device_code in grants and "authorization_code" not in grants,
+      do: :ok,
+      else: {:error, "invalid_redirect_uri"}
+  end
+
+  defp validate_redirect_uris(uris, _grants) do
     cond do
       not (is_list(uris) and uris != [] and Enum.all?(uris, &Redirect.valid?/1)) ->
         {:error, "invalid_redirect_uri"}
@@ -91,8 +109,8 @@ defmodule Sake.Auth.Registration do
     if (method || "none") == "none", do: :ok, else: {:error, "invalid_client_metadata"}
   end
 
-  defp validate_grants(grants) do
-    if is_list(grants) and grants -- @grant_types == [],
+  defp validate_grants(grants, allowed) do
+    if is_list(grants) and grants -- allowed == [],
       do: :ok,
       else: {:error, "invalid_client_metadata"}
   end
@@ -102,7 +120,7 @@ defmodule Sake.Auth.Registration do
       id: "dc_" <> Tokens.generate(),
       name: doc["client_name"] || "Unnamed client",
       kind: :dynamic,
-      redirect_uris: doc["redirect_uris"],
+      redirect_uris: doc["redirect_uris"] || [],
       grant_types: doc["grant_types"] || @grant_types,
       token_endpoint_auth_method: "none",
       client_uri: doc["client_uri"],
