@@ -92,6 +92,12 @@ syntax. `execute/2` returns:
   `image/3`, `audio/3`, `resource/3` (embedded), `resource_link/2`.
 - `{:ok, value, meta: %{...}}` — the three shapes above, plus a `_meta` map
   on the result.
+- `{:ok, %{...} | [...], text: text}` — a map or a list goes out as
+  `structuredContent` as before, but `content` carries `text` (a string or
+  a `[%Sake.Content{}, ...]` list) instead of the JSON. The model reads
+  `content`, so a short summary there spares it the whole payload, for
+  instance when an MCP App renders `structuredContent`. `text:` with any
+  other value raises.
 - `{:error, text}` — `isError: true` with one text content block (not a
   JSON-RPC error: the call succeeded, the *tool* failed).
 - `{:error, {:missing_capability, capabilities}}` — the tool cannot run

@@ -215,6 +215,46 @@ defmodule Sake.Server.DispatchTest do
              )
   end
 
+  test "tools/call with text: sends it to the model next to structuredContent" do
+    defmodule Chart do
+      use Sake.Tool, name: "chart", description: "chart"
+
+      arg :as, :string, required: true
+
+      def execute(%{as: "text"}, _),
+        do: {:ok, %{rows: [1, 2, 3]}, text: "3 rows, peak 3", meta: %{"k" => 1}}
+
+      def execute(%{as: "content"}, _),
+        do: {:ok, [1, 2], text: [Sake.Content.text("a"), Sake.Content.text("b")]}
+
+      def execute(%{as: "string"}, _), do: {:ok, "plain", text: "summary"}
+    end
+
+    defmodule ChartServer do
+      use Sake.Server, name: "c", version: "1"
+      tools [Chart]
+    end
+
+    run = fn as, extra ->
+      Dispatch.handle(
+        ChartServer,
+        {:request, 1, "tools/call", %{"name" => "chart", "arguments" => %{"as" => as}}},
+        ctx([server: ChartServer] ++ extra)
+      )
+    end
+
+    assert {:reply, r} = run.("text", [])
+    assert r["content"] == [%{"type" => "text", "text" => "3 rows, peak 3"}]
+    assert r["structuredContent"] == %{"rows" => [1, 2, 3]}
+    assert r["isError"] == false and r["_meta"]["k"] == 1
+
+    assert {:reply, r} = run.("content", [])
+    assert Enum.map(r["content"], & &1["text"]) == ["a", "b"]
+    assert r["structuredContent"] == [1, 2]
+
+    assert_raise ArgumentError, ~r/needs a map or a list/, fn -> run.("string", reraise: true) end
+  end
+
   test "resources" do
     assert {:reply, r} = call("resources/list")
     assert Enum.map(r["resources"], & &1["uri"]) == ["dev://readme", "issue://1", "issue://2"]
