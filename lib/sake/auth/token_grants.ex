@@ -216,7 +216,9 @@ defmodule Sake.Auth.TokenGrants do
             resource: record.resource,
             family_id: hash,
             jkt: jkt,
-            refresh_jkt: refresh_binding(client, jkt)
+            refresh_jkt: refresh_binding(client, jkt),
+            acr: record.acr,
+            auth_time: record.auth_time
           })
         end
     end
@@ -245,7 +247,9 @@ defmodule Sake.Auth.TokenGrants do
             resource: record.resource,
             family_id: hash,
             jkt: jkt,
-            refresh_jkt: refresh_binding(client, jkt)
+            refresh_jkt: refresh_binding(client, jkt),
+            acr: record.acr,
+            auth_time: record.auth_time
           })
         end
 
@@ -441,7 +445,11 @@ defmodule Sake.Auth.TokenGrants do
          resource: record.resource,
          family_id: record.family_id,
          jkt: jkt,
-         refresh_jkt: refresh_binding(client, jkt)
+         refresh_jkt: refresh_binding(client, jkt),
+         # A refresh is no new sign-in (RFC 9470): the person signed in
+         # when, and as, they did for the grant.
+         acr: record.acr,
+         auth_time: record.auth_time
        }}
     else
       {:error, code, description} -> {:error, code, description}

@@ -16,6 +16,9 @@ defmodule SakeDev.Accounts do
     end
   end
 
+  # The one-time code of everyone's second factor, for MFA (RFC 9470).
+  def otp, do: "123456"
+
   def authenticate(email, password) do
     case Enum.find(@people, fn {_, p} -> p.email == email and p.password == password end) do
       {_, person} -> {:ok, person}

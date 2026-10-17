@@ -94,6 +94,8 @@ if Code.ensure_loaded?(Ecto.Query) do
         resource: c.resource,
         subject_id: c.subject_id,
         dpop_jkt: c.dpop_jkt,
+        acr: c.acr,
+        auth_time: c.auth_time && DateTime.truncate(c.auth_time, :second),
         expires_at: DateTime.truncate(c.expires_at, :second)
       }
 
@@ -120,6 +122,8 @@ if Code.ensure_loaded?(Ecto.Query) do
              resource: r.resource,
              subject_id: r.subject_id,
              dpop_jkt: r.dpop_jkt,
+             acr: r.acr,
+             auth_time: r.auth_time,
              expires_at: r.expires_at
            }}
 
@@ -208,6 +212,9 @@ if Code.ensure_loaded?(Ecto.Query) do
         resource: g.resource,
         status: to_string(g.status),
         subject_id: g.subject_id,
+        extra: g.extra || %{},
+        acr: g.acr,
+        auth_time: g.auth_time && DateTime.truncate(g.auth_time, :second),
         interval: g.interval,
         expires_at: DateTime.truncate(g.expires_at, :second),
         last_polled_at: g.last_polled_at,
@@ -234,8 +241,15 @@ if Code.ensure_loaded?(Ecto.Query) do
     def decide_device_grant(%{repo: repo} = s, hash, decision) do
       set =
         case decision do
-          {:approved, subject_id, scopes} ->
-            [status: "approved", subject_id: subject_id, scopes: scopes]
+          {:approved, subject_id, scopes, authentication} ->
+            [
+              status: "approved",
+              subject_id: subject_id,
+              scopes: scopes,
+              acr: authentication.acr,
+              auth_time:
+                authentication.auth_time && DateTime.truncate(authentication.auth_time, :second)
+            ]
 
           :denied ->
             [status: "denied"]
@@ -312,6 +326,9 @@ if Code.ensure_loaded?(Ecto.Query) do
         resource: r.resource,
         status: String.to_existing_atom(r.status),
         subject_id: r.subject_id,
+        extra: r.extra,
+        acr: r.acr,
+        auth_time: r.auth_time,
         interval: r.interval,
         expires_at: r.expires_at,
         last_polled_at: r.last_polled_at,
@@ -358,7 +375,9 @@ if Code.ensure_loaded?(Ecto.Query) do
         revoked_at: t.revoked_at,
         used_at: t.used_at,
         inserted_at: DateTime.truncate(t.inserted_at || DateTime.utc_now(), :second),
-        jkt: t.jkt
+        jkt: t.jkt,
+        acr: t.acr,
+        auth_time: t.auth_time && DateTime.truncate(t.auth_time, :second)
       }
 
       {:ok, _} =
@@ -503,7 +522,9 @@ if Code.ensure_loaded?(Ecto.Query) do
         revoked_at: r.revoked_at,
         used_at: r.used_at,
         inserted_at: r.inserted_at,
-        jkt: r.jkt
+        jkt: r.jkt,
+        acr: r.acr,
+        auth_time: r.auth_time
       }
     end
 

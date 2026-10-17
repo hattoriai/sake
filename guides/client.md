@@ -523,6 +523,28 @@ every challenged scope (asking again would end in the same 403), and one
 request runs the flow at most twice; past that, the 403 comes back as
 `{:error, {:insufficient_scope, challenge}, session}`.
 
+### Step-up on how the person signed in
+
+A tool may need the person to have signed in strongly, or recently (RFC
+9470): the server answers 401 with
+`error="insufficient_user_authentication"`, and `acr_values` and
+`max_age` in the challenge. The client runs the person's grant again,
+the code flow or the device flow, with those two as the authorization
+request's parameters of the same names (pushed, when the server takes
+pushed requests), the scopes asked for before, and any the challenge
+names; the authorization server has the person sign in again as asked,
+and the request goes again with the new token. It does so once per
+request: a sign-in the server still refuses comes back as
+`{:error, {:insufficient_user_authentication, challenge}, session}`, the
+challenge's `acr_values` and `max_age` saying what it wanted. A DPoP
+nonce retry does not count.
+
+A machine grant (client credentials, JWT bearer, enterprise-managed) has
+nobody to sign in again: the 401 comes back as
+`{:error, {:auth, {:insufficient_user_authentication, challenge}}, session}`
+at once. With `static: true`, as for any refusal, it is
+`{:error, {:insufficient_user_authentication, challenge}, session}`.
+
 ### DPoP
 
 With DPoP (RFC 9449, SEP-1932) the client's tokens are bound to a key it
@@ -587,15 +609,19 @@ authorization response), `:pkce_not_supported`, `:missing_iss`,
 `:no_device_endpoint`, `{:device_authorization_failed, ...}`,
 `:access_denied` and `:expired_token` (the device grant),
 `{:token_exchange_failed, ...}`, `{:saml_exchange_failed, ...}`,
-`{:authorize, reason}` (your `authorize:` function's error),
+`{:insufficient_user_authentication, challenge}` (a machine grant asked
+for a person's sign-in), `{:authorize, reason}` (your `authorize:`
+function's error),
 `{:assertion, reason}` (your `assertion:`, `id_token:` or
 `saml_assertion:` function's), and so on.
 
 ### Without `auth:`
 
 A 401 comes back to you as
-`{:error, {:unauthorized, %Sake.Auth.Challenge{}}}`, and nothing else
-happens — no browser opens that nobody asked for:
+`{:error, {:unauthorized, %Sake.Auth.Challenge{}}}` (or
+`{:error, {:insufficient_user_authentication, %Sake.Auth.Challenge{}}}`
+for RFC 9470's challenge, whose `acr_values` and `max_age` say how the
+person must sign in), and nothing else happens — no browser opens that nobody asked for:
 
 ```elixir
 case Sake.Client.connect(url) do

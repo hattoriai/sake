@@ -10,9 +10,23 @@ defmodule Sake.Auth.Grant do
   # renders the answer; the device flow (`Sake.Auth.Device`) takes the
   # same decision and remembers the consent the same way, and records
   # the approval on its grant in place of a code.
+  #
+  # How the person signed in (RFC 9470) is checked before: the adapters
+  # send a person whose sign-in does not meet the request's `acr_values`
+  # and `max_age` to sign in again, and only then ask `decide/4`. The
+  # code records the `acr` and `auth_time` of the approval.
 
   alias Sake.Auth
-  alias Sake.Auth.{AuthorizationRequest, Client, Config, Redirect, Subject, Tokens}
+
+  alias Sake.Auth.{
+    Authentication,
+    AuthorizationRequest,
+    Client,
+    Config,
+    Redirect,
+    Subject,
+    Tokens
+  }
 
   @code_ttl 600
 
@@ -113,12 +127,14 @@ defmodule Sake.Auth.Grant do
 
   @doc """
   The person approved `request`: remembers the consent (with
-  `remember_consent`) and issues the code.
+  `remember_consent`) and issues the code, which carries how they signed
+  in (`authentication`, RFC 9470).
   """
-  @spec approve(Config.t(), AuthorizationRequest.t(), String.t()) :: {:ok, String.t()}
-  def approve(config, request, subject_id) do
+  @spec approve(Config.t(), AuthorizationRequest.t(), String.t(), Authentication.context()) ::
+          {:ok, String.t()}
+  def approve(config, request, subject_id, authentication \\ Authentication.none()) do
     remember(config, request, subject_id)
-    issue(config, request, subject_id)
+    issue(config, request, subject_id, authentication)
   end
 
   @doc "Remembers the consent to `request` (with `remember_consent`), without issuing anything."
@@ -141,17 +157,22 @@ defmodule Sake.Auth.Grant do
   end
 
   @doc "Issues a code for `request` and `subject_id`, without asking: a remembered consent covers it."
-  @spec issue(Config.t(), AuthorizationRequest.t(), String.t()) :: {:ok, String.t()}
-  def issue(config, request, subject_id), do: {:ok, issue_code(config, request, subject_id)}
+  @spec issue(Config.t(), AuthorizationRequest.t(), String.t(), Authentication.context()) ::
+          {:ok, String.t()}
+  def issue(config, request, subject_id, authentication \\ Authentication.none()),
+    do: {:ok, issue_code(config, request, subject_id, authentication)}
 
   @doc """
   Issues a code for `request` (a map with client_id, redirect_uri,
   code_challenge, scopes, resource, and optionally `extra`) and
   `subject_id`; returns the plain code. A `"dpop_jkt"` in `extra` binds
-  the code to that DPoP key (RFC 9449 §10).
+  the code to that DPoP key (RFC 9449 §10). `authentication` is how and
+  when the person signed in (`%{acr: acr, auth_time: datetime}`, either
+  nil), which the code's tokens carry (RFC 9470).
   """
-  @spec issue_code(Config.t(), map(), String.t()) :: String.t()
-  def issue_code(config, request, subject_id) do
+  @spec issue_code(Config.t(), map(), String.t(), map()) :: String.t()
+  def issue_code(config, request, subject_id, authentication \\ Authentication.none()) do
+    authentication = Authentication.context(authentication)
     {module, state} = Auth.store(config)
     code = Tokens.generate()
 
@@ -165,6 +186,8 @@ defmodule Sake.Auth.Grant do
         resource: request.resource,
         subject_id: subject_id,
         dpop_jkt: (Map.get(request, :extra) || %{})["dpop_jkt"],
+        acr: authentication.acr,
+        auth_time: authentication.auth_time,
         expires_at: DateTime.add(DateTime.utc_now(), @code_ttl)
       })
 

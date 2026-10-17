@@ -66,7 +66,7 @@ defmodule Sake.Client.Transport do
         {:error, :response_too_large}
 
       {:ok, %Req.Response{status: 401} = resp} ->
-        {:error, {:unauthorized, challenge(resp)}}
+        unauthorized(resp)
 
       {:ok, %Req.Response{status: 403} = resp} ->
         forbidden(resp)
@@ -261,6 +261,17 @@ defmodule Sake.Client.Transport do
       other ->
         other
     end
+  end
+
+  # RFC 9470: a token refused for how its person signed in, which a new
+  # sign-in (and a new grant) may cure, where another 401 asks for a
+  # token at all.
+  defp unauthorized(resp) do
+    c = challenge(resp)
+
+    if c.error == "insufficient_user_authentication",
+      do: {:error, {:insufficient_user_authentication, c}},
+      else: {:error, {:unauthorized, c}}
   end
 
   defp forbidden(resp) do

@@ -13,7 +13,9 @@ defmodule Sake.Server do
   Options: `name`, `version` (required), `instructions`, `ttl` (default
   300 000 ms), `cache_scope` (`:public` or `:private`; default: private
   when the endpoint has authorization, public otherwise), `page_size`
-  (default 100), `extensions` (a map for extension negotiation).
+  (default 100), `extensions` (a map for extension negotiation),
+  `authentication` (how the person must have signed in to call a tool,
+  read a resource or get a prompt of this server, see below).
 
   On the modern protocol, list and read results carry `ttlMs`: the
   server's `ttl`, or less. A tool, resource or prompt with its own `ttl:`
@@ -46,6 +48,27 @@ defmodule Sake.Server do
   See `guides/composing.md` for what the mounted server's own middleware,
   instructions, scopes and settings become. A `Sake.Proxy` mounts as any
   server does, with the components of its upstream.
+
+  ## Step-up authentication
+
+  A tool, resource or prompt with `authentication: [acr: ["mfa"],
+  max_age: 300]` needs a token whose person signed in with one of those
+  authentication context classes (`acr`), at most that many seconds ago
+  (`max_age`), either optional (RFC 9470). The server's own
+  `authentication:` applies to all its components, its mounted servers'
+  too: an `acr` must then be among both lists, and the shorter `max_age`
+  wins. A token that does not meet it is refused with a 401 whose
+  `insufficient_user_authentication` challenge carries `acr_values` and
+  `max_age`, for the client to have the person sign in again; a token
+  that lacks the component's scopes as well gets that challenge, naming
+  the scopes too, so that one new grant covers both. The components stay
+  in the lists, and a request without a token (an endpoint without
+  `auth:`, stdio) is not gated, as for scopes. A requirement that
+  depends on the arguments is a middleware's: see
+  `Sake.Middleware.require_authentication/2`. `max_age: 0` means a
+  sign-in within the last minute. It gates a tool call, a resource read
+  and a prompt get; lists, completions, subscriptions and the requests
+  that follow a task (which was checked when it started) are not.
   """
 
   require Logger
@@ -98,12 +121,18 @@ defmodule Sake.Server do
     quote do
       @sake_mounted Sake.Server.compile_mounts!(__MODULE__, Enum.reverse(@sake_mounts))
 
+      @sake_authentication Sake.Auth.Authentication.requirement!(
+                             @sake_opts[:authentication],
+                             inspect(__MODULE__)
+                           )
+
       @sake_specs Sake.Server.compile!(
                     __MODULE__,
                     @sake_tools,
                     @sake_resources,
                     @sake_prompts,
-                    @sake_mounted
+                    @sake_mounted,
+                    @sake_authentication
                   )
 
       @sake_pipelines Sake.Server.compile_middleware!(__MODULE__, Enum.reverse(@sake_middleware))
@@ -154,6 +183,8 @@ defmodule Sake.Server do
       def __sake__(:cache_scope), do: unquote(opts[:cache_scope])
       def __sake__(:page_size), do: unquote(opts[:page_size] || 100)
 
+      def __sake__(:authentication), do: @sake_authentication
+
       def __sake__(:extensions),
         do:
           unquote(__MODULE__).extensions(
@@ -180,15 +211,39 @@ defmodule Sake.Server do
   @doc false
   # The server's own components, then each mounted server's under its
   # prefix, checked together: a name may be listed once in all of them.
-  def compile!(server, tools, resources, prompts, mounts \\ []) do
-    t = Enum.map(tools, & &1.spec()) ++ mounted(mounts, :tools)
-    r = Enum.map(resources, & &1.spec()) ++ mounted(mounts, :resources)
-    p = Enum.map(prompts, & &1.spec()) ++ mounted(mounts, :prompts)
+  # The server's `authentication:` (`required`) goes on every one.
+  def compile!(server, tools, resources, prompts, mounts \\ [], required \\ nil) do
+    t = authenticated(Enum.map(tools, & &1.spec()) ++ mounted(mounts, :tools), required, server)
+
+    r =
+      authenticated(
+        Enum.map(resources, & &1.spec()) ++ mounted(mounts, :resources),
+        required,
+        server
+      )
+
+    p =
+      authenticated(Enum.map(prompts, & &1.spec()) ++ mounted(mounts, :prompts), required, server)
+
     check_unique!(server, "tool", Enum.map(t, & &1.name))
     check_unique!(server, "resource", Enum.map(r, & &1.uri))
     check_unique!(server, "prompt", Enum.map(p, & &1.name))
     check_uis!(server, t, r)
     {t, r, p}
+  end
+
+  # The server's `authentication:`, for every component it lists.
+  defp authenticated(specs, nil, _server), do: specs
+
+  defp authenticated(specs, required, server) do
+    Enum.map(specs, fn spec ->
+      where = "#{inspect(server)}: #{inspect(key(spec))}"
+
+      %{
+        spec
+        | authentication: Sake.Auth.Authentication.merge!(spec.authentication, required, where)
+      }
+    end)
   end
 
   defp mounted(mounts, kind) do
@@ -326,7 +381,23 @@ defmodule Sake.Server do
 
     case server.__sake__(:sources) do
       [] -> static
-      sources -> static ++ dynamic(sources, kind, static, ctx)
+      sources -> static ++ server_authentication(server, dynamic(sources, kind, static, ctx))
+    end
+  end
+
+  # A proxy's components are known at runtime: the server's
+  # `authentication:` is put on them then, as `compile!/6` puts it on
+  # the others.
+  defp server_authentication(server, specs) do
+    case server.__sake__(:authentication) do
+      nil ->
+        specs
+
+      required ->
+        Enum.map(
+          specs,
+          &%{&1 | authentication: Sake.Auth.Authentication.merge(&1.authentication, required)}
+        )
     end
   end
 
@@ -428,7 +499,7 @@ defmodule Sake.Server do
       sources ->
         case Enum.find(dynamic(sources, kind, server.__sake__(kind), ctx), &(&1.name == name)) do
           nil -> :error
-          spec -> {:ok, spec}
+          spec -> {:ok, hd(server_authentication(server, [spec]))}
         end
     end
   end
@@ -441,7 +512,11 @@ defmodule Sake.Server do
     sources = server.__sake__(:sources)
 
     with :error <- find_dynamic_resource(sources, uri, ctx, false),
-         do: find_dynamic_resource(claimants(sources), uri, ctx, true)
+         :error <- find_dynamic_resource(claimants(sources), uri, ctx, true) do
+      :error
+    else
+      {:ok, spec, params} -> {:ok, hd(server_authentication(server, [spec])), params}
+    end
   end
 
   defp claimants(sources) do
@@ -478,6 +553,59 @@ defmodule Sake.Server do
   @spec allowed?(struct(), Sake.Context.t()) :: boolean()
   def allowed?(_spec, %Sake.Context{token: nil}), do: true
   def allowed?(%{scopes: required}, %Sake.Context{scopes: granted}), do: required -- granted == []
+
+  @doc false
+  # Whether the request may call the component (a tool call, a resource
+  # read, a prompt get): its scopes, and how the token's person signed in
+  # (RFC 9470). A token that lacks both is refused for its sign-in, with
+  # the scopes it lacks: the client's new grant then covers both, where
+  # refusing the scopes first would leave it a second step-up to take.
+  @spec permit(struct(), Sake.Context.t()) ::
+          :ok
+          | {:forbidden, [String.t()]}
+          | {:insufficient_user_authentication, map()}
+  def permit(spec, ctx) do
+    scoped? = allowed?(spec, ctx)
+
+    case authenticate(Map.get(spec, :authentication), ctx) do
+      :ok when scoped? ->
+        :ok
+
+      :ok ->
+        {:forbidden, spec.scopes}
+
+      {:insufficient_user_authentication, refusal} ->
+        {:insufficient_user_authentication,
+         %{refusal | scopes: if(scoped?, do: [], else: spec.scopes)}}
+    end
+  end
+
+  @doc false
+  # Whether the token's `acr` and `auth_time` meet `requirement`: `:ok`,
+  # or the refusal, with what was asked and the part not met. No token
+  # (no authorization on the endpoint) means no gating.
+  @spec authenticate(Sake.Auth.Authentication.requirement() | nil, Sake.Context.t()) ::
+          :ok | {:insufficient_user_authentication, map()}
+  def authenticate(nil, _ctx), do: :ok
+  def authenticate(_requirement, %Sake.Context{token: nil}), do: :ok
+
+  def authenticate(requirement, %Sake.Context{token: token}) do
+    context = Sake.Auth.Authentication.context(Map.from_struct(token))
+
+    case Sake.Auth.Authentication.check(context, requirement) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        {:insufficient_user_authentication,
+         %{
+           acr_values: requirement.acr_values,
+           max_age: requirement.max_age,
+           reason: reason,
+           scopes: []
+         }}
+    end
+  end
 
   @spec capabilities(module()) :: map()
   def capabilities(server) do

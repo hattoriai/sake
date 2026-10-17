@@ -53,12 +53,33 @@ defmodule SakeTest.StoreCases do
           resource: "r",
           subject_id: "u",
           dpop_jkt: "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I",
+          acr: "mfa",
+          auth_time: DateTime.utc_now() |> DateTime.add(-30) |> DateTime.truncate(:second),
           expires_at: DateTime.utc_now() |> DateTime.add(600) |> DateTime.truncate(:second)
         }
 
         assert :ok = mod.put_code(state, code)
         assert {:ok, ^code} = mod.consume_code(state, code.hash)
         assert :error = mod.consume_code(state, code.hash)
+      end
+
+      test "tokens keep how their person signed in", %{config: config} do
+        {mod, state} = store(config)
+        at = DateTime.utc_now() |> DateTime.add(-90) |> DateTime.truncate(:second)
+
+        {_a, _r, %{access: a, refresh: r}} =
+          issue(config, %{family_id: "f-acr", acr: "mfa", auth_time: at})
+
+        assert {:ok, %TokenRecord{acr: "mfa", auth_time: ^at}} =
+                 mod.get_token(state, :access, a.hash)
+
+        assert {:ok, %TokenRecord{acr: "mfa", auth_time: ^at}} =
+                 mod.consume_refresh(state, r.hash)
+
+        {_a, _r, %{access: plain}} = issue(config, %{family_id: "f-plain"})
+
+        assert {:ok, %TokenRecord{acr: nil, auth_time: nil}} =
+                 mod.get_token(state, :access, plain.hash)
       end
 
       test "tokens, families and revocation", %{config: config} do
@@ -459,6 +480,8 @@ defmodule SakeTest.StoreCases do
 
   defp device_cases do
     quote do
+      @signed_in %{acr: "pwd", auth_time: nil}
+
       defp device_grant(mod, state, name, attrs \\ %{}) do
         now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -491,11 +514,34 @@ defmodule SakeTest.StoreCases do
         assert found.hash == grant.hash
         assert :error = mod.get_device_grant_by_user_code(state, Tokens.hash("user-unknown"))
 
-        assert :ok = mod.decide_device_grant(state, grant.hash, {:approved, "u1", ["a"]})
+        at = DateTime.utc_now() |> DateTime.add(-60) |> DateTime.truncate(:second)
+
+        assert :ok =
+                 mod.decide_device_grant(
+                   state,
+                   grant.hash,
+                   {:approved, "u1", ["a"], %{acr: "mfa", auth_time: at}}
+                 )
+
         assert :error = mod.decide_device_grant(state, grant.hash, :denied)
         assert :error = mod.decide_device_grant(state, Tokens.hash("unknown"), :denied)
 
-        assert {:ok, %DeviceGrant{status: :approved, subject_id: "u1", scopes: ["a"]}} =
+        assert {:ok,
+                %DeviceGrant{
+                  status: :approved,
+                  subject_id: "u1",
+                  scopes: ["a"],
+                  acr: "mfa",
+                  auth_time: ^at
+                }} = mod.get_device_grant_by_user_code(state, grant.user_code_hash)
+      end
+
+      test "device grants keep their request's extra", %{config: config} do
+        {mod, state} = store(config)
+        extra = %{"acr_values" => ["mfa", "hwk"], "max_age" => 300}
+        grant = device_grant(mod, state, "extra", %{extra: extra})
+
+        assert {:ok, %DeviceGrant{extra: ^extra, acr: nil, auth_time: nil}} =
                  mod.get_device_grant_by_user_code(state, grant.user_code_hash)
       end
 
@@ -516,10 +562,11 @@ defmodule SakeTest.StoreCases do
         assert :error = mod.poll_device_grant(state, grant.hash, "other", at.(30_000))
         assert :error = mod.poll_device_grant(state, Tokens.hash("x"), "c", at.(30_000))
 
-        :ok = mod.decide_device_grant(state, grant.hash, {:approved, "u1", ["a"]})
+        :ok = mod.decide_device_grant(state, grant.hash, {:approved, "u1", ["a"], @signed_in})
         assert :slow_down = mod.poll_device_grant(state, grant.hash, "c", at.(14_000))
 
-        assert {:approved, %DeviceGrant{subject_id: "u1", scopes: ["a"], resource: "r"}} =
+        assert {:approved,
+                %DeviceGrant{subject_id: "u1", scopes: ["a"], resource: "r", acr: "pwd"}} =
                  mod.poll_device_grant(state, grant.hash, "c", at.(20_000))
 
         # Issued once: every later poll says it was used.
@@ -549,7 +596,14 @@ defmodule SakeTest.StoreCases do
 
         issued = fn name ->
           grant = device_grant(mod, state, name)
-          :ok = mod.decide_device_grant(state, grant.hash, {:approved, "u-device", []})
+
+          :ok =
+            mod.decide_device_grant(
+              state,
+              grant.hash,
+              {:approved, "u-device", [], %{acr: nil, auth_time: nil}}
+            )
+
           {:approved, _} = mod.poll_device_grant(state, grant.hash, "c", DateTime.utc_now())
           grant.hash
         end

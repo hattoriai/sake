@@ -1,7 +1,10 @@
 defmodule Sake.Prompt do
   @moduledoc """
   A prompt template: `arg` lines (strings only) and `get/2`, which returns
-  messages as `{:user | :assistant, text | %Sake.Content{}}`.
+  messages as `{:user | :assistant, text | %Sake.Content{}}`. `scope:`
+  (one or many) gates it by the token's scopes, and `authentication:`
+  (`[acr: ["mfa"], max_age: 300]`) by how the person signed in (see
+  "Step-up authentication" in `Sake.Server`).
   """
 
   @callback spec() :: Sake.Prompt.Spec.t()
@@ -33,6 +36,7 @@ defmodule Sake.Prompt do
       :meta,
       icons: [],
       scopes: [],
+      authentication: nil,
       args: [],
       ttl: nil,
       mount: nil,
@@ -92,6 +96,8 @@ defmodule Sake.Prompt do
       description: opts[:description],
       icons: opts[:icons] || [],
       scopes: List.wrap(opts[:scope]),
+      authentication:
+        Sake.Auth.Authentication.requirement!(opts[:authentication], inspect(env.module)),
       args:
         Enum.map(args, fn {n, _t, o} ->
           %{name: to_string(n), description: o[:description], required: o[:required] || false}

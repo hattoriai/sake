@@ -397,6 +397,11 @@ defmodule Sake.Proxy.Forward do
        Enum.join(List.wrap(challenge.scope), " ")}
   end
 
+  defp error(_proxy, {:insufficient_user_authentication, _challenge}) do
+    {:error, JSONRPC.code(:internal),
+     "The upstream server needs a stronger or more recent sign-in than the proxy's credentials carry."}
+  end
+
   defp error(proxy, reason) do
     Logger.warning("#{inspect(proxy)}: the upstream request failed: #{inspect(reason)}")
     {:error, JSONRPC.code(:internal), "The upstream server is not available."}

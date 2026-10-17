@@ -74,6 +74,13 @@ defmodule Sake.Auth do
       per feature; `Sake.Auth.WellKnown` is the adapter.
     * Access tokens: `bearer.ex` checks a request described as a map;
       `authenticate/2` in this module is its adapter.
+    * How the person signed in (RFC 9470): `authentication.ex` holds the
+      context (`acr`, `auth_time`), an authorization request's
+      `acr_values` and `max_age`, and the check of one against the
+      other, for the authorization server's adapters (which ask
+      `c:Sake.Auth.Subject.authentication/1` and call
+      `c:Sake.Auth.Subject.reauthenticate/2`) and for the components'
+      `authentication:` requirements alike.
 
   A new endpoint is a core module and an adapter, a route in
   `Sake.Router` and in `Sake.Auth.RouterPlug`, and a URL helper in
@@ -155,8 +162,31 @@ defmodule Sake.Auth do
     do: Bearer.insufficient_scope(Resource.url(conn), scopes, conn.assigns[:sake_dpop] == true)
 
   @doc false
+  # The 401 challenge (RFC 9470) for a component that asks how the
+  # person signed in, and the token does not say so (`Sake.Plug` calls
+  # it): `requirement` is what it asks, `reason` the part not met
+  # (`:acr` or `:max_age`), and `scopes` the component's scopes the
+  # token lacks as well.
+  @spec insufficient_user_authentication(
+          Plug.Conn.t(),
+          Sake.Auth.Authentication.requirement(),
+          :acr | :max_age,
+          [String.t()]
+        ) :: Sake.Auth.Challenge.t()
+  def insufficient_user_authentication(conn, requirement, reason, scopes),
+    do:
+      Bearer.insufficient_user_authentication(
+        Resource.url(conn),
+        requirement,
+        reason,
+        scopes,
+        conn.assigns[:sake_dpop] == true
+      )
+
+  @doc false
   # Issues an access token in the store, for a test request (`Sake.Test`
-  # calls it). `jkt` binds it to a DPoP key.
+  # calls it). `jkt` binds it to a DPoP key; `acr` and `auth_time` say
+  # how the person signed in.
   @spec issue_access_token(Config.t(), map()) :: String.t()
   def issue_access_token(config, attrs) do
     {token, _record} = Tokens.issue_access(config, attrs)

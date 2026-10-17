@@ -147,7 +147,8 @@ defmodule Sake.Server.Mount do
 
   @doc """
   The spec as the parent has it: renamed under the prefix, with the
-  mount's scopes added and the mounted server's ttl as its ceiling.
+  mount's scopes added, the mounted server's `authentication:` on top of
+  its own, and the mounted server's ttl as its ceiling.
   Raises (`ArgumentError`) for a name or URI the prefix cannot take.
   """
   @spec wrap(struct(), module(), keyword()) :: struct()
@@ -175,6 +176,11 @@ defmodule Sake.Server.Mount do
        %{
          renamed
          | scopes: Enum.uniq(spec.scopes ++ (opts[:scopes] || [])),
+           authentication:
+             Sake.Auth.Authentication.merge(
+               spec.authentication,
+               server.__sake__(:authentication)
+             ),
            ttl: ceiling(spec.ttl, server.__sake__(:ttl)),
            mount: {server, prefix, spec}
        }}

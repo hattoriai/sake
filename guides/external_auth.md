@@ -238,8 +238,9 @@ Whichever way it was verified, a token becomes the
 `Sake.Auth.TokenRecord` a token of `Sake.Auth` becomes, in `ctx.token`:
 `scopes` from `scope` (or `scp`, a string or a list), `client_id` from
 `client_id` (or `azp`), `subject_id` from `sub`, `jkt` from `cnf.jkt`,
-`expires_at` from `exp`, plus `issuer` and the verified `claims`. A
-token without `sub`, or whose `sub` is its own client (RFC 9068 §2.2, the
+`expires_at` from `exp`, `acr` and `auth_time` from the claims of those
+names (below), plus `issuer` and the verified `claims`. A token without
+`sub`, or whose `sub` is its own client (RFC 9068 §2.2, the
 client credentials grant), is a machine client's: `subject_id` is `nil`.
 
 A token can be bound to its client only in a way Sake checks: DPoP's
@@ -263,6 +264,30 @@ step-up challenges, middleware, `ctx.token` in tools, and the ownership
 of tasks. Tasks and the signed request states of multi round-trip
 requests are bound to the issuer as well as the subject: the same `sub`
 from another issuer, or from `Sake.Auth`, is someone else.
+
+## Step-up authentication: the claims to issue
+
+A tool, resource or prompt with `authentication: [acr: ["mfa"], max_age:
+300]` (see `guides/authorization.md`) is checked against two claims of
+the token, which your authorization server must issue for it to be met
+(RFC 9470 §6.1, RFC 9068 §2.2.1):
+
+* `acr` — the authentication context class the person signed in with: a
+  string, one of those the component lists. Keycloak, Auth0, Okta and
+  Entra ID can each put it in their access tokens (some under another
+  name until you map it).
+* `auth_time` — when the person signed in, in seconds since the epoch
+  (a `DateTime` from your own callback will do too). Your server must
+  keep the original time across refreshes: a refresh is no new sign-in.
+
+A token without them meets no requirement: the endpoint answers 401 with
+the `insufficient_user_authentication` challenge, carrying `acr_values`
+and `max_age`, and a client that steps up sends the person back to your
+authorization server with those two parameters. It is that server's job
+to honour them (have the person do MFA, or sign in again) and issue a
+token whose claims say so. Introspection answers and your callback's
+claims are read the same way. `ctx.token.acr` and `ctx.token.auth_time`
+hold what they said.
 
 ## The audience
 

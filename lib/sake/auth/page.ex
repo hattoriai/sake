@@ -26,6 +26,30 @@ defmodule Sake.Auth.Page do
     )
   end
 
+  @doc """
+  The person signed in, but not as `requirement` asks (RFC 9470): the
+  subject module's `reauthenticate/2` sends them to sign in again and
+  back, or, without it, the error page says so.
+  """
+  @spec reauthenticate(
+          Plug.Conn.t(),
+          Config.t(),
+          Sake.Auth.Authentication.requirement()
+        ) :: Plug.Conn.t()
+  def reauthenticate(conn, config, requirement) do
+    if Sake.Auth.Subject.reauthenticates?(config.subject),
+      do: config.subject.reauthenticate(conn, Map.take(requirement, [:acr_values, :max_age])),
+      else:
+        error(
+          conn,
+          config,
+          401,
+          "Sign in again to continue",
+          "The app asks that you sign in again, or with a stronger method, before it is " <>
+            "authorized. Sign in again, then start the connection again from the app."
+        )
+  end
+
   @spec html(Plug.Conn.t(), pos_integer(), iodata()) :: Plug.Conn.t()
   def html(conn, status, body) do
     conn

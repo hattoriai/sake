@@ -56,6 +56,33 @@ defmodule Sake.Auth.Subject do
       `Sake.Auth.TrustedIssuer` that issued it. The token's subject is
       `id/1` of the principal returned, so `fetch/1` loads it on every
       request as for anyone else.
+
+  ## How the person signed in
+
+  Sake does not sign anyone in, nor run multi-factor authentication: the
+  host's login does. Two optional callbacks tell Sake how it went, for
+  the tools that ask for a strong or a recent sign-in (RFC 9470, see
+  "Step-up authentication" in the authorization guide):
+
+    * `c:authentication/1` — how and when the person signed in to the
+      session of this request: `%{acr: acr, auth_time: datetime}`, the
+      authentication context class (`"mfa"`, `"pwd"`, or whatever names
+      your login gives its methods) and the time of that sign-in, either
+      `nil` when unknown. The authorize endpoint and the device
+      verification page ask it when the person approves a request, and
+      the code or the device grant carries the answer into the tokens; a
+      refresh keeps it, since a refresh is no new sign-in. Default
+      `%{acr: nil, auth_time: nil}`.
+    * `c:reauthenticate/2` — send the person to sign in again (or to
+      complete MFA), then back to the current URL (`conn.request_path`
+      and `conn.query_string`, with `GET`). The authorize endpoint and
+      the device verification page call it when a client asks for
+      `acr_values` or a `max_age` that `c:authentication/1`'s answer does
+      not meet; the second argument says what was asked:
+      `%{acr_values: [acr], max_age: seconds | nil}`. Coming back with a
+      sign-in that still does not meet it calls it again: make sure the
+      sign-in it sends the person to can. Default: an error page, "Sign in
+      again to continue", which ends the request there.
   """
 
   @callback from_conn(Plug.Conn.t()) :: {:ok, term()} | :error
@@ -76,10 +103,39 @@ defmodule Sake.Auth.Subject do
   @callback assertion_principal(claims :: map(), issuer :: Sake.Auth.TrustedIssuer.t()) ::
               {:ok, term()} | :error
 
+  @doc "How and when the person of this request signed in; default `%{acr: nil, auth_time: nil}`."
+  @callback authentication(Plug.Conn.t()) :: %{
+              acr: String.t() | nil,
+              auth_time: DateTime.t() | nil
+            }
+
+  @doc "Sends the person to sign in again, as asked, and back to the current URL; default an error page."
+  @callback reauthenticate(
+              Plug.Conn.t(),
+              %{acr_values: [String.t()], max_age: non_neg_integer() | nil}
+            ) :: Plug.Conn.t()
+
   @optional_callbacks authorize_resource?: 2,
                       scopes_for: 2,
                       client_principal: 1,
-                      assertion_principal: 2
+                      assertion_principal: 2,
+                      authentication: 1,
+                      reauthenticate: 2
+
+  @doc false
+  # How the person of `conn` signed in, normalized; unknown without
+  # `authentication/1`.
+  @spec authentication(module(), Plug.Conn.t()) :: Sake.Auth.Authentication.context()
+  def authentication(subject, conn) do
+    if exported?(subject, :authentication, 1),
+      do: Sake.Auth.Authentication.context(subject.authentication(conn)),
+      else: Sake.Auth.Authentication.none()
+  end
+
+  @doc false
+  # Whether the subject module sends people to sign in again itself.
+  @spec reauthenticates?(module()) :: boolean()
+  def reauthenticates?(subject), do: exported?(subject, :reauthenticate, 2)
 
   @doc false
   # The optional callbacks, refusing when the host did not define them.

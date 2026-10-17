@@ -159,6 +159,7 @@ reaches the client.
 | `:not_found` | what it would get if the component (or, for other methods, the method) did not exist: `-32602` "Unknown tool: export", "Unknown prompt: …", the era's resource-not-found error, `-32601` "Method not found" |
 | `{:forbidden, scopes}` | the insufficient-scope refusal: HTTP 403 with a `WWW-Authenticate` challenge naming `scopes` (on an endpoint with authorization), so the client can step up |
 | `:forbidden` | HTTP 403, `-32600` "Forbidden", with no challenge: no token would lift it |
+| `{:insufficient_user_authentication, %{acr_values: acrs, max_age: seconds}}` | the step-up refusal (RFC 9470): HTTP 401 with an `insufficient_user_authentication` challenge carrying `acr_values` and `max_age` (on an endpoint with authorization), so the client can have the person sign in again; `Sake.Middleware.require_authentication/2` returns it |
 | `{:error, message}` | `-32600` with `message` |
 | `{:tool_error, message}` | on `:before_call` and `:after_call`, a tool result with `isError: true` and `message`, which the model reads and can act on; elsewhere, as `{:error, message}` |
 | anything else | `-32600` "Request refused" |
@@ -172,8 +173,9 @@ it into the error a client gets).
 
 Off HTTP (stdio, `Sake.Test`), a 403 is the JSON-RPC error alone;
 `Sake.Test` returns `{:error, {:insufficient_scope, challenge}}` for
-`{:forbidden, scopes}` and `{:error, {:http, 403, body}}` for
-`:forbidden`, as `Sake.Client` does against an endpoint. A call the
+`{:forbidden, scopes}`, `{:error, {:http, 403, body}}` for `:forbidden`,
+and `{:error, {:insufficient_user_authentication, challenge}}` for the
+step-up refusal, as `Sake.Client` does against an endpoint. A call the
 client asked to stream (with a progress token, for one) has already
 started its SSE stream when the tool's middleware runs, so its refusal
 is the stream's one message, as any other error of a streamed call is.
@@ -331,6 +333,30 @@ middleware :before_read, [MyApp.MCP.Tenant]
 
 The plug overwrites whatever the client sent under that key. Components
 can read the same value from `ctx.assigns.org_id`.
+
+### MFA for large transfers
+
+A tool's `authentication:` is fixed; a requirement that depends on the
+arguments is a `:before_call` plug's. `Sake.Middleware.require_authentication/2`
+continues when the token's person signed in as asked, and halts with the
+step-up refusal otherwise:
+
+```elixir
+defmodule MyApp.MCP.LargeTransfers do
+  @behaviour Sake.Middleware
+
+  @impl true
+  def call(%{tool: %{name: "transfer"}, arguments: %{amount: amount}} = payload, _opts)
+      when amount > 1_000,
+      do: Sake.Middleware.require_authentication(payload, acr: ["mfa"], max_age: 300)
+
+  def call(payload, _opts), do: {:cont, payload}
+end
+```
+
+A transfer of 50 goes through on a password sign-in; one of 5,000 gets a
+401 whose challenge asks for `acr_values="mfa"` and `max_age="300"`, and
+the client's retry, after the person signed in with MFA, goes through.
 
 ### Redacting results
 

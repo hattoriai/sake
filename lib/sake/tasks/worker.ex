@@ -141,6 +141,10 @@ defmodule Sake.Tasks.Worker do
 
   defp refused({:ok, result}), do: {:completed, result}
   defp refused({:forbidden, scopes}), do: {:failed, Sake.Plug.Stream.forbidden(scopes)}
+
+  defp refused({:insufficient_user_authentication, _refusal}),
+    do: {:failed, Sake.Plug.Stream.insufficient_user_authentication()}
+
   defp refused({:error, code, message}), do: {:failed, %{"code" => code, "message" => message}}
 
   defp refused({:error, code, message, data}),

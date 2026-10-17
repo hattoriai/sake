@@ -18,7 +18,10 @@ defmodule Sake.Client do
   (see `set_log_level/2`), and `auth:` to have the client
   run the MCP authorization flow itself on a 401 (see `Sake.Client.Auth`);
   without it, a 401 comes back as
-  `{:error, {:unauthorized, %Sake.Auth.Challenge{}}}`.
+  `{:error, {:unauthorized, %Sake.Auth.Challenge{}}}`, or, when its
+  challenge is RFC 9470's `insufficient_user_authentication` (the person
+  must sign in more strongly or more recently), as
+  `{:error, {:insufficient_user_authentication, %Sake.Auth.Challenge{}}}`.
 
   On the modern protocol the client declares the tasks extension, so a
   server may answer a tool call with a task; `call_tool/3` follows it to
@@ -78,7 +81,13 @@ defmodule Sake.Client do
 
   # A probe that ends in one of these was answered by a modern server, or
   # needs authorizing whatever the era: no legacy handshake follows.
-  @final_probe_errors [:no_common_version, :unauthorized, :insufficient_scope, :auth]
+  @final_probe_errors [
+    :no_common_version,
+    :unauthorized,
+    :insufficient_scope,
+    :insufficient_user_authentication,
+    :auth
+  ]
 
   # How many times one request may run the authorization flow (a 401, then
   # a step-up on a 403) before the error goes back to the caller.
@@ -679,43 +688,71 @@ defmodule Sake.Client do
 
   # One message, with the session's token when it has one. A 401 runs the
   # authorization flow (the refresh token first, the first time), a 403
-  # `insufficient_scope` a step-up; either way the same message is sent
-  # again with the new token. The JSON-RPC id stays the same: the server
-  # refused the request at the HTTP level, so it never saw that id. A
-  # DPoP nonce challenge is not a refusal of the token: the message goes
-  # again at once with the server's nonce, once per token, and is not
-  # counted as an authorization.
-  defp post(session, message, opts, authorizations \\ 0, nonced? \\ false) do
+  # `insufficient_scope` a step-up, and a 401
+  # `insufficient_user_authentication` (RFC 9470) the person's grant
+  # again, with the challenge's `acr_values` and `max_age`, once per
+  # request; either way the same message is sent again with the new
+  # token. The JSON-RPC id stays the same: the server refused the
+  # request at the HTTP level, so it never saw that id. A DPoP nonce
+  # challenge is not a refusal of the token: the message goes again at
+  # once with the server's nonce, once per token, and is not counted as
+  # an authorization.
+  #
+  # `tries` counts what this request has run: `n` authorizations, and
+  # whether one was for the person's sign-in.
+  defp post(session, message, opts, tries \\ %{n: 0, signed_in?: false}, nonced? \\ false) do
     session = if session.auth, do: %{session | auth: Auth.fresh(session.auth)}, else: session
 
     case Transport.post(session, message, opts) do
       {:error, {:unauthorized, %{error: "use_dpop_nonce", nonce: nonce}}}
       when session.auth != nil and is_binary(nonce) and not nonced? ->
         session = %{session | auth: Auth.put_nonce(session.auth, session.url, nonce)}
-        post(session, message, opts, authorizations, true)
+        post(session, message, opts, tries, true)
 
       answer ->
-        authorize_on(answer, session, message, opts, authorizations)
+        authorize_on(answer, session, message, opts, tries)
     end
   end
 
-  defp authorize_on({:error, {:unauthorized, challenge} = error}, session, message, opts, n)
-       when session.auth != nil and n < @max_authorizations do
+  defp authorize_on({:error, {:unauthorized, challenge} = error}, session, message, opts, tries)
+       when session.auth != nil and tries.n < @max_authorizations do
     session
-    |> reauthorize(error, &Auth.unauthorized(&1, challenge, n == 0))
-    |> retry(message, opts, n)
+    |> reauthorize(error, &Auth.unauthorized(&1, challenge, tries.n == 0))
+    |> retry(message, opts, tries)
   end
 
-  defp authorize_on({:error, {:insufficient_scope, challenge} = error}, session, message, opts, n)
-       when session.auth != nil and n < @max_authorizations do
+  defp authorize_on(
+         {:error, {:insufficient_scope, challenge} = error},
+         session,
+         message,
+         opts,
+         tries
+       )
+       when session.auth != nil and tries.n < @max_authorizations do
     session
     |> reauthorize(error, &Auth.insufficient_scope(&1, challenge))
-    |> retry(message, opts, n)
+    |> retry(message, opts, tries)
   end
 
-  defp authorize_on({:error, reason}, session, _message, _opts, _n), do: {:error, reason, session}
+  # A sign-in the server still refuses after the person signed in again
+  # for this request would only send them round once more.
+  defp authorize_on(
+         {:error, {:insufficient_user_authentication, challenge} = error},
+         session,
+         message,
+         opts,
+         tries
+       )
+       when session.auth != nil and tries.n < @max_authorizations and not tries.signed_in? do
+    session
+    |> reauthorize(error, &Auth.insufficient_user_authentication(&1, challenge))
+    |> retry(message, opts, %{tries | signed_in?: true})
+  end
 
-  defp authorize_on({:ok, result, session}, _session, _message, _opts, _n),
+  defp authorize_on({:error, reason}, session, _message, _opts, _tries),
+    do: {:error, reason, session}
+
+  defp authorize_on({:ok, result, session}, _session, _message, _opts, _tries),
     do: {:ok, result, session}
 
   defp reauthorize(session, error, fun) do
@@ -726,10 +763,10 @@ defmodule Sake.Client do
     end
   end
 
-  defp retry({:ok, session}, message, opts, authorizations),
-    do: post(session, message, opts, authorizations + 1)
+  defp retry({:ok, session}, message, opts, tries),
+    do: post(session, message, opts, %{tries | n: tries.n + 1})
 
-  defp retry(error, _message, _opts, _authorizations), do: error
+  defp retry(error, _message, _opts, _tries), do: error
 
   # Only answers go back: a request nothing could answer (a sampling or
   # roots request without `sampling:` or `roots:`) is left out, and the

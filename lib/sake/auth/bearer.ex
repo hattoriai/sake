@@ -273,6 +273,54 @@ defmodule Sake.Auth.Bearer do
     do: "DPoP " <> Enum.join(params ++ [~s(algs="#{Enum.join(DPoP.algs(), " ")}")], ", ")
 
   @doc """
+  The 401 challenge (RFC 9470 §3) for a component that asks for a
+  stronger or more recent sign-in than the token's: `acr_values` and
+  `max_age` say what it asks, in the scheme the token came with
+  (`dpop?`). `scopes`, when the token lacks some of the component's
+  scopes as well, are named in its `scope`, so that one new grant covers
+  both.
+  """
+  @spec insufficient_user_authentication(
+          String.t(),
+          %{acr_values: [String.t()], max_age: non_neg_integer() | nil},
+          :acr | :max_age,
+          [String.t()],
+          boolean()
+        ) :: Challenge.t()
+  def insufficient_user_authentication(url, requirement, reason, scopes, dpop?) do
+    metadata = Resource.metadata_url(url)
+    acr_values = Enum.join(requirement.acr_values, " ")
+
+    params =
+      [
+        ~s(error="insufficient_user_authentication"),
+        ~s(error_description="#{user_authentication_description(reason)}")
+      ] ++
+        if(acr_values == "", do: [], else: [~s(acr_values="#{acr_values}")]) ++
+        if(requirement.max_age == nil, do: [], else: [~s(max_age="#{requirement.max_age}")]) ++
+        if(scopes == [], do: [], else: [~s(scope="#{Enum.join(scopes, " ")}")]) ++
+        [~s(resource_metadata="#{metadata}")]
+
+    scheme = if dpop?, do: :dpop, else: :bearer
+
+    %Challenge{
+      status: 401,
+      www_authenticate: [challenge(scheme, params, nil)],
+      scheme: if(scheme == :dpop, do: "DPoP", else: "Bearer"),
+      resource_metadata: metadata,
+      scope: scopes,
+      acr_values: requirement.acr_values,
+      max_age: requirement.max_age,
+      error: "insufficient_user_authentication",
+      error_description: user_authentication_description(reason)
+    }
+  end
+
+  # RFC 9470 §3's two examples: the class of the sign-in, or its age.
+  defp user_authentication_description(:acr), do: "A different authentication level is required"
+  defp user_authentication_description(:max_age), do: "More recent authentication is required"
+
+  @doc """
   The 403 challenge for a component the token's scopes do not cover, at
   the endpoint `url` reached, in the scheme the token came with (`dpop?`).
   """

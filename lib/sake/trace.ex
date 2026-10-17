@@ -315,6 +315,9 @@ defmodule Sake.Trace do
   defp attributes({:forbidden, _scopes}, _method),
     do: %{"rpc.response.status_code" => to_string(Sake.JSONRPC.code(:invalid_request))}
 
+  defp attributes({:insufficient_user_authentication, _refusal}, _method),
+    do: %{"rpc.response.status_code" => to_string(Sake.JSONRPC.code(:invalid_request))}
+
   defp attributes({:failed, type}, _method), do: %{"error.type" => type}
   defp attributes(_outcome, _method), do: %{}
 

@@ -33,7 +33,7 @@ defmodule SakeDev.Pages do
     html(conn, page("sake-dev", body))
   end
 
-  def login(conn, return_to, error \\ nil) do
+  def login(conn, return_to, error \\ nil, mfa? \\ false) do
     body = """
     <h1>Sign in</h1>
     #{error_line(error)}
@@ -41,9 +41,11 @@ defmodule SakeDev.Pages do
       <input type="hidden" name="return_to" value="#{html_escape(return_to || "/")}">
       <p><label>Email <input type="email" name="email" autofocus></label></p>
       <p><label>Password <input type="password" name="password"></label></p>
+      #{otp_line(mfa?)}
       <p><button type="submit">Sign in</button></p>
     </form>
-    <p>Try <code>ana@example.com</code> / <code>secret</code>.</p>
+    <p>Try <code>ana@example.com</code> / <code>secret</code>, and the one-time code
+    <code>#{SakeDev.Accounts.otp()}</code> for MFA.</p>
     """
 
     html(conn, page("Sign in", body))
@@ -57,6 +59,14 @@ defmodule SakeDev.Pages do
     <form method="post" action="/logout"><button type="submit">Sign out</button></form>
     """
   end
+
+  defp otp_line(true),
+    do:
+      ~s[<p><label>One-time code (required) <input name="otp" autocomplete="one-time-code"></label></p>]
+
+  defp otp_line(false),
+    do:
+      ~s[<p><label>One-time code (optional) <input name="otp" autocomplete="one-time-code"></label></p>]
 
   defp error_line(nil), do: ""
   defp error_line(message), do: "<p style=\"color: crimson\">#{html_escape(message)}</p>"

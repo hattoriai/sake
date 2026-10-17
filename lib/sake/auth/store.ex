@@ -40,12 +40,16 @@ defmodule Sake.Auth.Store do
   Records the person's decision on a pending device grant (by its
   device code's hash), if and only if it is still pending, atomically:
   of two concurrent decisions, one gets `:ok` and the other `:error`.
-  An approval sets `subject_id` and narrows `scopes` to those granted.
+  An approval sets `subject_id`, narrows `scopes` to those granted, and
+  sets `acr` and `auth_time` from `authentication`, how the person
+  signed in (either may be nil).
   """
   @callback decide_device_grant(
               state(),
               hash :: String.t(),
-              {:approved, subject_id :: String.t(), scopes :: [String.t()]} | :denied
+              {:approved, subject_id :: String.t(), scopes :: [String.t()],
+               authentication :: %{acr: String.t() | nil, auth_time: DateTime.t() | nil}}
+              | :denied
             ) :: :ok | :error
   @doc """
   A poll of the token endpoint for the device grant `hash`, by the

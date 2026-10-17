@@ -446,6 +446,15 @@ defmodule Sake.Plug do
       {{:request, id, _, _}, {:forbidden, scopes}} ->
         [%{"jsonrpc" => "2.0", "id" => id, "error" => Sake.Plug.Stream.forbidden(scopes)}]
 
+      {{:request, id, _, _}, {:insufficient_user_authentication, _refusal}} ->
+        [
+          %{
+            "jsonrpc" => "2.0",
+            "id" => id,
+            "error" => Sake.Plug.Stream.insufficient_user_authentication()
+          }
+        ]
+
       {{:request, id, _, _}, _} ->
         [JSONRPC.error(id, JSONRPC.code(:invalid_request), "Not supported in a batch")]
 
@@ -526,6 +535,31 @@ defmodule Sake.Plug do
       "id" => id,
       "error" => Sake.Plug.Stream.forbidden(scopes)
     })
+  end
+
+  # RFC 9470: a token whose person signed in too weakly or too long ago
+  # gets a 401 whose challenge says how to sign in, in the token's
+  # scheme, as `insufficient_scope` is.
+  def outcome_to_response(conn, id, {:insufficient_user_authentication, refusal}) do
+    body = %{
+      "jsonrpc" => "2.0",
+      "id" => id,
+      "error" => Sake.Plug.Stream.insufficient_user_authentication()
+    }
+
+    if conn.assigns[:sake_auth] do
+      %Challenge{www_authenticate: [header]} =
+        Sake.Auth.insufficient_user_authentication(
+          conn,
+          Map.take(refusal, [:acr_values, :max_age]),
+          refusal.reason,
+          refusal.scopes
+        )
+
+      conn |> put_resp_header("www-authenticate", header) |> send_json(401, body)
+    else
+      send_json(conn, 403, body)
+    end
   end
 
   def outcome_to_response(conn, _id, :noreply), do: send_resp(conn, 202, "")

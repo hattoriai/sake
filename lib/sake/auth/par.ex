@@ -11,8 +11,10 @@ defmodule Sake.Auth.PAR do
   # (`AuthorizationRequest.validate/3`, `extra` included), and stored by
   # the hash of its `request_uri`, which is good once, for `par:`'s
   # `expires_in` seconds, and for its client alone. The authorize
-  # endpoint takes it (`take/3`) and goes on as for a request sent to it
-  # directly: `Grant.decide/4`.
+  # endpoint takes it (`take/4`) and goes on as for a request sent to it
+  # directly: `Grant.decide/4`. A request whose `acr_values` or
+  # `max_age` (RFC 9470) the person's sign-in does not meet is put back
+  # while they sign in again.
   #
   # A push with a DPoP proof (or a `dpop_jkt` parameter, RFC 9449 §10)
   # records the key's thumbprint in the request's `extra`, so the code,
@@ -26,6 +28,7 @@ defmodule Sake.Auth.PAR do
   alias Sake.Auth
 
   alias Sake.Auth.{
+    Authentication,
     AuthorizationRequest,
     Client,
     ClientAuth,
@@ -166,15 +169,23 @@ defmodule Sake.Auth.PAR do
   the client that pushed it. Returns the client and the request, which
   goes on as one sent to the authorize endpoint; an error is never sent
   to a redirect URI, as `AuthorizationRequest.client/3`'s are not.
+
+  With `authentication`, how the person at the authorize endpoint signed
+  in: a request whose `acr_values` or `max_age` (RFC 9470) it does not
+  meet is put back, unspent, and the answer is `{:reauthenticate,
+  requirement}`, so that the same `request_uri` works once the person
+  has signed in again, until it expires.
   """
-  @spec take(Config.t(), term(), term()) ::
+  @spec take(Config.t(), term(), term(), Authentication.context() | nil) ::
           {:ok, Client.t(), AuthorizationRequest.t()}
+          | {:reauthenticate, Authentication.requirement()}
           | {:error, :request_uri | :client_mismatch | :unknown_client | :redirect_uri}
           | {:error, :client, term()}
-  def take(config, client_id, request_uri) do
+  def take(config, client_id, request_uri, authentication \\ nil) do
     with {:ok, pushed} <- consume(config, request_uri),
          :ok <- same_client(pushed, client_id),
-         {:ok, client} <- AuthorizationRequest.client(config, client_id, pushed.redirect_uri) do
+         {:ok, client} <- AuthorizationRequest.client(config, client_id, pushed.redirect_uri),
+         :ok <- authenticated(config, pushed, authentication) do
       {:ok, client,
        %AuthorizationRequest{
          client_id: pushed.client_id,
@@ -185,6 +196,22 @@ defmodule Sake.Auth.PAR do
          resource: pushed.resource,
          extra: pushed.extra || %{}
        }}
+    end
+  end
+
+  defp authenticated(_config, _pushed, nil), do: :ok
+
+  defp authenticated(config, pushed, authentication) do
+    requirement = Authentication.requested(pushed.extra)
+
+    case Authentication.check(authentication, requirement) do
+      :ok ->
+        :ok
+
+      {:error, _reason} ->
+        {module, state} = Auth.store(config)
+        :ok = module.put_pushed_request(state, pushed)
+        {:reauthenticate, requirement}
     end
   end
 
