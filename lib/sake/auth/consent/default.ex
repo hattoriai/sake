@@ -1,5 +1,5 @@
 defmodule Sake.Auth.Consent.Default do
-  @moduledoc "The consent and error pages that ship with Sake."
+  @moduledoc "The consent, code entry and error pages that ship with Sake."
   @behaviour Sake.Auth.Consent
 
   require EEx
@@ -16,6 +16,14 @@ defmodule Sake.Auth.Consent.Default do
     :def,
     :render_error,
     Path.join(:code.priv_dir(:sake), "templates/error.html.eex"),
+    [:assigns],
+    engine: EEx.SmartEngine
+  )
+
+  EEx.function_from_file(
+    :def,
+    :render_user_code,
+    Path.join(:code.priv_dir(:sake), "templates/user_code.html.eex"),
     [:assigns],
     engine: EEx.SmartEngine
   )

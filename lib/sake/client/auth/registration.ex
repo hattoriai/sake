@@ -17,6 +17,7 @@ defmodule Sake.Client.Auth.Registration do
 
   @secret_methods ["client_secret_basic", "client_secret_post"]
   @grant_types ["authorization_code", "refresh_token"]
+  @device_code "urn:ietf:params:oauth:grant-type:device_code"
 
   @spec client(Auth.t(), map()) :: {:ok, map(), Auth.t()} | {:error, term(), Auth.t()}
   def client(auth, %{issuer: issuer, metadata: metadata}) do
@@ -126,14 +127,11 @@ defmodule Sake.Client.Auth.Registration do
   defp register(auth, issuer, metadata) do
     method = registration_method(metadata)
 
-    body = %{
-      "client_name" => auth.client_name,
-      "redirect_uris" => [auth.redirect_uri],
-      "grant_types" => grant_types(metadata),
-      "response_types" => ["code"],
-      "token_endpoint_auth_method" => method,
-      "application_type" => application_type(auth.redirect_uri)
-    }
+    body =
+      Map.merge(
+        %{"client_name" => auth.client_name, "token_endpoint_auth_method" => method},
+        flow(auth, metadata)
+      )
 
     case HTTP.post(metadata["registration_endpoint"], [json: body], [], auth.req) do
       {:ok, status, %{"client_id" => client_id} = response, _headers}
@@ -162,12 +160,33 @@ defmodule Sake.Client.Auth.Registration do
   defp supported_methods(metadata),
     do: List.wrap(metadata["token_endpoint_auth_methods_supported"] || "client_secret_basic")
 
+  # What the client registers for: the code flow and its redirect URI,
+  # or the device grant (RFC 8628), which redirects nowhere and so
+  # registers no redirect URI (RFC 7591 §2), as a native application.
+  defp flow(%Auth{grant: :device}, metadata) do
+    %{
+      "grant_types" => grant_types([@device_code, "refresh_token"], @device_code, metadata),
+      "response_types" => [],
+      "application_type" => "native"
+    }
+  end
+
+  defp flow(auth, metadata) do
+    %{
+      "redirect_uris" => [auth.redirect_uri],
+      "grant_types" => grant_types(@grant_types, "authorization_code", metadata),
+      "response_types" => ["code"],
+      "application_type" => application_type(auth.redirect_uri)
+    }
+  end
+
   # Asking for the refresh token grant (SEP-2207) unless the server says it
   # does not issue refresh tokens.
-  defp grant_types(%{"grant_types_supported" => supported}) when is_list(supported),
-    do: Enum.filter(@grant_types, &(&1 == "authorization_code" or &1 in supported))
+  defp grant_types(grants, main, %{"grant_types_supported" => supported})
+       when is_list(supported),
+       do: Enum.filter(grants, &(&1 == main or &1 in supported))
 
-  defp grant_types(_metadata), do: @grant_types
+  defp grant_types(grants, _main, _metadata), do: grants
 
   # SEP-837: a client whose redirect URI is on a loopback host (or a custom
   # scheme) is a native application; one served from a real host is a web

@@ -109,6 +109,79 @@ which):
   clients and the clients that present JWT grants (below) are
   host-registered too.
 
+## Devices and CLIs without a browser (the device grant)
+
+A CLI on a server over SSH, a headless agent or a device with no browser
+cannot open the authorize URL, nor receive a redirect. With the device
+authorization grant (RFC 8628) it shows the person a short code instead,
+and the person enters it on any device where they can sign in to your
+app: their laptop, their phone.
+
+It is off by default. Turn it on in the auth config, and mount the
+verification page inside the signed-in pipeline, like the authorize
+endpoint:
+
+```elixir
+{Sake,
+ auth: [
+   # ...
+   device: true  # or [expires_in: 600, interval: 5], the defaults
+ ]}
+```
+
+`sake_oauth_authorize()` mounts `GET` and `POST /oauth/device` (the
+verification page, `Sake.Auth.DeviceVerification`) next to
+`/oauth/authorize`, and `sake_oauth_api()` (or `Sake.Auth.RouterPlug`)
+mounts `POST /oauth/device_authorization`. A Plug host mounts
+`Sake.Auth.DeviceVerification` itself at `/oauth/device`, behind its
+session and login plugs. Without `device:` all three answer 404, and the
+metadata says nothing about them.
+
+The flow:
+
+1. The client authenticates at `/oauth/device_authorization` as it would
+   at `/oauth/token`, with the scopes and the resource it wants (the same
+   rules as an authorization request: the client must be registered for
+   the `urn:ietf:params:oauth:grant-type:device_code` grant). It gets a
+   device code, a user code like `BDFK-QRTX`, the verification URL
+   (`/oauth/device`), the same URL with the code in it
+   (`verification_uri_complete`, for a link or a QR code), how long they
+   last (`expires_in`) and how often it may poll (`interval`).
+2. It shows the person the code and the URL, and polls `/oauth/token`
+   with the device code. Until the person decides, the answer is
+   `authorization_pending`; a client that polls faster than `interval`
+   gets `slow_down`.
+3. The person opens the URL, signs in, and enters the code (prefilled
+   from `verification_uri_complete`). The consent page follows, with the
+   code on it to compare with the one the device shows. It runs through
+   the same decision as the authorize endpoint: `authorize_resource?/2`
+   may refuse the endpoint, `scopes_for/2` narrows the scopes, and the
+   approval is remembered as a consent. A remembered consent does not
+   skip the page here: nothing ties a device request to the client the
+   way a redirect URI does, and whoever started it may have sent the
+   code to someone else to approve.
+4. On approval the next poll gets the tokens, once, bound to the DPoP key
+   of that token request when there is one. The device code is then
+   spent: used again, it revokes every token issued for it, as a
+   replayed authorization code does. A denial answers `access_denied`,
+   and a code past `expires_in` `expired_token`.
+
+The user code is 8 characters from an alphabet of 20 consonants with no
+look-alikes (RFC 8628 §6.1), and the page ignores case, spaces and the
+dash. That is about 34 bits, so the page lets each signed-in person enter
+five codes a minute, and says nothing about a refused code but that it is
+not valid (unknown, expired and already decided read the same). Both
+codes are stored hashed: the device code as codes and tokens are, the
+user code with an HMAC keyed by the Sake secret, which `device:` needs.
+The page's two forms carry a signed blob bound to the person, and the
+host's CSRF token, as the consent form does.
+
+A client registers for the grant dynamically with `grant_types:
+["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"]` and
+no redirect URI, or you register one with `Sake.Auth.Clients.create/2`
+and the same `grant_types:`. `Sake.Client` does it all with `grant:
+:device` (see `guides/client.md`).
+
 ## Machine clients (client credentials)
 
 A service that calls your endpoint as itself — a nightly job, a CI
@@ -451,13 +524,20 @@ renews it with only those.
 The default page (`Sake.Auth.Consent.Default`) ships its own inline style
 sheet and needs nothing from your app. Replace it with `consent:
 MyAppWeb.MCPConsent` in the auth config; your module implements the
-`Sake.Auth.Consent` behaviour: `render/1` (client name, host, redirect
-host, whether the redirect is a loopback address, the signed-in person's
+`Sake.Auth.Consent` behaviour: `render/1` (the `flow`, `:authorization_code`
+or `:device`; client name, host, redirect
+host and whether the redirect is a loopback address, both `nil` for a
+device request, which has the `user_code` instead; the signed-in person's
 display string, `{scope, description}` pairs, the `resource` URL, an
 opaque `request` blob for a hidden field, the form's `action`, a CSRF
 token — empty when your pipeline runs no CSRF protection — and your
 issuer's display name) and `render_error/1` (`title`, `message`, `status`) for the
-handful of error pages (unknown client, bad redirect, expired request).
+handful of error pages (unknown client, bad redirect, expired request),
+and the device page's last word ("Device connected", with status 200).
+The device verification page's code entry form is the optional
+`render_user_code/1` (the code to prefill, the reason the last one was
+refused, the person, the `request` blob, the `action` and the CSRF
+token); without it, the default's is used.
 
 Both pages are sent with `x-frame-options: DENY` and
 `content-security-policy: frame-ancestors 'none'`, so no other site can
@@ -492,7 +572,7 @@ resource or scope set — for an "apps connected to your account" page.
 Sake.Auth.prune(config)
 ```
 
-Deletes expired codes and tokens, remembered consents older than the
+Deletes expired codes, device grants and tokens, remembered consents older than the
 refresh token lifetime that no live token family still uses, and
 dynamically registered clients that nothing has used since
 `unused_client_ttl` (a day) after they registered. Schedule it — a cron job, an Oban
@@ -511,8 +591,8 @@ end
 ```
 
 Both take `prefix:`. It creates `sake_oauth_clients`, `sake_oauth_codes`,
-`sake_oauth_tokens` (with the thumbprint of a token's DPoP key in `jkt`)
-and a consents table — string primary keys throughout (hashes and
+`sake_oauth_device_grants`, `sake_oauth_tokens` (with the thumbprint of
+a token's DPoP key in `jkt`) and a consents table — string primary keys throughout (hashes and
 generated IDs, never the raw secrets). Point the auth config
 at it with `store: {Sake.Auth.Store.Ecto, repo: MyApp.Repo}`.
 
@@ -531,7 +611,9 @@ revoked; revoking the family marks the row revoked under the same lock
 before it sweeps the tokens. Whichever of the two runs second sees what
 the other did, so a replay that races the request redeeming the code
 never leaves a live pair behind: that request gets `invalid_grant`
-instead.
+instead. An issued device grant is the same fence for its device code,
+and each poll of a device grant locks its row while it is answered and
+recorded, so an approved grant is issued once.
 
 A refresh works the same way, the refresh token it consumed being the
 fence: the rotated pair is inserted in a transaction that locks that
@@ -543,8 +625,9 @@ legitimate refresh leaves no live pair either.
 
 The default, `{Sake.Auth.Store.ETS, []}`, needs no database: an `Agent`
 owns a set of ETS tables, which also serializes the operations that must
-be atomic (consuming a code or a refresh token, storing a code's tokens,
-revoking a family) through the Agent's mailbox rather than a database
+be atomic (consuming a code or a refresh token, deciding on or polling a
+device grant, storing a code's or a device grant's tokens, revoking a
+family) through the Agent's mailbox rather than a database
 transaction. It is what `mix dev`
 and this package's own test suite use — nothing survives a restart, which
 is exactly what you want in development and exactly what you do not want

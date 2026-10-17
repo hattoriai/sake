@@ -33,11 +33,13 @@ button.primary { background: var(--accent); color: var(--accent-fg); border-colo
 <li><%= Plug.HTML.html_escape(description || name) %> <span class="muted">(<%= Plug.HTML.html_escape(name) %>)</span></li>
 <% end %>
 </ul>
-<%= if @loopback? do %>
+<%= if @flow == :device do %>
+<div class="warn">Check that your device shows the code <strong><%= Plug.HTML.html_escape(@user_code) %></strong>. Only continue if you started this yourself, on a device you trust.</div>
+<% else %><%= if @loopback? do %>
 <div class="warn">The access code will be sent to an app on your computer at <%= Plug.HTML.html_escape(@redirect_host) %>. Only continue if you started this from an app you trust.</div>
 <% else %>
 <p class="muted">You will be sent back to <%= Plug.HTML.html_escape(@redirect_host) %>.</p>
-<% end %>
+<% end %><% end %>
 <form method="post" action="<%= Plug.HTML.html_escape(@action) %>">
 <input type="hidden" name="_csrf_token" value="<%= Plug.HTML.html_escape(@csrf_token) %>">
 <input type="hidden" name="request" value="<%= Plug.HTML.html_escape(@request) %>">

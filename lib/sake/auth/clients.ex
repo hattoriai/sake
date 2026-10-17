@@ -26,7 +26,10 @@ defmodule Sake.Auth.Clients do
   also list `"client_credentials"` (with the subject module's
   `c:Sake.Auth.Subject.client_principal/1`) and
   `"urn:ietf:params:oauth:grant-type:jwt-bearer"`, for grants from a
-  `Sake.Auth.TrustedIssuer`.
+  `Sake.Auth.TrustedIssuer`, and
+  `"urn:ietf:params:oauth:grant-type:device_code"`, for a CLI or a
+  device with no browser (with `device:` in the auth config); a client
+  without `"authorization_code"` needs no redirect URI.
 
   `dpop_bound_access_tokens: true` (RFC 9449 §5.2) refuses the client's
   token requests that carry no DPoP proof, so all its tokens are bound
@@ -36,7 +39,14 @@ defmodule Sake.Auth.Clients do
   alias Sake.Auth.{Client, Config, Redirect, Tokens}
 
   @jwt_bearer "urn:ietf:params:oauth:grant-type:jwt-bearer"
-  @grant_types ["authorization_code", "refresh_token", "client_credentials", @jwt_bearer]
+  @device_code "urn:ietf:params:oauth:grant-type:device_code"
+  @grant_types [
+    "authorization_code",
+    "refresh_token",
+    "client_credentials",
+    @jwt_bearer,
+    @device_code
+  ]
   @default_grant_types ["authorization_code", "refresh_token"]
 
   @spec create(Config.t(), map()) :: {:ok, Client.t(), String.t() | nil} | {:error, map()}

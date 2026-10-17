@@ -4,7 +4,9 @@ defmodule Sake.Client.Auth.Grant do
   # (PKCE, state, resource, scope), the checks on the answer that comes
   # back through the redirect URI, and the token endpoint (the code
   # exchange and refresh, the client credentials and JWT bearer grants,
-  # with the client authentication the registration calls for).
+  # with the client authentication the registration calls for). The
+  # device authorization grant's two requests too (RFC 8628): the device
+  # authorization request, and one poll of the token endpoint.
   #
   # Every token request takes `dpop`: nil, or `%{key: key, nonce: nonce}`
   # to send a DPoP proof (RFC 9449 §5) made with `key`, and so ask for a
@@ -15,6 +17,7 @@ defmodule Sake.Client.Auth.Grant do
   alias Sake.Client.Auth.HTTP
 
   @jwt_bearer "urn:ietf:params:oauth:grant-type:jwt-bearer"
+  @device_code "urn:ietf:params:oauth:grant-type:device_code"
   @assertion_type "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 
   # A client assertion is good for one request, sent at once.
@@ -157,6 +160,78 @@ defmodule Sake.Client.Auth.Grant do
       server.metadata["token_endpoint"],
       [grant_type: @jwt_bearer, assertion: assertion, resource: server.resource] ++
         scope(scopes),
+      registration,
+      req,
+      dpop
+    )
+  end
+
+  @doc """
+  A device authorization request (RFC 8628 §3.1) to the server's
+  `device_authorization_endpoint`, with the client authentication of
+  the token endpoint (a client assertion's audience is the token
+  endpoint's server). Returns the response's fields as atoms, with an
+  `interval` of 5 seconds when the server names none (§3.2).
+  """
+  @spec device_authorization(map(), map(), [String.t()], keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def device_authorization(server, registration, scopes, req) do
+    endpoint = server.metadata["device_authorization_endpoint"]
+
+    {form, headers} =
+      authenticate(
+        [resource: server.resource] ++ scope(scopes),
+        registration,
+        server.metadata["token_endpoint"]
+      )
+
+    case HTTP.post(endpoint, [form: form], headers, req) do
+      {:ok, 200,
+       %{"device_code" => code, "user_code" => user_code, "verification_uri" => uri} = body,
+       _headers}
+      when is_binary(code) and is_binary(user_code) and is_binary(uri) ->
+        with {:ok, expires_in} <- seconds(body["expires_in"], nil),
+             {:ok, interval} <- seconds(body["interval"], 5) do
+          {:ok,
+           %{
+             device_code: code,
+             user_code: user_code,
+             verification_uri: uri,
+             verification_uri_complete:
+               if(is_binary(body["verification_uri_complete"]),
+                 do: body["verification_uri_complete"]
+               ),
+             expires_in: expires_in,
+             interval: interval
+           }}
+        else
+          :error -> {:error, {:device_authorization_failed, 200, body}}
+        end
+
+      {:ok, status, body, _headers} ->
+        {:error, {:device_authorization_failed, status, body}}
+
+      {:error, reason} ->
+        {:error, {:device_authorization_failed, reason}}
+    end
+  end
+
+  defp seconds(n, _default) when is_integer(n) and n > 0, do: {:ok, n}
+  defp seconds(nil, default) when is_integer(default), do: {:ok, default}
+  defp seconds(_n, _default), do: :error
+
+  @doc """
+  One poll of the token endpoint with a device code (RFC 8628 §3.4). An
+  answer still pending is an error like any other, `{:token_failed,
+  400, %{"error" => "authorization_pending"}}`, for the caller to wait
+  on.
+  """
+  @spec device_token(map(), map(), String.t(), keyword(), dpop()) ::
+          {:ok, map()} | {:error, term()}
+  def device_token(server, registration, device_code, req, dpop \\ nil) do
+    token(
+      server.metadata["token_endpoint"],
+      [grant_type: @device_code, device_code: device_code],
       registration,
       req,
       dpop

@@ -1,7 +1,8 @@
 defmodule Sake.Auth.TokenGrants do
   @moduledoc false
   # The token endpoint's grants: the authorization code grant with PKCE,
-  # refresh token rotation with reuse detection, the client credentials
+  # the device code grant (RFC 8628 §3.4), refresh token rotation with
+  # reuse detection, the client credentials
   # grant for machine clients, and the JWT bearer grant (RFC 7523) for
   # JWTs from a `Sake.Auth.TrustedIssuer`: an enterprise ID-JAG, or a
   # workload identity token.
@@ -39,13 +40,14 @@ defmodule Sake.Auth.TokenGrants do
   }
 
   @jwt_bearer "urn:ietf:params:oauth:grant-type:jwt-bearer"
+  @device_code "urn:ietf:params:oauth:grant-type:device_code"
 
   @type error :: {:error, 400 | 401, String.t(), String.t()}
 
   @doc false
   # The client credentials grant exists only when the subject module can
-  # name a machine client's principal, and the JWT bearer grant only when
-  # some issuer is trusted.
+  # name a machine client's principal, the JWT bearer grant only when
+  # some issuer is trusted, and the device code grant only with `device:`.
   @spec grant_types(Config.t()) :: [String.t()]
   def grant_types(config) do
     Code.ensure_loaded(config.subject)
@@ -55,7 +57,8 @@ defmodule Sake.Auth.TokenGrants do
         do: ["client_credentials"],
         else: []
       ) ++
-      if config.trusted_issuers == [], do: [], else: [@jwt_bearer]
+      if(config.trusted_issuers == [], do: [], else: [@jwt_bearer]) ++
+      if config.device == false, do: [], else: [@device_code]
   end
 
   @doc """
@@ -220,6 +223,54 @@ defmodule Sake.Auth.TokenGrants do
 
   defp grant(_config, _client, %{"grant_type" => "authorization_code"}, _jkt),
     do: {:error, "invalid_request", "code, redirect_uri and code_verifier are required"}
+
+  # RFC 8628 §3.5: the client polls with the device code until the
+  # person decides. The store answers each poll atomically and records
+  # it, so a client that polls faster than the interval is told to slow
+  # down, and an approved grant is issued once; the device code used
+  # again after that revokes every token issued for it, as a code does.
+  defp grant(config, client, %{"grant_type" => @device_code, "device_code" => code} = p, jkt)
+       when is_binary(code) do
+    {module, state} = Auth.store(config)
+    hash = Tokens.hash(code)
+
+    case module.poll_device_grant(state, hash, client.id, DateTime.utc_now()) do
+      {:approved, record} ->
+        with :ok <- same_resource(record, p["resource"]) do
+          issue_for_device(config, {module, state}, hash, %{
+            client_id: client.id,
+            subject_id: record.subject_id,
+            scopes: record.scopes,
+            resource: record.resource,
+            family_id: hash,
+            jkt: jkt,
+            refresh_jkt: refresh_binding(client, jkt)
+          })
+        end
+
+      :pending ->
+        {:error, "authorization_pending", "The person has not decided yet"}
+
+      :slow_down ->
+        {:error, "slow_down", "Polled too often: wait longer between requests"}
+
+      :denied ->
+        {:error, "access_denied", "The person denied the request"}
+
+      :expired ->
+        {:error, "expired_token", "The device code has expired"}
+
+      :used ->
+        module.revoke_family(state, hash)
+        {:error, "invalid_grant", "The device code was already used"}
+
+      :error ->
+        {:error, "invalid_grant", "The device code is invalid"}
+    end
+  end
+
+  defp grant(_config, _client, %{"grant_type" => @device_code}, _jkt),
+    do: {:error, "invalid_request", "device_code is required"}
 
   defp grant(
          config,
@@ -421,6 +472,21 @@ defmodule Sake.Auth.TokenGrants do
       :revoked -> {:error, "invalid_grant", "The code is invalid, expired or already used"}
     end
   end
+
+  # The same fence for a device grant (`put_device_tokens/3`): a replay
+  # of the device code racing this request never leaves a live pair.
+  defp issue_for_device(config, {module, state}, hash, attrs) do
+    {access, refresh, %{access: a, refresh: r}} = Tokens.new_pair(config, attrs)
+
+    case module.put_device_tokens(state, hash, [a, r]) do
+      :ok -> {:ok, response(config, attrs, access, refresh)}
+      :revoked -> {:error, "invalid_grant", "The device code was already used"}
+    end
+  end
+
+  defp same_resource(_record, nil), do: :ok
+  defp same_resource(%{resource: resource}, resource), do: :ok
+  defp same_resource(_record, _resource), do: {:error, "invalid_grant", "resource does not match"}
 
   # RFC 9449 §5: a public client's refresh token is bound to its DPoP key,
   # the only thing that tells its holder from a thief; a confidential

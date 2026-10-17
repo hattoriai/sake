@@ -15,7 +15,10 @@ children = [
      issuer: "http://localhost:4000",
      allow_insecure: true,
      servers: [SakeDev.Server, SakeDev.Gateway],
-     resources: ["/mcp", "/acme/mcp", "/beta/mcp", "/gateway/mcp"]
+     resources: ["/mcp", "/acme/mcp", "/beta/mcp", "/gateway/mcp"],
+     # The device grant, for a CLI with no browser: its verification
+     # page is /oauth/device.
+     device: true
    ]},
   {Bandit, plug: SakeDev.Router, port: 4000},
   # The gateway's proxy, whose upstream is this server's /open/mcp.

@@ -38,6 +38,14 @@ defmodule Sake.Auth.CodeReplayTest.PauseStore do
   def delete_client({m, s}, id), do: m.delete_client(s, id)
   def put_code({m, s}, c), do: m.put_code(s, c)
   def put_code_tokens({m, s}, hash, tokens), do: m.put_code_tokens(s, hash, tokens)
+  def put_device_grant({m, s}, g), do: m.put_device_grant(s, g)
+  def get_device_grant_by_user_code({m, s}, hash), do: m.get_device_grant_by_user_code(s, hash)
+  def decide_device_grant({m, s}, hash, decision), do: m.decide_device_grant(s, hash, decision)
+
+  def poll_device_grant({m, s}, hash, client_id, now),
+    do: m.poll_device_grant(s, hash, client_id, now)
+
+  def put_device_tokens({m, s}, hash, tokens), do: m.put_device_tokens(s, hash, tokens)
   def put_rotated_tokens({m, s}, hash, tokens), do: m.put_rotated_tokens(s, hash, tokens)
   def put_token({m, s}, token), do: m.put_token(s, token)
   def get_token({m, s}, kind, hash), do: m.get_token(s, kind, hash)

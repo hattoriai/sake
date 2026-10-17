@@ -19,18 +19,21 @@ defmodule Sake.Auth do
     * `Sake.Auth.Consent` and `Sake.Auth.Consent.Default` — the consent
       and error pages.
     * `Sake.Auth.Store`, `Sake.Auth.Store.ETS`, `Sake.Auth.Store.Ecto`
-      and `Sake.Auth.Migration` — where clients, codes, tokens and
-      consents live; `Sake.Auth.Code` is the code a store keeps.
+      and `Sake.Auth.Migration` — where clients, codes, device grants,
+      tokens and consents live; `Sake.Auth.Code` and
+      `Sake.Auth.DeviceGrant` are the code and the device grant a store
+      keeps.
     * `Sake.Auth.External` — an endpoint on another authorization server.
     * `Sake.Auth.TokenRecord` — the token of a request, in `ctx.token`.
     * `Sake.Auth.Client` and `Sake.Auth.Clients` — the registered clients.
     * `Sake.Auth.TrustedIssuer` — the issuers of JWT grants.
     * `Sake.Auth.Challenge` — a `WWW-Authenticate` challenge.
-    * `Sake.Auth.WellKnown`, `Sake.Auth.Authorize` and
-      `Sake.Auth.RouterPlug` — the endpoints a Plug host mounts itself.
+    * `Sake.Auth.WellKnown`, `Sake.Auth.Authorize`,
+      `Sake.Auth.DeviceVerification` and `Sake.Auth.RouterPlug` — the
+      endpoints a Plug host mounts itself.
     * `Sake.Client.Auth`, `Sake.Client.Auth.Browser`,
-      `Sake.Client.Auth.Headless` and `Sake.Client.Auth.Store` — the
-      client's `auth:` options.
+      `Sake.Client.Auth.Headless`, `Sake.Client.Auth.Device` and
+      `Sake.Client.Auth.Store` — the client's `auth:` options.
 
   Calls run one way: the rest of Sake calls these modules (and the
   functions marked `@doc false` that say who calls them), and nothing in
@@ -53,6 +56,12 @@ defmodule Sake.Auth do
       signed request and CSRF token.
     * Tokens: `token_grants.ex`, whose `exchange/4` has one clause per
       grant type; `token.ex` is the adapter.
+    * Device authorization (RFC 8628): `device.ex` starts a device grant
+      and takes the person's decision through `grant.ex`;
+      `device_authorization.ex` (the client's request) and
+      `Sake.Auth.DeviceVerification` (the page where the person enters
+      the user code) are the adapters, and the token endpoint's device
+      code clause issues the tokens.
     * Revocation and registration: `revocation.ex` and `registration.ex`;
       `revoke.ex` and `dcr.ex` are the adapters.
     * Metadata: `metadata.ex`, a base map and a list of contributors, one
@@ -206,11 +215,11 @@ defmodule Sake.Auth do
   end
 
   @doc """
-  Deletes expired codes and tokens, the remembered consents older than
-  the refresh token lifetime that no live token family still uses, and
-  the dynamically registered clients that, `unused_client_ttl` seconds
-  (a day by default) after registering, hold no live token, consent or
-  code. Schedule it (a cron job, Oban, or a periodic task).
+  Deletes expired codes, device grants and tokens, the remembered
+  consents older than the refresh token lifetime that no live token
+  family still uses, and the dynamically registered clients that, `unused_client_ttl` seconds
+  (a day by default) after registering, hold no live token, consent,
+  code or device grant. Schedule it (a cron job, Oban, or a periodic task).
   """
   @spec prune(Config.t()) :: :ok
   def prune(config) do

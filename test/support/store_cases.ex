@@ -3,7 +3,7 @@ defmodule SakeTest.StoreCases do
 
   defmacro __using__(_) do
     quote do
-      alias Sake.Auth.{Client, Code, Consent, TokenRecord, Tokens}
+      alias Sake.Auth.{Client, Code, Consent, DeviceGrant, TokenRecord, Tokens}
 
       defp store(config), do: {elem(config.store, 0), config.store_state}
 
@@ -12,6 +12,8 @@ defmodule SakeTest.StoreCases do
       unquote(consent_and_prune_cases())
       unquote(once_cases())
       unquote(client_prune_cases())
+      unquote(device_cases())
+      unquote(device_token_cases())
     end
   end
 
@@ -448,6 +450,178 @@ defmodule SakeTest.StoreCases do
         assert :revoked = mod.put_code_tokens(state, "used", [])
         assert :error = mod.get_token(state, :access, "h-old")
         assert {:ok, _} = mod.get_token(state, :access, live.hash)
+      end
+    end
+  end
+
+  defp device_cases do
+    quote do
+      defp device_grant(mod, state, name, attrs \\ %{}) do
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+        grant =
+          struct!(
+            %DeviceGrant{
+              hash: Tokens.hash("device-" <> name),
+              user_code_hash: Tokens.hash("user-" <> name),
+              client_id: "c",
+              scopes: ["a", "b"],
+              resource: "r",
+              interval: 5,
+              expires_at: DateTime.add(now, 600),
+              inserted_at: now
+            },
+            attrs
+          )
+
+        :ok = mod.put_device_grant(state, grant)
+        grant
+      end
+
+      test "device grants: found by user code, decided once", %{config: config} do
+        {mod, state} = store(config)
+        grant = device_grant(mod, state, "found")
+
+        assert {:ok, %DeviceGrant{status: :pending, scopes: ["a", "b"], subject_id: nil} = found} =
+                 mod.get_device_grant_by_user_code(state, grant.user_code_hash)
+
+        assert found.hash == grant.hash
+        assert :error = mod.get_device_grant_by_user_code(state, Tokens.hash("user-unknown"))
+
+        assert :ok = mod.decide_device_grant(state, grant.hash, {:approved, "u1", ["a"]})
+        assert :error = mod.decide_device_grant(state, grant.hash, :denied)
+        assert :error = mod.decide_device_grant(state, Tokens.hash("unknown"), :denied)
+
+        assert {:ok, %DeviceGrant{status: :approved, subject_id: "u1", scopes: ["a"]}} =
+                 mod.get_device_grant_by_user_code(state, grant.user_code_hash)
+      end
+
+      test "device grants: each poll is answered and recorded atomically", %{config: config} do
+        {mod, state} = store(config)
+        grant = device_grant(mod, state, "polled")
+        t0 = DateTime.utc_now()
+        at = fn ms -> DateTime.add(t0, ms, :millisecond) end
+
+        assert :pending = mod.poll_device_grant(state, grant.hash, "c", at.(0))
+        # Sooner than the interval after the last poll, the slow_down
+        # itself counting as one.
+        assert :slow_down = mod.poll_device_grant(state, grant.hash, "c", at.(4_000))
+        assert :slow_down = mod.poll_device_grant(state, grant.hash, "c", at.(8_500))
+        assert :pending = mod.poll_device_grant(state, grant.hash, "c", at.(13_500))
+
+        # Another client, or a code nobody issued, learns nothing.
+        assert :error = mod.poll_device_grant(state, grant.hash, "other", at.(30_000))
+        assert :error = mod.poll_device_grant(state, Tokens.hash("x"), "c", at.(30_000))
+
+        :ok = mod.decide_device_grant(state, grant.hash, {:approved, "u1", ["a"]})
+        assert :slow_down = mod.poll_device_grant(state, grant.hash, "c", at.(14_000))
+
+        assert {:approved, %DeviceGrant{subject_id: "u1", scopes: ["a"], resource: "r"}} =
+                 mod.poll_device_grant(state, grant.hash, "c", at.(20_000))
+
+        # Issued once: every later poll says it was used.
+        assert :used = mod.poll_device_grant(state, grant.hash, "c", at.(40_000))
+        assert :used = mod.poll_device_grant(state, grant.hash, "c", at.(60_000))
+      end
+
+      test "device grants: denied and expired", %{config: config} do
+        {mod, state} = store(config)
+        denied = device_grant(mod, state, "denied")
+        :ok = mod.decide_device_grant(state, denied.hash, :denied)
+        assert :denied = mod.poll_device_grant(state, denied.hash, "c", DateTime.utc_now())
+
+        past = DateTime.utc_now() |> DateTime.add(-1) |> DateTime.truncate(:second)
+        expired = device_grant(mod, state, "expired", %{expires_at: past})
+        assert :expired = mod.poll_device_grant(state, expired.hash, "c", DateTime.utc_now())
+      end
+    end
+  end
+
+  defp device_token_cases do
+    quote do
+      test "a device grant's tokens are stored only while no replay revoked its family", %{
+        config: config
+      } do
+        {mod, state} = store(config)
+
+        issued = fn name ->
+          grant = device_grant(mod, state, name)
+          :ok = mod.decide_device_grant(state, grant.hash, {:approved, "u-device", []})
+          {:approved, _} = mod.poll_device_grant(state, grant.hash, "c", DateTime.utc_now())
+          grant.hash
+        end
+
+        pair = fn hash ->
+          {_, _, %{access: a, refresh: r}} =
+            Tokens.new_pair(config, %{
+              family_id: hash,
+              client_id: "c",
+              subject_id: "u-device",
+              scopes: [],
+              resource: "r"
+            })
+
+          [a, r]
+        end
+
+        # Not issued yet: no tokens.
+        pending = device_grant(mod, state, "not-issued")
+        assert :revoked = mod.put_device_tokens(state, pending.hash, pair.(pending.hash))
+
+        # The replay revoked the family first: nothing is stored.
+        replayed = issued.("replayed")
+        assert :ok = mod.revoke_family(state, replayed)
+        [a, r] = pair.(replayed)
+        assert :revoked = mod.put_device_tokens(state, replayed, [a, r])
+        assert :error = mod.get_token(state, :access, a.hash)
+
+        # The pair was stored first: the replay revokes it.
+        redeemed = issued.("redeemed")
+        [a, r] = pair.(redeemed)
+        assert :ok = mod.put_device_tokens(state, redeemed, [a, r])
+        assert {:ok, %TokenRecord{revoked_at: nil}} = mod.get_token(state, :access, a.hash)
+        assert :ok = mod.revoke_family(state, redeemed)
+
+        assert {:ok, %TokenRecord{revoked_at: %DateTime{}}} =
+                 mod.get_token(state, :refresh, r.hash)
+      end
+
+      test "prune removes expired device grants, and a pending one keeps its client", %{
+        config: config
+      } do
+        {mod, state} = store(config)
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
+        old = DateTime.add(now, -2 * 86_400)
+
+        for id <- ~w(dc_device dc_device_gone) do
+          :ok =
+            mod.put_client(state, %Client{
+              id: id,
+              name: id,
+              kind: :dynamic,
+              grant_types: ["urn:ietf:params:oauth:grant-type:device_code"],
+              inserted_at: old
+            })
+        end
+
+        live = device_grant(mod, state, "live", %{client_id: "dc_device"})
+
+        gone =
+          device_grant(mod, state, "gone", %{
+            client_id: "dc_device_gone",
+            expires_at: DateTime.add(now, -10)
+          })
+
+        assert :ok =
+                 mod.prune(state, now, %{
+                   consents: DateTime.add(now, -30 * 86_400),
+                   unused_clients: DateTime.add(now, -86_400)
+                 })
+
+        assert {:ok, _} = mod.get_device_grant_by_user_code(state, live.user_code_hash)
+        assert :error = mod.get_device_grant_by_user_code(state, gone.user_code_hash)
+        assert {:ok, _} = mod.get_client(state, "dc_device")
+        assert :error = mod.get_client(state, "dc_device_gone")
       end
     end
   end

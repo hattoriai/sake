@@ -11,21 +11,35 @@ defmodule SakeDev.Router do
     plug :require_login
     plug Sake.Auth.Authorize
 
-    def require_login(conn, _) do
-      if get_session(conn, :user_id) do
-        conn
-      else
-        return_to = conn.request_path <> "?" <> conn.query_string
+    def require_login(conn, _), do: SakeDev.Router.require_login(conn)
+  end
 
-        conn
-        |> put_resp_header("location", "/login?" <> URI.encode_query(%{"return_to" => return_to}))
-        |> send_resp(302, "")
-        |> halt()
-      end
-    end
+  defmodule RequireLoginDevice do
+    @moduledoc false
+    use Plug.Builder
+    plug :require_login
+    plug Sake.Auth.DeviceVerification
+
+    def require_login(conn, _), do: SakeDev.Router.require_login(conn)
   end
 
   use Plug.Router
+
+  # The login wall in front of the pages a person sees: the authorize
+  # endpoint and the device verification page.
+  @doc false
+  def require_login(conn) do
+    if get_session(conn, :user_id) do
+      conn
+    else
+      return_to = conn.request_path <> "?" <> conn.query_string
+
+      conn
+      |> put_resp_header("location", "/login?" <> URI.encode_query(%{"return_to" => return_to}))
+      |> send_resp(302, "")
+      |> halt()
+    end
+  end
 
   plug Plug.Logger
   plug :put_secret_key_base
@@ -57,6 +71,7 @@ defmodule SakeDev.Router do
 
   forward "/.well-known", to: Sake.Auth.WellKnown
   forward "/oauth/authorize", to: SakeDev.Router.RequireLogin
+  forward "/oauth/device", to: SakeDev.Router.RequireLoginDevice
   forward "/oauth", to: Sake.Auth.RouterPlug
 
   # A conformance or CLI client sends no Origin header at all, which is

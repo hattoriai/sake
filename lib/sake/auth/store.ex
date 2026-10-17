@@ -1,6 +1,6 @@
 defmodule Sake.Auth.Store do
-  @moduledoc "Where clients, codes, tokens and consents live. Implemented by `Sake.Auth.Store.ETS` and `Sake.Auth.Store.Ecto`."
-  alias Sake.Auth.{Client, Code, Consent, TokenRecord}
+  @moduledoc "Where clients, codes, device grants, tokens and consents live. Implemented by `Sake.Auth.Store.ETS` and `Sake.Auth.Store.Ecto`."
+  alias Sake.Auth.{Client, Code, Consent, DeviceGrant, TokenRecord}
   @type state :: term()
   @callback init(keyword()) :: state()
   @callback put_client(state(), Client.t()) :: :ok
@@ -24,6 +24,52 @@ defmodule Sake.Auth.Store do
   """
   @callback put_code_tokens(state(), code_hash :: String.t(), [TokenRecord.t()]) ::
               :ok | :revoked
+  @callback put_device_grant(state(), DeviceGrant.t()) :: :ok
+  @callback get_device_grant_by_user_code(state(), user_code_hash :: String.t()) ::
+              {:ok, DeviceGrant.t()} | :error
+  @doc """
+  Records the person's decision on a pending device grant (by its
+  device code's hash), if and only if it is still pending, atomically:
+  of two concurrent decisions, one gets `:ok` and the other `:error`.
+  An approval sets `subject_id` and narrows `scopes` to those granted.
+  """
+  @callback decide_device_grant(
+              state(),
+              hash :: String.t(),
+              {:approved, subject_id :: String.t(), scopes :: [String.t()]} | :denied
+            ) :: :ok | :error
+  @doc """
+  A poll of the token endpoint for the device grant `hash`, by the
+  client `client_id`, at `now`, atomically. `:error` for a grant that
+  does not exist or is another client's; then, in this order, `:used`
+  once its tokens were issued, `:denied`, `:expired` (from
+  `expires_at`), `:slow_down` when the last poll was less than
+  `interval` seconds ago, `:pending`, and `{:approved, grant}` for an
+  approved grant, which becomes `:issued`: of two concurrent polls, only
+  one gets it. Every poll but the first three records `now` as
+  `last_polled_at`.
+  """
+  @callback poll_device_grant(
+              state(),
+              hash :: String.t(),
+              client_id :: String.t(),
+              now :: DateTime.t()
+            ) ::
+              {:approved, DeviceGrant.t()}
+              | :pending
+              | :slow_down
+              | :denied
+              | :expired
+              | :used
+              | :error
+  @doc """
+  Stores the tokens issued for a device grant (their `family_id` is its
+  hash), all of them or none: none, returning `:revoked`, when the
+  family was revoked since the grant was issued (a replay of the device
+  code). Atomic with `revoke_family/2`, as `put_code_tokens/3` is.
+  """
+  @callback put_device_tokens(state(), hash :: String.t(), [TokenRecord.t()]) ::
+              :ok | :revoked
   @callback put_token(state(), TokenRecord.t()) :: :ok
   @doc """
   Stores the tokens a refresh rotated into, all of them or none: none,
@@ -43,6 +89,11 @@ defmodule Sake.Auth.Store do
   @callback consume_refresh(state(), String.t()) ::
               {:ok, TokenRecord.t()} | {:error, :used, TokenRecord.t()} | :error
   @callback revoke_token(state(), String.t()) :: :ok
+  @doc """
+  Revokes every token of a family, and the code or device grant whose
+  hash is the family's id, so that `put_code_tokens/3` and
+  `put_device_tokens/3` refuse the tokens not stored yet.
+  """
   @callback revoke_family(state(), String.t()) :: :ok
   @callback tokens_for_subject(state(), String.t()) :: [TokenRecord.t()]
   @doc """
@@ -72,11 +123,11 @@ defmodule Sake.Auth.Store do
               resource :: String.t() | :all
             ) :: :ok
   @doc """
-  Deletes the codes and tokens that expired by `now`; the consents
+  Deletes the codes, device grants and tokens that expired by `now`; the consents
   inserted before `before.consents` whose subject, client and resource
   have no live (unexpired, unrevoked) refresh token left; and the
   dynamically registered clients registered before `before.unused_clients`
-  that hold no live token, no consent and no code.
+  that hold no live token, no consent, no code and no device grant.
   """
   @callback prune(
               state(),

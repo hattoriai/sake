@@ -10,16 +10,22 @@ defmodule Sake.Auth.AuthorizationRequest do
   # `acr_values`) go in `extra`, so the struct and `validate/3` keep their
   # shape.
   #
+  # A device authorization request (RFC 8628) has no redirect URI, state
+  # or PKCE challenge: those three are nil on that path alone, and
+  # `flow/1` tells the two apart by its missing redirect URI.
+  #
   # Core: it takes the configuration and plain data, and never sees the
   # conn.
 
   alias Sake.Auth.{Client, Clients, Config, Redirect, Resource}
 
+  @device_code "urn:ietf:params:oauth:grant-type:device_code"
+
   @type t :: %__MODULE__{
           client_id: String.t(),
-          redirect_uri: String.t(),
+          redirect_uri: String.t() | nil,
           state: String.t() | nil,
-          code_challenge: String.t(),
+          code_challenge: String.t() | nil,
           scopes: [String.t()],
           resource: String.t(),
           extra: map()
@@ -63,26 +69,22 @@ defmodule Sake.Auth.AuthorizationRequest do
   Validates the parameters of a request from `client` (whose
   `redirect_uri` `client/3` accepted). An error is an OAuth error code and
   its description, for the redirect URI.
+
+  With `:device`, the parameters of a device authorization request (RFC
+  8628 §3.1) from an authenticated `client`: only the scopes and the
+  resource, and the client must be allowed the device grant. Its error
+  goes in the endpoint's JSON answer.
   """
-  @spec validate(Config.t(), Client.t(), map()) :: {:ok, t()} | {:error, String.t(), String.t()}
-  def validate(config, client, p) do
+  @spec validate(Config.t(), Client.t(), map(), :authorization_code | :device) ::
+          {:ok, t()} | {:error, String.t(), String.t()}
+  def validate(config, client, p, flow \\ :authorization_code) do
     known = config |> Config.scopes() |> Enum.map(&elem(&1, 0))
     requested = requested_scopes(p, known)
 
-    with :ok <- check_response_type(p),
-         :ok <- check_challenge(p),
-         :ok <- check_grant_type(client),
+    with :ok <- check_flow(flow, p, client),
          :ok <- check_scopes(requested, known, client),
          {:ok, resource} <- resource(config, p["resource"]) do
-      {:ok,
-       %__MODULE__{
-         client_id: client.id,
-         redirect_uri: p["redirect_uri"],
-         code_challenge: p["code_challenge"],
-         state: p["state"],
-         scopes: requested,
-         resource: resource
-       }}
+      {:ok, request(flow, client, p, requested, resource)}
     else
       :error ->
         {:error, "invalid_target", "The resource is not served by this authorization server"}
@@ -91,6 +93,34 @@ defmodule Sake.Auth.AuthorizationRequest do
         error
     end
   end
+
+  @doc "Which flow a validated request belongs to: only a device request has no redirect URI."
+  @spec flow(t()) :: :authorization_code | :device
+  def flow(%__MODULE__{redirect_uri: nil}), do: :device
+  def flow(%__MODULE__{}), do: :authorization_code
+
+  defp check_flow(:authorization_code, p, client) do
+    with :ok <- check_response_type(p),
+         :ok <- check_challenge(p),
+         do: check_grant_type(client, "authorization_code", "authorization code")
+  end
+
+  defp check_flow(:device, _p, client),
+    do: check_grant_type(client, @device_code, "device authorization")
+
+  defp request(:authorization_code, client, p, scopes, resource) do
+    %__MODULE__{
+      client_id: client.id,
+      redirect_uri: p["redirect_uri"],
+      code_challenge: p["code_challenge"],
+      state: p["state"],
+      scopes: scopes,
+      resource: resource
+    }
+  end
+
+  defp request(:device, client, _p, scopes, resource),
+    do: %__MODULE__{client_id: client.id, scopes: scopes, resource: resource}
 
   defp requested_scopes(p, known) do
     if is_binary(p["scope"]) and p["scope"] != "", do: String.split(p["scope"]), else: known
@@ -114,10 +144,10 @@ defmodule Sake.Auth.AuthorizationRequest do
     end
   end
 
-  defp check_grant_type(client) do
-    if "authorization_code" in client.grant_types,
+  defp check_grant_type(client, grant_type, name) do
+    if grant_type in client.grant_types,
       do: :ok,
-      else: {:error, "unauthorized_client", "The client may not use the authorization code grant"}
+      else: {:error, "unauthorized_client", "The client may not use the #{name} grant"}
   end
 
   defp check_scopes(requested, known, client) do

@@ -45,3 +45,58 @@ defmodule Sake.Auth.TokenRecord do
     scopes: []
   ]
 end
+
+defmodule Sake.Auth.DeviceGrant do
+  @moduledoc """
+  A device authorization grant (RFC 8628), stored hashed: `hash` is the
+  device code's, `user_code_hash` the user code's. `status` is
+  `:pending` until the person decides, then `:approved` (with
+  `subject_id` and the `scopes` they granted) or `:denied`, and
+  `:issued` once the client has its tokens. `last_polled_at` is when
+  the client last asked the token endpoint, against `interval`.
+  """
+  @type status :: :pending | :approved | :denied | :issued
+  @type t :: %__MODULE__{}
+  defstruct [
+    :hash,
+    :user_code_hash,
+    :client_id,
+    :resource,
+    :subject_id,
+    :interval,
+    :expires_at,
+    :last_polled_at,
+    :inserted_at,
+    status: :pending,
+    scopes: []
+  ]
+
+  @doc """
+  The answer to a poll of `grant` by `client_id` at `now`, and the grant
+  as it is after it (or nil when nothing changes), by the rules of
+  `c:Sake.Auth.Store.poll_device_grant/4`. A store calls it while it
+  holds the grant's row, and writes the grant back.
+  """
+  @spec poll(t(), String.t(), DateTime.t()) ::
+          {{:approved, t()} | :pending | :slow_down | :denied | :expired | :used | :error,
+           t() | nil}
+  def poll(%__MODULE__{client_id: client_id} = grant, client_id, now) do
+    polled = %{grant | last_polled_at: now}
+
+    cond do
+      grant.status == :issued -> {:used, nil}
+      grant.status == :denied -> {:denied, nil}
+      DateTime.compare(grant.expires_at, now) != :gt -> {:expired, nil}
+      too_soon?(grant, now) -> {:slow_down, polled}
+      grant.status == :pending -> {:pending, polled}
+      true -> {{:approved, grant}, %{polled | status: :issued}}
+    end
+  end
+
+  def poll(_grant, _client_id, _now), do: {:error, nil}
+
+  defp too_soon?(%{last_polled_at: nil}, _now), do: false
+
+  defp too_soon?(grant, now),
+    do: DateTime.diff(now, grant.last_polled_at, :millisecond) < grant.interval * 1_000
+end

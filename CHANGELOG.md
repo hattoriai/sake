@@ -48,8 +48,60 @@ the same bytes. Two undocumented functions moved with the rules:
   `Sake.Auth.TokenGrants.grant_types/1`. Both are internal; code that
   called them anyway needs the new names.
 
+The device authorization grant (#68) adds to the consent page and the
+store:
+
+- `Sake.Auth.Consent`'s `render/1` gets a `flow` assign,
+  `:authorization_code` or `:device`, and a `user_code` (nil in the code
+  flow). For `:device` (the device verification page), `redirect_host`
+  and `loopback?` are `nil`: a custom consent module that shows them
+  must handle that, or it fails on that page. The new
+  `render_user_code/1` is optional; `Sake.Auth.Consent.Default`'s is
+  used without it. Nothing changes for a host without `device:`.
+- `Sake.Auth.Store` has five more callbacks, `put_device_grant/2`,
+  `get_device_grant_by_user_code/2`, `decide_device_grant/3`,
+  `poll_device_grant/4` and `put_device_tokens/3`, and `revoke_family/2`
+  revokes the device grant a family was born of too: a store of your
+  own needs them. `Sake.Auth.Migration.up/1` creates
+  `sake_oauth_device_grants`: an existing database needs that table
+  (copy it from `Sake.Auth.Migration` into a migration of your own, or
+  run `down/1` and `up/1` again where losing the data does not matter).
+
+### Authorization
+
+- The device authorization grant (RFC 8628), for a CLI, a headless agent
+  or a device with no browser, with `device: true` (or `[expires_in:,
+  interval:]`) in the auth config: `POST /oauth/device_authorization`
+  starts it, the person enters the user code on the new verification
+  page (`Sake.Auth.DeviceVerification`, at `/oauth/device`, mounted by
+  `sake_oauth_authorize()` inside the signed-in pipeline) and approves on
+  the consent page, and the token endpoint's
+  `urn:ietf:params:oauth:grant-type:device_code` grant answers the
+  client's polls (`authorization_pending`, `slow_down`, `access_denied`,
+  `expired_token`) and issues the tokens once, DPoP-bound when the poll
+  carries a proof. The decision goes through the subject module's
+  `authorize_resource?/2` and `scopes_for/2` as in the code flow, and is
+  remembered as a consent, but a remembered consent never skips the
+  page. User codes are 8 characters without look-alikes, stored with an
+  HMAC, and each signed-in person may enter five a minute. The metadata
+  lists `device_authorization_endpoint` and the grant type, and dynamic
+  registration takes the grant (with no redirect URI) only with
+  `device:`. See "Devices and CLIs without a browser" in
+  `guides/authorization.md`.
+
 ### Client
 
+- `grant: :device` in `Sake.Client.Auth` runs the device grant against
+  any authorization server whose metadata lists a
+  `device_authorization_endpoint`: `:device_prompt` shows the person the
+  code (by default `Sake.Client.Auth.Device.prompt/1` logs it), and the
+  client polls at the server's `interval`, five seconds more after each
+  `slow_down`, until the person decides; `{:error, {:auth,
+  :access_denied}}`, `{:error, {:auth, :expired_token}}`, or `{:error,
+  {:auth, :no_device_endpoint}}` without the endpoint. Refresh, step-up
+  and a 401 work as in the code flow, a new code shown where the browser
+  would have opened. See "A person without a browser here" in
+  `guides/client.md`.
 - `Sake.Client.Auth`'s `static: true`, which `Sake.Test` uses, is a
   documented option: the token the `:store` holds is sent as it is, and
   a 401 or a 403 comes back to the caller instead of running the flow.

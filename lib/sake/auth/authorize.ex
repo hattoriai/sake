@@ -26,7 +26,7 @@ defmodule Sake.Auth.Authorize do
   import Plug.Conn
 
   alias Sake.Auth
-  alias Sake.Auth.{AuthorizationRequest, Config, Grant}
+  alias Sake.Auth.{AuthorizationRequest, Config, Grant, Page}
 
   # The adapter: it reads the request and the signed-in person, asks
   # `Sake.Auth.AuthorizationRequest` and `Sake.Auth.Grant`, and renders
@@ -136,11 +136,7 @@ defmodule Sake.Auth.Authorize do
   # ---- POST
 
   defp decide(conn, config) do
-    conn =
-      if match?(%Plug.Conn.Unfetched{}, conn.body_params),
-        do: Plug.Parsers.call(conn, Plug.Parsers.init(parsers: [:urlencoded], pass: ["*/*"])),
-        else: conn
-
+    conn = Page.parse(conn)
     p = conn.body_params
 
     with {:ok, %{request: request, subject_id: subject_id}} <-
@@ -211,39 +207,10 @@ defmodule Sake.Auth.Authorize do
     |> send_resp(302, "")
   end
 
-  defp error_page(conn, config, status, title, message) do
-    html(
-      conn,
-      status,
-      config.consent.render_error(%{title: title, message: message, status: status})
-    )
-  end
+  defp error_page(conn, config, status, title, message),
+    do: Page.error(conn, config, status, title, message)
 
-  defp html(conn, status, body) do
-    conn
-    |> put_resp_content_type("text/html")
-    |> put_resp_header("cache-control", "no-store")
-    |> put_resp_header("x-frame-options", "DENY")
-    |> put_resp_header("content-security-policy", "frame-ancestors 'none'")
-    |> send_resp(status, body)
-  end
-
-  # `Plug.CSRFProtection` loads its state into the process dictionary when
-  # it runs; only then does a token exist that its own check accepts.
-  # Without it the field stays empty and the signed request blob is the
-  # defence.
-  defp csrf_token do
-    if Process.get(:plug_csrf_token_per_host) != nil,
-      do: Plug.CSRFProtection.get_csrf_token(),
-      else: ""
-  end
-
-  defp secret(%Config{secret: secret}) when is_binary(secret), do: secret
-
-  defp secret(_config),
-    do:
-      raise(
-        ArgumentError,
-        "Sake needs a secret: start {Sake, secret_key_base: ...}, or set config :sake, :secret_key_base"
-      )
+  defp html(conn, status, body), do: Page.html(conn, status, body)
+  defp csrf_token, do: Page.csrf_token()
+  defp secret(config), do: Page.secret(config)
 end
