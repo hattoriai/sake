@@ -10,6 +10,16 @@
   while an MCP App renders the full data. Without `text:` nothing
   changes. See "Output and results" in `guides/tools.md`.
 
+### Security
+
+- A modern `subscriptions/listen` stream honours a resource in
+  `resourceSubscriptions` on the terms of a legacy `resources/subscribe`:
+  the resource declares `subscribe: true`, `:after_list` middleware does
+  not hide it, and the token carries its scopes. Before, a token without
+  the resource's scopes could follow its updates, and a URI that named
+  nothing was acknowledged. Any other URI is now left out of the
+  acknowledgement, and the stream gets no updates for it (#33).
+
 ## 0.3.0 (2026-10-17)
 
 For hosts that give different people different access, and for
