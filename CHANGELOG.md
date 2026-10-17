@@ -1,6 +1,90 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-10-17)
+
+The auth roadmap (#73). `Sake.Auth` gains the device authorization
+grant, pushed authorization requests, step-up on how the person signed
+in (RFC 9470) and OpenID Connect, and `Sake.Client` speaks each of
+them. Each is off until the host turns it on (`device:`, `par:`,
+`openid:`, or an `authentication:` requirement). For a host that turns
+none on, one thing changes on the wire: the authorize endpoint acts on
+the `dpop_jkt`, `acr_values` and `max_age` parameters, which it ignored
+before (see "Breaking"). Underneath, authorization
+now depends on nothing else in Sake, and every OAuth endpoint is a
+core of pure functions behind a thin plug, the shape each new endpoint
+followed.
+
+Before 1.0, breaking changes come without shims: they are all listed
+below, most of them for a store, a consent module or a subject module
+of your own.
+
+### Upgrading from 0.3
+
+`Sake.Auth.Migration` creates the 0.4 tables from scratch. A database
+that `Sake.Auth.Store.Ecto` already used with 0.3 needs this migration
+of your own (add `prefix:` to each `table/2` and `index/3` if you gave
+`Sake.Auth.Migration` one):
+
+    defmodule MyApp.Repo.Migrations.UpgradeSakeAuthTo04 do
+      use Ecto.Migration
+
+      def change do
+        alter table(:sake_oauth_clients) do
+          add(:require_pushed_authorization_requests, :boolean, null: false, default: false)
+        end
+
+        alter table(:sake_oauth_codes) do
+          add(:dpop_jkt, :string)
+          add(:acr, :string)
+          add(:auth_time, :utc_datetime)
+          add(:nonce, :text)
+        end
+
+        alter table(:sake_oauth_tokens) do
+          add(:acr, :string)
+          add(:auth_time, :utc_datetime)
+        end
+
+        create table(:sake_oauth_pushed_requests, primary_key: false) do
+          add(:hash, :string, primary_key: true)
+          add(:client_id, :string, null: false)
+          add(:redirect_uri, :text, null: false)
+          add(:state, :text)
+          add(:code_challenge, :string, null: false)
+          add(:scopes, {:array, :string}, null: false, default: [])
+          add(:resource, :text, null: false)
+          add(:extra, :map, null: false, default: %{})
+          add(:expires_at, :utc_datetime, null: false)
+          add(:inserted_at, :utc_datetime, null: false)
+        end
+
+        create(index(:sake_oauth_pushed_requests, [:expires_at]))
+
+        create table(:sake_oauth_device_grants, primary_key: false) do
+          add(:hash, :string, primary_key: true)
+          add(:user_code_hash, :string, null: false)
+          add(:client_id, :string, null: false)
+          add(:scopes, {:array, :string}, null: false, default: [])
+          add(:resource, :text, null: false)
+          add(:status, :string, null: false)
+          add(:subject_id, :string)
+          add(:extra, :map, null: false, default: %{})
+          add(:acr, :string)
+          add(:auth_time, :utc_datetime)
+          add(:interval, :integer, null: false)
+          add(:expires_at, :utc_datetime, null: false)
+          add(:last_polled_at, :utc_datetime_usec)
+          add(:revoked_at, :utc_datetime)
+          add(:inserted_at, :utc_datetime, null: false)
+        end
+
+        create(unique_index(:sake_oauth_device_grants, [:user_code_hash]))
+        create(index(:sake_oauth_device_grants, [:expires_at]))
+      end
+    end
+
+It leaves the same columns, types, defaults and indexes as a fresh
+`Sake.Auth.Migration.up/1`. The ETS stores need nothing.
 
 ### Breaking
 
