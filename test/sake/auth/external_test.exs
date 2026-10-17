@@ -36,6 +36,10 @@ defmodule Sake.Auth.ExternalTest.Tokens do
          cnf: %{jkt: :persistent_term.get({__MODULE__, :jkt})}
        }}
 
+  # Bound to a client certificate (RFC 8705), which Sake cannot check.
+  def verify_token("certificate-bound", _conn),
+    do: {:ok, %{sub: "u1", aud: "http://www.example.com/mcp", cnf: %{"x5t#S256": "dGh1bWI"}}}
+
   def verify_token(_token, _conn), do: :error
 end
 
@@ -258,6 +262,57 @@ defmodule Sake.Auth.ExternalTest do
       assert_received {:refused, :idp, :malformed}
     end
 
+    test "refused: a binding Sake cannot check (cnf.x5t#S256), bearer or DPoP", %{key: key} do
+      thumbprint = Base.url_encode64(:crypto.hash(:sha256, "a certificate"), padding: false)
+      token = jwt(key, %{"cnf" => %{"x5t#S256" => thumbprint}})
+
+      assert call(:idp, token).status == 401
+      assert_received {:refused, :idp, :unsupported_confirmation}
+
+      {proof_key, proof_jwk} = Keys.key()
+
+      conn =
+        ModernClient.post(ModernClient.opts(auth: :idp), "tools/list", %{},
+          headers: [
+            {"authorization", "DPoP " <> token},
+            {"dpop", DPoP.proof(proof_key, "POST", @resource, access_token: token)}
+          ]
+        )
+
+      assert conn.status == 401
+
+      assert [~s(DPoP error="invalid_token") <> _, "Bearer " <> _] =
+               get_resp_header(conn, "www-authenticate")
+
+      assert_received {:refused, :idp, :unsupported_confirmation}
+
+      # Next to a jkt too, and a cnf that is no JSON object, or whose jkt
+      # is no string.
+      for cnf <- [
+            %{"jkt" => JWT.thumbprint(proof_jwk), "x5t#S256" => thumbprint},
+            "bound",
+            %{"jkt" => 1}
+          ] do
+        assert call(:idp, jwt(key, %{"cnf" => cnf})).status == 401, inspect(cnf)
+        assert_received {:refused, :idp, :unsupported_confirmation}
+      end
+
+      # A token with no cnf is taken as before, and one bound with jkt
+      # alone with a proof of its key.
+      assert call(:idp, jwt(key)).status == 200
+      token = jwt(key, %{"cnf" => %{"jkt" => JWT.thumbprint(proof_jwk)}})
+
+      conn =
+        ModernClient.post(ModernClient.opts(auth: :idp), "tools/list", %{},
+          headers: [
+            {"authorization", "DPoP " <> token},
+            {"dpop", DPoP.proof(proof_key, "POST", @resource, access_token: token)}
+          ]
+        )
+
+      assert conn.status == 200
+    end
+
     test "with the DPoP scheme, an invalid token is a DPoP invalid_token", %{key: key} do
       {proof_key, _} = Keys.key()
       token = jwt(key, %{"exp" => Keys.now(-60)})
@@ -469,7 +524,11 @@ defmodule Sake.Auth.ExternalTest do
 
       base =
         HTTP.start(
-          {FakeOAuth, test: self(), state: state, introspection: {"mcp-resource", "s3cret"}}
+          {FakeOAuth,
+           test: self(),
+           state: state,
+           introspection: {"mcp-resource", "s3cret"},
+           jwt_claims: tags[:jwt_claims]}
         )
 
       start_sake(
@@ -559,6 +618,12 @@ defmodule Sake.Auth.ExternalTest do
       assert_received {:fake_oauth, "POST", "/introspect", %{"token" => "made-up"}, _}
     end
 
+    @tag jwt_claims: %{"cnf" => %{"x5t#S256" => "dGh1bWI"}}
+    test "an active token bound to a client certificate is refused", ctx do
+      assert call(:intro, issued(ctx)).status == 401
+      assert_received {:refused, :intro, :unsupported_confirmation}
+    end
+
     @tag secret: "wrong"
     test "the resource's own credentials are refused: no token is taken", ctx do
       assert call(:intro, issued(ctx)).status == 401
@@ -624,6 +689,24 @@ defmodule Sake.Auth.ExternalTest do
         )
 
       assert conn.status == 200
+    end
+
+    test "a token the callback says is bound to a client certificate is refused" do
+      assert call(:app, "certificate-bound").status == 401
+      assert_received {:refused, :app, :unsupported_confirmation}
+
+      {client_key, _client_jwk} = Keys.key()
+
+      conn =
+        ModernClient.post(ModernClient.opts(auth: :app), "tools/list", %{},
+          headers: [
+            {"authorization", "DPoP certificate-bound"},
+            {"dpop", DPoP.proof(client_key, "POST", @resource, access_token: "certificate-bound")}
+          ]
+        )
+
+      assert conn.status == 401
+      assert_received {:refused, :app, :unsupported_confirmation}
     end
   end
 

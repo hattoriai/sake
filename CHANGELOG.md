@@ -58,6 +58,12 @@ wire: the 401 and 403 responses are the same bytes.
   the resource's scopes could follow its updates, and a URI that named
   nothing was acknowledged. Any other URI is now left out of the
   acknowledgement, and the stream gets no updates for it (#33).
+- `Sake.Auth.External` refuses a token whose `cnf` binds it any other
+  way than DPoP's `jkt`, such as a client certificate (`cnf.x5t#S256`,
+  RFC 8705): a 401 like any invalid token, and the refusal reason
+  `:unsupported_confirmation`. Sake cannot check such a binding, and
+  took the token as an unbound bearer token before. This holds for JWT,
+  introspection and callback tokens alike (#71).
 
 ## 0.3.0 (2026-10-17)
 
