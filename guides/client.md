@@ -319,6 +319,30 @@ URI — or `{:error, reason}`. Two come with Sake:
 Your own function can do anything else — show the URL in your app's UI
 and wait for the callback on your web server, for instance.
 
+### Pushed authorization requests
+
+When the authorization server's metadata lists a
+`pushed_authorization_request_endpoint` (RFC 9126), the client pushes
+the authorization request there instead of putting it in the URL: step 4
+above becomes a POST of the same parameters, authenticated as the token
+request is (with a DPoP proof when the client uses DPoP, which binds the
+code to its key), and the person is sent to the authorization endpoint
+with only the `client_id` and the `request_uri` the server returned. The
+parameters never pass through the browser, and the answer is checked as
+before.
+
+```elixir
+# Never push, unless the server requires it.
+Sake.Client.connect(url, auth: [par: false])
+```
+
+`par: false` (the default is `:auto`) puts the request in the URL again,
+except for a server whose metadata says
+`require_pushed_authorization_requests`: that one gets it pushed anyway,
+since it would refuse anything else. A push the server refuses ends the
+flow with `{:error, {:auth, {:par_failed, status, body}}}`; one refused
+for its DPoP nonce is sent again with it, as a token request is.
+
 ### A person without a browser here: the device grant
 
 On a machine where no browser can open, a CLI over SSH or a headless

@@ -11,6 +11,7 @@ if Code.ensure_loaded?(Ecto.Schema) do
       field(:scopes, {:array, :string}, default: [])
       field(:resource, :string)
       field(:subject_id, :string)
+      field(:dpop_jkt, :string)
       field(:expires_at, :utc_datetime)
       field(:used_at, :utc_datetime)
       field(:revoked_at, :utc_datetime)

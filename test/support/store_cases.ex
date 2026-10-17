@@ -3,7 +3,7 @@ defmodule SakeTest.StoreCases do
 
   defmacro __using__(_) do
     quote do
-      alias Sake.Auth.{Client, Code, Consent, DeviceGrant, TokenRecord, Tokens}
+      alias Sake.Auth.{Client, Code, Consent, DeviceGrant, PushedRequest, TokenRecord, Tokens}
 
       defp store(config), do: {elem(config.store, 0), config.store_state}
 
@@ -14,6 +14,7 @@ defmodule SakeTest.StoreCases do
       unquote(client_prune_cases())
       unquote(device_cases())
       unquote(device_token_cases())
+      unquote(pushed_request_cases())
     end
   end
 
@@ -29,7 +30,8 @@ defmodule SakeTest.StoreCases do
           inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
           redirect_uris: ["http://127.0.0.1:1/cb"],
           grant_types: ["authorization_code"],
-          token_endpoint_auth_method: "none"
+          token_endpoint_auth_method: "none",
+          require_pushed_authorization_requests: true
         }
 
         assert :ok = mod.put_client(state, client)
@@ -50,6 +52,7 @@ defmodule SakeTest.StoreCases do
           scopes: [],
           resource: "r",
           subject_id: "u",
+          dpop_jkt: "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I",
           expires_at: DateTime.utc_now() |> DateTime.add(600) |> DateTime.truncate(:second)
         }
 
@@ -622,6 +625,99 @@ defmodule SakeTest.StoreCases do
         assert :error = mod.get_device_grant_by_user_code(state, gone.user_code_hash)
         assert {:ok, _} = mod.get_client(state, "dc_device")
         assert :error = mod.get_client(state, "dc_device_gone")
+      end
+    end
+  end
+
+  defp pushed_request_cases do
+    quote do
+      defp pushed_request(mod, state, name, attrs \\ %{}) do
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+        request =
+          struct!(
+            %PushedRequest{
+              hash: Tokens.hash("urn:ietf:params:oauth:request_uri:" <> name),
+              client_id: "c",
+              redirect_uri: "http://127.0.0.1:1/cb",
+              state: "xyz",
+              code_challenge: "x",
+              scopes: ["a", "b"],
+              resource: "r",
+              extra: %{"dpop_jkt" => "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I"},
+              expires_at: DateTime.add(now, 60),
+              inserted_at: now
+            },
+            attrs
+          )
+
+        :ok = mod.put_pushed_request(state, request)
+        request
+      end
+
+      test "pushed requests are consumed once", %{config: config} do
+        {mod, state} = store(config)
+        request = pushed_request(mod, state, "once")
+        assert {:ok, ^request} = mod.consume_pushed_request(state, request.hash)
+        assert :error = mod.consume_pushed_request(state, request.hash)
+        assert :error = mod.consume_pushed_request(state, Tokens.hash("unknown"))
+
+        # Without a state or anything in extra.
+        bare = pushed_request(mod, state, "bare", %{state: nil, extra: %{}})
+        assert {:ok, ^bare} = mod.consume_pushed_request(state, bare.hash)
+      end
+
+      test "of concurrent consumes of a pushed request, one gets it", %{config: config} do
+        {mod, state} = store(config)
+        request = pushed_request(mod, state, "raced")
+
+        results =
+          1..8
+          |> Enum.map(fn _ ->
+            Task.async(fn -> mod.consume_pushed_request(state, request.hash) end)
+          end)
+          |> Enum.map(&Task.await/1)
+
+        assert [{:ok, _}] = Enum.filter(results, &match?({:ok, _}, &1))
+        assert Enum.count(results, &(&1 == :error)) == 7
+      end
+
+      test "prune removes expired pushed requests, and a live one keeps its client", %{
+        config: config
+      } do
+        {mod, state} = store(config)
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
+        old = DateTime.add(now, -2 * 86_400)
+
+        for id <- ~w(dc_pushed dc_pushed_gone) do
+          :ok =
+            mod.put_client(state, %Client{
+              id: id,
+              name: id,
+              kind: :dynamic,
+              redirect_uris: ["http://127.0.0.1:1/cb"],
+              inserted_at: old
+            })
+        end
+
+        live = pushed_request(mod, state, "live", %{client_id: "dc_pushed"})
+
+        gone =
+          pushed_request(mod, state, "gone", %{
+            client_id: "dc_pushed_gone",
+            expires_at: DateTime.add(now, -10)
+          })
+
+        assert :ok =
+                 mod.prune(state, now, %{
+                   consents: DateTime.add(now, -30 * 86_400),
+                   unused_clients: DateTime.add(now, -86_400)
+                 })
+
+        assert {:ok, _} = mod.get_client(state, "dc_pushed")
+        assert :error = mod.get_client(state, "dc_pushed_gone")
+        assert :error = mod.consume_pushed_request(state, gone.hash)
+        assert {:ok, _} = mod.consume_pushed_request(state, live.hash)
       end
     end
   end

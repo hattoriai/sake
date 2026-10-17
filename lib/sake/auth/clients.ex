@@ -34,6 +34,10 @@ defmodule Sake.Auth.Clients do
   `dpop_bound_access_tokens: true` (RFC 9449 §5.2) refuses the client's
   token requests that carry no DPoP proof, so all its tokens are bound
   to a key it holds.
+
+  `require_pushed_authorization_requests: true` (RFC 9126 §6), with
+  `par:` in the auth config, refuses the client's authorization requests
+  that it did not push first.
   """
 
   alias Sake.Auth.{Client, Config, Redirect, Tokens}
@@ -190,6 +194,8 @@ defmodule Sake.Auth.Clients do
       jwks_uri: attrs[:jwks_uri],
       application_type: attrs[:application_type] || "native",
       dpop_bound_access_tokens: attrs[:dpop_bound_access_tokens] == true,
+      require_pushed_authorization_requests:
+        attrs[:require_pushed_authorization_requests] == true,
       inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
     }
 
@@ -247,6 +253,17 @@ defmodule Sake.Auth.Clients do
       optional_strings?(doc["grant_types"]) and
       doc["dpop_bound_access_tokens"] in [nil, true, false]
   end
+
+  @doc false
+  # A registration request's or a metadata document's
+  # `require_pushed_authorization_requests` (RFC 9126 §6): absent or a
+  # boolean, once `par:` is on. A server without it knows nothing of the
+  # field, and takes the document as it did before.
+  @spec par_metadata_valid?(Config.t(), map()) :: boolean()
+  def par_metadata_valid?(%Config{par: false}, _doc), do: true
+
+  def par_metadata_valid?(_config, doc),
+    do: doc["require_pushed_authorization_requests"] in [nil, true, false]
 
   defp optional_string?(value), do: is_nil(value) or is_binary(value)
 

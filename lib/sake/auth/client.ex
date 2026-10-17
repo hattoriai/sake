@@ -9,6 +9,10 @@ defmodule Sake.Auth.Client do
   `dpop_bound_access_tokens` (RFC 9449 §5.2) says the client always uses
   DPoP: its token requests without a proof are refused.
 
+  `require_pushed_authorization_requests` (RFC 9126 §6) says the client
+  only ever pushes its authorization requests: with `par:` on, the
+  authorize endpoint refuses its requests that were not pushed.
+
   `inserted_at` is when it was registered: a dynamically registered
   client that never came to hold a token or a consent is pruned some time
   after (see `Sake.Auth.prune/1`).
@@ -29,6 +33,7 @@ defmodule Sake.Auth.Client do
     grant_types: ["authorization_code", "refresh_token"],
     token_endpoint_auth_method: "none",
     application_type: "native",
-    dpop_bound_access_tokens: false
+    dpop_bound_access_tokens: false,
+    require_pushed_authorization_requests: false
   ]
 end

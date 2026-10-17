@@ -1,6 +1,7 @@
 defmodule Sake.Auth.ClientAuth do
   @moduledoc false
-  # Identifies the client at the token and revocation endpoints: a public
+  # Identifies the client at the token, revocation, device authorization
+  # and pushed authorization request endpoints: a public
   # client by client_id, a confidential client by its secret (basic or
   # post), or by a JWT it signed with its own key (`private_key_jwt`,
   # RFC 7523 §2.2).
@@ -98,7 +99,7 @@ defmodule Sake.Auth.ClientAuth do
          {:ok, claims} <-
            JWKS.verify(config, jwt, JWKS.source(client),
              iss: id,
-             aud: [config.issuer, Config.token_url(config)],
+             aud: audiences(config),
              required: ["iss", "sub", "exp", "jti"]
            ),
          true <- short_lived?(config, claims),
@@ -110,6 +111,11 @@ defmodule Sake.Auth.ClientAuth do
   end
 
   defp assertion(_config, _params), do: {:error, :invalid_client}
+
+  # The issuer or the token endpoint; with `par:` the pushed authorization
+  # request endpoint too, which RFC 9126 §2 asks to take as well.
+  defp audiences(%Config{par: false} = config), do: [config.issuer, Config.token_url(config)]
+  defp audiences(config), do: [config.issuer, Config.token_url(config), Config.par_url(config)]
 
   # A client assertion is meant for one request: one that claims to stay
   # valid for longer than `max_assertion_lifetime` (plus the clock leeway)

@@ -1,6 +1,6 @@
 defmodule Sake.Auth.Store do
-  @moduledoc "Where clients, codes, device grants, tokens and consents live. Implemented by `Sake.Auth.Store.ETS` and `Sake.Auth.Store.Ecto`."
-  alias Sake.Auth.{Client, Code, Consent, DeviceGrant, TokenRecord}
+  @moduledoc "Where clients, codes, pushed authorization requests, device grants, tokens and consents live. Implemented by `Sake.Auth.Store.ETS` and `Sake.Auth.Store.Ecto`."
+  alias Sake.Auth.{Client, Code, Consent, DeviceGrant, PushedRequest, TokenRecord}
   @type state :: term()
   @callback init(keyword()) :: state()
   @callback put_client(state(), Client.t()) :: :ok
@@ -24,6 +24,15 @@ defmodule Sake.Auth.Store do
   """
   @callback put_code_tokens(state(), code_hash :: String.t(), [TokenRecord.t()]) ::
               :ok | :revoked
+  @callback put_pushed_request(state(), PushedRequest.t()) :: :ok
+  @doc """
+  Takes the pushed authorization request whose `request_uri` has this
+  hash, if and only if nobody took it before, atomically: of two
+  concurrent calls, one gets it and the other `:error`. The store may
+  forget it then; the caller checks its expiry and its client.
+  """
+  @callback consume_pushed_request(state(), hash :: String.t()) ::
+              {:ok, PushedRequest.t()} | :error
   @callback put_device_grant(state(), DeviceGrant.t()) :: :ok
   @callback get_device_grant_by_user_code(state(), user_code_hash :: String.t()) ::
               {:ok, DeviceGrant.t()} | :error
@@ -123,11 +132,13 @@ defmodule Sake.Auth.Store do
               resource :: String.t() | :all
             ) :: :ok
   @doc """
-  Deletes the codes, device grants and tokens that expired by `now`; the consents
-  inserted before `before.consents` whose subject, client and resource
-  have no live (unexpired, unrevoked) refresh token left; and the
-  dynamically registered clients registered before `before.unused_clients`
-  that hold no live token, no consent, no code and no device grant.
+  Deletes the codes, pushed authorization requests, device grants and
+  tokens that expired by `now`; the consents inserted before
+  `before.consents` whose subject, client and resource have no live
+  (unexpired, unrevoked) refresh token left; and the dynamically
+  registered clients registered before `before.unused_clients` that hold
+  no live token, no consent, no code, no pushed request and no device
+  grant.
   """
   @callback prune(
               state(),

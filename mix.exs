@@ -164,6 +164,7 @@ defmodule Sake.MixProject do
           Sake.Auth.External,
           Sake.Auth.Code,
           Sake.Auth.DeviceGrant,
+          Sake.Auth.PushedRequest,
           Sake.Auth.TokenRecord,
           Sake.Auth.Challenge,
           Sake.Auth.WellKnown,

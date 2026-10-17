@@ -146,8 +146,9 @@ defmodule Sake.Auth.Grant do
 
   @doc """
   Issues a code for `request` (a map with client_id, redirect_uri,
-  code_challenge, scopes, resource) and `subject_id`; returns the plain
-  code.
+  code_challenge, scopes, resource, and optionally `extra`) and
+  `subject_id`; returns the plain code. A `"dpop_jkt"` in `extra` binds
+  the code to that DPoP key (RFC 9449 §10).
   """
   @spec issue_code(Config.t(), map(), String.t()) :: String.t()
   def issue_code(config, request, subject_id) do
@@ -163,6 +164,7 @@ defmodule Sake.Auth.Grant do
         scopes: request.scopes,
         resource: request.resource,
         subject_id: subject_id,
+        dpop_jkt: (Map.get(request, :extra) || %{})["dpop_jkt"],
         expires_at: DateTime.add(DateTime.utc_now(), @code_ttl)
       })
 

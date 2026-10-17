@@ -235,6 +235,25 @@ defmodule Sake.Auth.CIMDTest do
     end
   end
 
+  @tag auth: [par: true]
+  test "with par:, a document's require_pushed_authorization_requests is kept, and typed", %{
+    config: config,
+    bypass: bypass,
+    base: base
+  } do
+    for {path, value} <- [{"/strict.json", true}, {"/mistyped.json", "yes"}] do
+      Bypass.expect_once(bypass, "GET", path, fn conn ->
+        doc = document(base <> path, %{"require_pushed_authorization_requests" => value})
+        Plug.Conn.resp(conn, 200, JSON.encode!(doc))
+      end)
+    end
+
+    assert {:ok, %{require_pushed_authorization_requests: true}} =
+             CIMD.fetch(config, base <> "/strict.json")
+
+    assert {:error, :invalid_document} = CIMD.fetch(config, base <> "/mistyped.json")
+  end
+
   @tag timeout: 20_000
   test "the whole download runs under one 5 second deadline", %{
     config: config,

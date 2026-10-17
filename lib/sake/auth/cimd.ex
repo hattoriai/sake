@@ -50,18 +50,18 @@ defmodule Sake.Auth.CIMD do
       not url?(id, config) -> {:error, :invalid_client}
       not allowed?(config, uri) -> {:error, :not_allowed}
       not config.allow_insecure and not public_host?(uri.host) -> {:error, :not_allowed}
-      true -> cached(id, uri)
+      true -> cached(config, id, uri)
     end
   end
 
-  defp cached(id, uri) do
+  defp cached(config, id, uri) do
     case __MODULE__.Cache.get({:cimd, id}) do
       {:ok, client} ->
         {:ok, client}
 
       :error ->
         with {:ok, body, ttl} <- download(uri),
-             {:ok, client} <- parse(id, body) do
+             {:ok, client} <- parse(config, id, body) do
           __MODULE__.Cache.put({:cimd, id}, client, ttl)
           {:ok, client}
         end
@@ -193,7 +193,7 @@ defmodule Sake.Auth.CIMD do
     end
   end
 
-  defp parse(id, body) do
+  defp parse(config, id, body) do
     with {:ok,
           %{"client_id" => ^id, "client_name" => name, "redirect_uris" => [_ | _] = uris} = doc} <-
            JSON.decode(body),
@@ -201,6 +201,7 @@ defmodule Sake.Auth.CIMD do
          true <- length(uris) <= @max_redirect_uris,
          true <- Enum.all?(uris, &Redirect.valid?/1),
          true <- Sake.Auth.Clients.metadata_types_valid?(doc),
+         true <- Sake.Auth.Clients.par_metadata_valid?(config, doc),
          method = doc["token_endpoint_auth_method"] || "none",
          true <- method == "none" do
       {:ok,
@@ -215,7 +216,9 @@ defmodule Sake.Auth.CIMD do
          logo_uri: doc["logo_uri"],
          scopes: if(is_binary(doc["scope"]), do: String.split(doc["scope"]), else: nil),
          application_type: doc["application_type"] || "native",
-         dpop_bound_access_tokens: doc["dpop_bound_access_tokens"] == true
+         dpop_bound_access_tokens: doc["dpop_bound_access_tokens"] == true,
+         require_pushed_authorization_requests:
+           doc["require_pushed_authorization_requests"] == true
        }}
     else
       _ -> {:error, :invalid_document}

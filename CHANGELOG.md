@@ -67,6 +67,34 @@ store:
   (copy it from `Sake.Auth.Migration` into a migration of your own, or
   run `down/1` and `up/1` again where losing the data does not matter).
 
+Pushed authorization requests (#69) add to the store, the records and
+the token endpoint:
+
+- `Sake.Auth.Store` has two more callbacks, `put_pushed_request/2` and
+  `consume_pushed_request/2` (atomic: of two concurrent calls only one
+  gets the request), for the new `Sake.Auth.PushedRequest`, and
+  `prune/3` deletes the expired ones (a live one keeps its dynamically
+  registered client). A store of your own needs them.
+- `Sake.Auth.Code` has a `dpop_jkt` field, and `Sake.Auth.Client` a
+  `require_pushed_authorization_requests` field, which a store must
+  keep. `Sake.Auth.Migration.up/1` creates `sake_oauth_pushed_requests`
+  and adds `sake_oauth_codes.dpop_jkt` and
+  `sake_oauth_clients.require_pushed_authorization_requests`: an
+  existing database needs them (in a migration of your own, or `down/1`
+  and `up/1` again where losing the data does not matter).
+- With DPoP on (the default when `jose` is there), the authorize endpoint
+  takes the `dpop_jkt` parameter (RFC 9449 §10), with or without `par:`:
+  a request with one gets a code bound to that key, which the token
+  endpoint redeems only with a proof made with it (`invalid_grant`
+  otherwise), and a request whose `dpop_jkt` is not a SHA-256 thumbprint
+  is sent back with `invalid_request`. Before, the parameter was
+  ignored.
+- `Sake.Client.Auth` pushes its authorization requests to every server
+  whose metadata lists a `pushed_authorization_request_endpoint` (`par:
+  :auto`, the default): the `authorize:` function then gets a URL with
+  only `client_id` and `request_uri`. `par: false` keeps them in the
+  URL, unless the server requires pushed requests.
+
 ### Authorization
 
 - The device authorization grant (RFC 8628), for a CLI, a headless agent
@@ -88,6 +116,25 @@ store:
   registration takes the grant (with no redirect URI) only with
   `device:`. See "Devices and CLIs without a browser" in
   `guides/authorization.md`.
+- Pushed authorization requests (RFC 9126), with `par: true` (or
+  `[required: true, expires_in: 60]`) in the auth config: `POST
+  /oauth/par` (mounted by `sake_oauth_api()` and `Sake.Auth.RouterPlug`)
+  takes an authorization request from a client authenticated as at the
+  token endpoint, public clients included, validates it as the authorize
+  endpoint does, and answers with a `request_uri` good once, for 60
+  seconds by default, for that client alone (stored hashed). The
+  authorize endpoint takes `client_id` and `request_uri`, ignores every
+  other query parameter, and goes on as for a request sent directly; an
+  unknown, expired, used or another client's `request_uri` gets an error
+  page. A push with a DPoP proof, or a `dpop_jkt`, binds the code to the
+  key. `required: true`, or a client registered (dynamically, in its
+  Client ID Metadata Document, or with `Sake.Auth.Clients.create/2`)
+  with `require_pushed_authorization_requests`, refuses requests that
+  were not pushed with `invalid_request`. The metadata lists
+  `pushed_authorization_request_endpoint` and
+  `require_pushed_authorization_requests`. Without `par:` nothing
+  changes. See "Pushed authorization requests (PAR)" in
+  `guides/authorization.md`.
 
 ### Client
 
@@ -101,6 +148,14 @@ store:
   {:auth, :no_device_endpoint}}` without the endpoint. Refresh, step-up
   and a 401 work as in the code flow, a new code shown where the browser
   would have opened. See "A person without a browser here" in
+  `guides/client.md`.
+- `Sake.Client.Auth` pushes the authorization request (RFC 9126) to a
+  server whose metadata lists a `pushed_authorization_request_endpoint`,
+  authenticated as a token request and with a DPoP proof when it uses
+  DPoP, and opens the authorization endpoint with only `client_id` and
+  `request_uri`. `par: false` turns it off, except for a server that
+  requires pushed requests; a refused push is `{:error, {:auth,
+  {:par_failed, status, body}}}`. See "Pushed authorization requests" in
   `guides/client.md`.
 - `Sake.Client.Auth`'s `static: true`, which `Sake.Test` uses, is a
   documented option: the token the `:store` holds is sent as it is, and

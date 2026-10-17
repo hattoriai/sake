@@ -18,7 +18,10 @@ children = [
      resources: ["/mcp", "/acme/mcp", "/beta/mcp", "/gateway/mcp"],
      # The device grant, for a CLI with no browser: its verification
      # page is /oauth/device.
-     device: true
+     device: true,
+     # Pushed authorization requests (RFC 9126), at /oauth/par: a client
+     # may push its request, and Sake.Client does.
+     par: true
    ]},
   {Bandit, plug: SakeDev.Router, port: 4000},
   # The gateway's proxy, whose upstream is this server's /open/mcp.

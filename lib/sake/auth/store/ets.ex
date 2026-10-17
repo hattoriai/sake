@@ -8,6 +8,7 @@ defmodule Sake.Auth.Store.ETS do
   @tables %{
     clients: __MODULE__.Clients,
     codes: __MODULE__.Codes,
+    pushed_requests: __MODULE__.PushedRequests,
     device_grants: __MODULE__.DeviceGrants,
     tokens: __MODULE__.Tokens,
     consents: __MODULE__.Consents
@@ -79,6 +80,19 @@ defmodule Sake.Auth.Store.ETS do
         _ -> :revoked
       end
     end)
+  end
+
+  # A pushed request is taken out of its table: `:ets.take/2` is atomic
+  # on its own, so of two concurrent takes only one finds it.
+  @impl Sake.Auth.Store
+  def put_pushed_request(_s, request), do: insert(:pushed_requests, request.hash, request)
+
+  @impl Sake.Auth.Store
+  def consume_pushed_request(_s, hash) do
+    case :ets.take(@tables.pushed_requests, hash) do
+      [{^hash, request}] -> {:ok, request}
+      [] -> :error
+    end
   end
 
   # A device grant is kept with its fence, `:live` or `:revoked`, as a
@@ -266,8 +280,9 @@ defmodule Sake.Auth.Store.ETS do
     prune_unused_clients(now, before.unused_clients)
   end
 
-  # What is left of the codes and device grants is unexpired: a client
-  # with one of them, an unrevoked unexpired token or a consent is in use.
+  # What is left of the codes, pushed requests and device grants is
+  # unexpired: a client with one of them, an unrevoked unexpired token or
+  # a consent is in use.
   defp prune_unused_clients(now, registered_before) do
     in_use =
       MapSet.new(
@@ -275,6 +290,7 @@ defmodule Sake.Auth.Store.ETS do
           for({_, t} <- :ets.tab2list(@tables.tokens), live?(t, now), do: t.client_id),
           for({{_, client_id, _}, _} <- :ets.tab2list(@tables.consents), do: client_id),
           for({_, code, _} <- :ets.tab2list(@tables.codes), do: code.client_id),
+          for({_, pushed} <- :ets.tab2list(@tables.pushed_requests), do: pushed.client_id),
           for({_, grant, _} <- :ets.tab2list(@tables.device_grants), do: grant.client_id)
         ])
       )
@@ -299,6 +315,10 @@ defmodule Sake.Auth.Store.ETS do
     for {hash, %{expires_at: exp}, _state} <- :ets.tab2list(@tables.codes),
         DateTime.compare(exp, now) != :gt,
         do: :ets.delete(@tables.codes, hash)
+
+    for {hash, %{expires_at: exp}} <- :ets.tab2list(@tables.pushed_requests),
+        DateTime.compare(exp, now) != :gt,
+        do: :ets.delete(@tables.pushed_requests, hash)
 
     for {hash, %{expires_at: exp}, _fence} <- :ets.tab2list(@tables.device_grants),
         DateTime.compare(exp, now) != :gt,

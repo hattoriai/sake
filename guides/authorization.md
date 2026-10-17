@@ -182,6 +182,81 @@ no redirect URI, or you register one with `Sake.Auth.Clients.create/2`
 and the same `grant_types:`. `Sake.Client` does it all with `grant:
 :device` (see `guides/client.md`).
 
+## Pushed authorization requests (PAR)
+
+In the code flow the authorization request travels in the browser's
+address bar: anything along the way can read it, and anyone can start
+one with a client's `client_id`. With pushed authorization requests (RFC
+9126) the client sends the request straight to the authorization server,
+authenticated, and the browser carries only a `request_uri` that stands
+for it. The parameters cannot be tampered with or leak on the way, and
+only the client itself can start a request. Enterprise security reviews
+ask for it, and FAPI 2.0 requires it.
+
+It is off by default:
+
+```elixir
+{Sake,
+ auth: [
+   # ...
+   par: true  # or [required: true, expires_in: 60]
+ ]}
+```
+
+`sake_oauth_api()` (or `Sake.Auth.RouterPlug`) mounts `POST /oauth/par`.
+Without `par:` it answers 404, the metadata says nothing of it, and the
+authorize endpoint treats a `request_uri` as any parameter it does not
+know.
+
+The flow:
+
+1. The client posts its authorization request (`response_type`,
+   `redirect_uri`, `code_challenge`, `scope`, `resource`, `state`...) to
+   `/oauth/par`, authenticated as at `/oauth/token`: a confidential
+   client with its secret or its key, a public client with its
+   `client_id` (RFC 9126 §2.1). The request is validated exactly as the
+   authorize endpoint would validate it, and refused with the same
+   errors, as JSON. A pushed request may not carry a `request_uri`
+   itself, and Sake takes no request objects (`request_not_supported`).
+2. It gets `201` with a `request_uri`
+   (`urn:ietf:params:oauth:request_uri:` and 32 random bytes) and
+   `expires_in` (60 seconds by default). The request is stored by the
+   hash of its `request_uri`, never the `request_uri` itself.
+3. It opens `/oauth/authorize?client_id=…&request_uri=…`. The authorize
+   endpoint takes the pushed request, once: every other query parameter
+   is ignored, and `client_id` must name the client that pushed it. From
+   there the flow is the one of a request sent directly: the person's
+   resource and scopes, the consent page or a remembered consent, the
+   code. A `request_uri` that is unknown, expired, already used or
+   another client's gets an error page, never a redirect. The
+   `request_uri` is spent when the page shows: the consent form carries
+   the request itself, so approving and denying work as before, but a
+   reload of the page shows the error, and the client has to push again.
+   A person not signed in yet is asked to sign in first without spending
+   it.
+
+`required: true` makes it the only way in: the authorize endpoint sends
+any request that was not pushed back to the client's redirect URI with
+`invalid_request`, and the metadata says
+`require_pushed_authorization_requests: true`. A single client can ask
+for the same (RFC 9126 §6) with `require_pushed_authorization_requests:
+true` in its dynamic registration, its Client ID Metadata Document, or
+`Sake.Auth.Clients.create/2`; with `par:` off the field is not enforced,
+since nothing could satisfy it.
+
+**DPoP.** A push with a DPoP proof (made for `POST /oauth/par`) records
+the thumbprint of the proof's key, and so does a `dpop_jkt` parameter
+(RFC 9449 §10), on a push or on a request sent directly; both at once
+must name the same key, or the push is refused with
+`invalid_dpop_proof`. The code is bound to that key: the token request
+that redeems it must carry a proof made with it, or gets
+`invalid_grant` (and the code is spent, as on a wrong `code_verifier`).
+With `dpop: [nonce: true]` the push endpoint asks for a nonce as the
+token endpoint does. Without DPoP the proof and `dpop_jkt` are ignored.
+
+`Sake.Client` pushes its requests to any server whose metadata lists the
+endpoint (see `guides/client.md`).
+
 ## Machine clients (client credentials)
 
 A service that calls your endpoint as itself — a nightly job, a CI
@@ -446,7 +521,10 @@ ES256, ES384), when `jose` is there. With DPoP on, both documents (the
 authorization server's and the protected resource's) list
 `dpop_signing_alg_values_supported`, the same four algorithms, and with
 `required: true` the protected resource's says
-`dpop_bound_access_tokens_required`.
+`dpop_bound_access_tokens_required`. With `par:`, the authorization
+server's lists `pushed_authorization_request_endpoint` and
+`require_pushed_authorization_requests`, and with `device:`
+`device_authorization_endpoint` and the device code grant.
 
 `client_secret_jwt` is never listed, and the token endpoint refuses its
 assertions with `invalid_client`. It is an HMAC keyed with the client
@@ -572,7 +650,7 @@ resource or scope set — for an "apps connected to your account" page.
 Sake.Auth.prune(config)
 ```
 
-Deletes expired codes, device grants and tokens, remembered consents older than the
+Deletes expired codes, pushed authorization requests, device grants and tokens, remembered consents older than the
 refresh token lifetime that no live token family still uses, and
 dynamically registered clients that nothing has used since
 `unused_client_ttl` (a day) after they registered. Schedule it — a cron job, an Oban
@@ -590,9 +668,11 @@ defmodule MyApp.Repo.Migrations.AddSakeAuth do
 end
 ```
 
-Both take `prefix:`. It creates `sake_oauth_clients`, `sake_oauth_codes`,
-`sake_oauth_device_grants`, `sake_oauth_tokens` (with the thumbprint of
-a token's DPoP key in `jkt`) and a consents table — string primary keys throughout (hashes and
+Both take `prefix:`. It creates `sake_oauth_clients`, `sake_oauth_codes`
+(with the thumbprint of the DPoP key a code is bound to in `dpop_jkt`),
+`sake_oauth_pushed_requests`, `sake_oauth_device_grants`,
+`sake_oauth_tokens` (with the thumbprint of a token's DPoP key in
+`jkt`) and a consents table — string primary keys throughout (hashes and
 generated IDs, never the raw secrets). Point the auth config
 at it with `store: {Sake.Auth.Store.Ecto, repo: MyApp.Repo}`.
 
@@ -611,7 +691,9 @@ revoked; revoking the family marks the row revoked under the same lock
 before it sweeps the tokens. Whichever of the two runs second sees what
 the other did, so a replay that races the request redeeming the code
 never leaves a live pair behind: that request gets `invalid_grant`
-instead. An issued device grant is the same fence for its device code,
+instead. A pushed authorization request is taken with a single `DELETE
+… RETURNING`, so of two requests presenting the same `request_uri` only
+one gets it. An issued device grant is the same fence for its device code,
 and each poll of a device grant locks its row while it is answered and
 recorded, so an approved grant is issued once.
 
@@ -626,7 +708,8 @@ legitimate refresh leaves no live pair either.
 The default, `{Sake.Auth.Store.ETS, []}`, needs no database: an `Agent`
 owns a set of ETS tables, which also serializes the operations that must
 be atomic (consuming a code or a refresh token, deciding on or polling a
-device grant, storing a code's or a device grant's tokens, revoking a
+device grant (a pushed request is taken with `:ets.take/2`, atomic on its
+own), storing a code's or a device grant's tokens, revoking a
 family) through the Agent's mailbox rather than a database
 transaction. It is what `mix dev`
 and this package's own test suite use — nothing survives a restart, which

@@ -8,7 +8,10 @@ defmodule Sake.Auth.AuthorizationRequest do
   # a pushed authorization request or a device authorization request
   # later. Parameters a later endpoint adds (`nonce`, `max_age`,
   # `acr_values`) go in `extra`, so the struct and `validate/3` keep their
-  # shape.
+  # shape. Its keys are strings and its values JSON, so that a pushed
+  # request (RFC 9126) can be stored with it. It holds `"dpop_jkt"`
+  # (RFC 9449 §10) when the code is to be bound to a DPoP key: from the
+  # parameter of that name, or from the proof of a pushed request.
   #
   # A device authorization request (RFC 8628) has no redirect URI, state
   # or PKCE challenge: those three are nil on that path alone, and
@@ -83,8 +86,9 @@ defmodule Sake.Auth.AuthorizationRequest do
 
     with :ok <- check_flow(flow, p, client),
          :ok <- check_scopes(requested, known, client),
+         {:ok, extra} <- extra(config, flow, p),
          {:ok, resource} <- resource(config, p["resource"]) do
-      {:ok, request(flow, client, p, requested, resource)}
+      {:ok, %{request(flow, client, p, requested, resource) | extra: extra}}
     else
       :error ->
         {:error, "invalid_target", "The resource is not served by this authorization server"}
@@ -121,6 +125,28 @@ defmodule Sake.Auth.AuthorizationRequest do
 
   defp request(:device, client, _p, scopes, resource),
     do: %__MODULE__{client_id: client.id, scopes: scopes, resource: resource}
+
+  # RFC 9449 §10: `dpop_jkt` binds the code to a DPoP key, by its RFC
+  # 7638 thumbprint (a base64url SHA-256 hash, 43 characters). A server
+  # without DPoP ignores it, as it ignores any parameter it does not know.
+  defp extra(%Config{dpop: false}, _flow, _p), do: {:ok, %{}}
+  defp extra(_config, :device, _p), do: {:ok, %{}}
+
+  defp extra(_config, :authorization_code, p) do
+    case p["dpop_jkt"] do
+      nil -> {:ok, %{}}
+      jkt -> if thumbprint?(jkt), do: {:ok, %{"dpop_jkt" => jkt}}, else: bad_jkt()
+    end
+  end
+
+  defp bad_jkt, do: {:error, "invalid_request", "dpop_jkt must be a JWK SHA-256 thumbprint"}
+
+  @doc "Whether `value` reads as an RFC 7638 SHA-256 thumbprint."
+  @spec thumbprint?(term()) :: boolean()
+  def thumbprint?(value),
+    do:
+      is_binary(value) and byte_size(value) == 43 and
+        match?({:ok, <<_::binary-size(32)>>}, Base.url_decode64(value, padding: false))
 
   defp requested_scopes(p, known) do
     if is_binary(p["scope"]) and p["scope"] != "", do: String.split(p["scope"]), else: known
