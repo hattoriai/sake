@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.3.0 (2026-10-17)
+
+For hosts that give different people different access, and for
+libraries that ship a server their hosts serve or mount. Nothing
+changes for a host that uses none of it.
+
+### Authorization
+
+- `c:Sake.Auth.Subject.scopes_for/2` (optional): the scopes a person may
+  hold for an endpoint URL, as a list or `:all`. Without it a person
+  `authorize_resource?/2` lets through was granted every scope the client
+  asked for. With it, the authorize page grants, and the consent page
+  shows, only the requested scopes the person may hold, and refuses a
+  request left with none (`access_denied`); a machine client's or JWT
+  grant's token gets only those of its principal; a refresh renews only
+  those the person may still hold, and revokes the grant when none is
+  left; and every request narrows the token's scopes to those of the
+  principal `fetch/1` loads, so a person whose role changes loses a scope
+  at once. The tokens of an external authorization server are not
+  narrowed. See "Who may hold which scopes" in `guides/authorization.md`.
+
+### Server
+
+- `mount` takes `only:` or `except:`: a list of the mounted server's
+  components, each a module, a tool or prompt name, or a resource URI,
+  to mount some of them. An entry that names nothing, a kept tool whose
+  MCP App is left out, both options together, and a filter on a server
+  that lists a proxy's upstream are compile errors. See "Mounting some of
+  a server" in `guides/composing.md`.
+
+### Documentation
+
+- `guides/libraries.md`: shipping a server in a library, with Sake as an
+  optional dependency, configuration read at runtime, an opaque
+  principal, namespaced scopes, how the host serves or mounts it, and
+  names as the library's API.
+
 ## 0.2.0 (2026-10-17)
 
 The first release meant for use: a server for both protocol eras, an
