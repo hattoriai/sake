@@ -12,7 +12,7 @@ other MCP servers.
 
 ```elixir
 def deps do
-  [{:sake, "~> 0.2"}, {:bandit, "~> 1.5"}]
+  [{:sake, "~> 0.3"}, {:bandit, "~> 1.5"}]
 end
 ```
 
@@ -135,6 +135,7 @@ work without it.
 - [Multi-tenant endpoints](guides/tenants.md)
 - [Middleware](guides/middleware.md)
 - [Composing and proxying servers](guides/composing.md)
+- [Shipping a server in a library](guides/libraries.md)
 - [The client](guides/client.md)
 - [Stdio](guides/stdio.md)
 - [Observability](guides/observability.md)
@@ -160,10 +161,11 @@ request sent on the standalone GET stream).
 
 ## Status
 
-0.2: the server (both eras, one endpoint, and stdio; with elicitation,
+0.3: the server (both eras, one endpoint, and stdio; with elicitation,
 sampling, roots, the tasks extension and MCP Apps), the authorization server
 (bearer and DPoP-bound tokens, CIMD, dynamic registration, consent, token
-rotation, machine clients, trusted identity providers and workloads), or
+rotation, machine clients, trusted identity providers and workloads, and
+the scopes each person may hold), or
 the host's own authorization server instead (JWT access tokens,
 introspection, or a callback, with scopes, step-up and DPoP), and
 the client (HTTP and stdio), which runs the MCP authorization flow itself
@@ -174,7 +176,8 @@ SAML assertion; `client_secret_jwt` too) and follows tasks; OpenTelemetry traces
 client's call through the server into the tool; `Sake.Test`, which
 tests a server through an in-memory client; middleware, the host's
 own code around every call; composing, one server mounted inside
-another under a prefix; and proxying, another MCP server's tools,
+another under a prefix, whole or in part, including a server a library
+ships; and proxying, another MCP server's tools,
 resources and prompts behind your own login, per-user credentials and
 middleware, with input requests, tasks and notifications forwarded
 across eras. Next: the device authorization grant.
