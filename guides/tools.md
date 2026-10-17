@@ -174,12 +174,12 @@ are silently dropped. Protocol logging is deprecated as of 2026-07-28:
 for new code, `Logger` and OpenTelemetry are the better home for logs
 (see `guides/observability.md`).
 
-A `stream: true` tool only actually streams when the call is allowed: a
-forbidden call (see Scopes) never opens the SSE response — it comes back
-as a plain 403. A scope error on an otherwise-streamed call reaches the
-client as an in-stream JSON-RPC error only if the request carried a
-`progressToken`; without one, Sake has no open channel to put it on and
-falls back to the plain response.
+A call only streams when its scopes allow it: a call the token's scopes
+do not cover never opens the SSE response, whatever asked for one
+(`stream: true`, a `progressToken`, a legacy client that can be asked
+something). It comes back as a plain 403 with its `insufficient_scope`
+challenge, so the client can step up. The same holds for
+`resources/read` and `prompts/get`.
 
 ## Elicitation
 

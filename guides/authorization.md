@@ -384,6 +384,14 @@ without `refresh_token` in its `grant_types` gets `unauthorized_client`
 for a refresh (dynamic registration grants both when the client names
 none).
 
+Every refresh also asks your subject module again: `fetch/1` must still
+load the person, and `authorize_resource?/2` (when you define it) must
+still allow the token's resource. If either refuses, the whole family is
+revoked and the client gets `invalid_grant`, so a person removed from a
+tenant, or whose account is gone, loses access within one access token
+lifetime. A client whose allowed `scopes:` were narrowed since the grant
+renews it with only those.
+
 ## The consent page and how to replace it
 
 The default page (`Sake.Auth.Consent.Default`) ships its own inline style
