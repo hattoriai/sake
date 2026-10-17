@@ -35,9 +35,39 @@ defmodule Sake.Auth do
   Calls run one way: the rest of Sake calls these modules (and the
   functions marked `@doc false` that say who calls them), and nothing in
   `Sake.Auth` or `Sake.Client.Auth` calls the rest of Sake.
+
+  ## Cores and adapters
+
+  For contributors: each endpoint is a core and an adapter, both under
+  `lib/sake/auth/`. The core is pure functions over the configuration and
+  plain data (a parameter map, header values, a principal); it may use
+  the store, and it never sees a `Plug.Conn`. The adapter is a thin plug
+  that parses the request, reads the signed-in person with
+  `c:Sake.Auth.Subject.from_conn/1` where one is involved, calls the
+  core, and renders JSON, a redirect or the consent page.
+
+    * Authorization: `authorization_request.ex` validates a request
+      (parameters a later endpoint adds go in its `extra`), and
+      `grant.ex` decides once the person is known and issues the code;
+      `Sake.Auth.Authorize` is the adapter, and keeps the consent form's
+      signed request and CSRF token.
+    * Tokens: `token_grants.ex`, whose `exchange/4` has one clause per
+      grant type; `token.ex` is the adapter.
+    * Revocation and registration: `revocation.ex` and `registration.ex`;
+      `revoke.ex` and `dcr.ex` are the adapters.
+    * Metadata: `metadata.ex`, a base map and a list of contributors, one
+      per feature; `Sake.Auth.WellKnown` is the adapter.
+    * Access tokens: `bearer.ex` checks a request described as a map;
+      `authenticate/2` in this module is its adapter.
+
+  A new endpoint is a core module and an adapter, a route in
+  `Sake.Router` and in `Sake.Auth.RouterPlug`, and a URL helper in
+  `Sake.Auth.Config` next to `authorize_url/1`; a new metadata field is a
+  contributor in `metadata.ex`. A test checks that no core module calls
+  `Plug.Conn`.
   """
 
-  alias Sake.Auth.{Bearer, Config, DPoP, JWT, Tokens}
+  alias Sake.Auth.{Bearer, Config, DPoP, External, JWT, Resource, TokenGrants, Tokens}
 
   @spec config() :: Config.t()
   def config do
@@ -61,7 +91,7 @@ defmodule Sake.Auth do
   @spec extensions(Config.t()) :: [:client_credentials | :enterprise]
   def extensions(config) do
     for {true, name} <- [
-          {"client_credentials" in Sake.Auth.Token.grant_types(config), :client_credentials},
+          {"client_credentials" in TokenGrants.grant_types(config), :client_credentials},
           {Enum.any?(config.trusted_issuers, &(&1.profile == :id_jag)), :enterprise}
         ],
         do: name
@@ -70,16 +100,44 @@ defmodule Sake.Auth do
   @doc false
   # Checks the access token of a request to an endpoint with `auth:`
   # (`Sake.Plug` calls it): `{:ok, conn}` with the token, its scopes and
-  # its principal assigned, or `{:error, challenge}` for the 401.
+  # its principal assigned, or `{:error, challenge}` for the 401. The
+  # adapter of `Sake.Auth.Bearer`, which sees the request as a map.
   @spec authenticate(Plug.Conn.t(), map()) ::
           {:ok, Plug.Conn.t()} | {:error, Sake.Auth.Challenge.t()}
-  def authenticate(conn, plug_opts), do: Bearer.check(conn, plug_opts)
+  def authenticate(conn, plug_opts) do
+    config = if plug_opts.auth == true, do: config(), else: External.fetch!(plug_opts.auth)
+
+    request = %{
+      authorization: Plug.Conn.get_req_header(conn, "authorization"),
+      dpop: Plug.Conn.get_req_header(conn, "dpop"),
+      method: conn.method,
+      url: Resource.url(conn)
+    }
+
+    case Bearer.check(config, request, Resource.canonical(conn, plug_opts), conn) do
+      {:ok, accepted} ->
+        {:ok,
+         conn
+         |> put_nonce(accepted.nonce)
+         |> Plug.Conn.assign(:sake_token, accepted.token)
+         |> Plug.Conn.assign(:sake_scopes, accepted.scopes)
+         |> Plug.Conn.assign(:sake_scope, accepted.principal)
+         |> Plug.Conn.assign(:sake_dpop, accepted.dpop)}
+
+      {:error, challenge} ->
+        {:error, challenge}
+    end
+  end
+
+  defp put_nonce(conn, nil), do: conn
+  defp put_nonce(conn, nonce), do: Plug.Conn.put_resp_header(conn, "dpop-nonce", nonce)
 
   @doc false
   # The 403 challenge for a component the token's scopes do not cover
   # (`Sake.Plug` calls it).
   @spec insufficient_scope(Plug.Conn.t(), [String.t()]) :: Sake.Auth.Challenge.t()
-  def insufficient_scope(conn, scopes), do: Bearer.insufficient_scope(conn, scopes)
+  def insufficient_scope(conn, scopes),
+    do: Bearer.insufficient_scope(Resource.url(conn), scopes, conn.assigns[:sake_dpop] == true)
 
   @doc false
   # Issues an access token in the store, for a test request (`Sake.Test`

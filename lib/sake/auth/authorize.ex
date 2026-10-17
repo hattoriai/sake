@@ -26,11 +26,15 @@ defmodule Sake.Auth.Authorize do
   import Plug.Conn
 
   alias Sake.Auth
-  alias Sake.Auth.{Clients, Config, Redirect, Resource, Tokens}
+  alias Sake.Auth.{AuthorizationRequest, Config, Grant}
+
+  # The adapter: it reads the request and the signed-in person, asks
+  # `Sake.Auth.AuthorizationRequest` and `Sake.Auth.Grant`, and renders
+  # their answers as a redirect or a page. The consent form's signed
+  # request and its CSRF token are its own.
 
   @salt "sake.authorize"
   @request_ttl 600
-  @code_ttl 600
 
   @impl true
   def init(opts), do: opts
@@ -46,10 +50,10 @@ defmodule Sake.Auth.Authorize do
     conn = fetch_query_params(conn)
     p = conn.query_params
 
-    with {:ok, client} <- client(config, p["client_id"]),
-         :ok <- redirect_uri(client, p["redirect_uri"]) do
-      validated(conn, config, client, p)
-    else
+    case AuthorizationRequest.client(config, p["client_id"], p["redirect_uri"]) do
+      {:ok, client} ->
+        validated(conn, config, client, p)
+
       {:error, :unknown_client} ->
         error_page(
           conn,
@@ -80,7 +84,7 @@ defmodule Sake.Auth.Authorize do
   end
 
   defp validated(conn, config, client, p) do
-    case validate(config, client, p) do
+    case AuthorizationRequest.validate(config, client, p) do
       {:ok, request} ->
         authenticated(conn, config, client, request)
 
@@ -92,17 +96,13 @@ defmodule Sake.Auth.Authorize do
   defp authenticated(conn, config, client, request) do
     case config.subject.from_conn(conn) do
       {:ok, principal} ->
-        if Sake.Auth.Subject.authorize_resource?(config.subject, principal, request.resource),
-          do: permitted(conn, config, client, request, principal),
-          else:
-            redirect_error(
-              conn,
-              config,
-              request.redirect_uri,
-              "access_denied",
-              "You may not authorize this resource",
-              request.state
-            )
+        decided(
+          conn,
+          config,
+          request,
+          principal,
+          Grant.decide(config, client, request, principal)
+        )
 
       :error ->
         error_page(
@@ -115,183 +115,23 @@ defmodule Sake.Auth.Authorize do
     end
   end
 
-  # The request narrowed to the scopes the person may hold
-  # (`c:Sake.Auth.Subject.scopes_for/2`): the consent page shows those, and
-  # the code carries them. Nothing left of a request for some is refused.
-  defp permitted(conn, config, client, request, principal) do
-    scopes =
-      Sake.Auth.Subject.permitted_scopes(
-        config.subject,
-        principal,
-        request.resource,
-        request.scopes
-      )
-
-    if scopes == [] and request.scopes != [],
-      do:
-        redirect_error(
-          conn,
-          config,
-          request.redirect_uri,
-          "access_denied",
-          "You may not hold any of the requested scopes",
-          request.state
-        ),
-      else: consent_or_issue(conn, config, client, %{request | scopes: scopes}, principal)
+  defp decided(conn, config, _request, principal, {:issue, request}) do
+    {:ok, code} = Grant.issue(config, request, config.subject.id(principal))
+    redirect_code(conn, config, request, code)
   end
 
-  defp client(config, id) do
-    case Clients.resolve(config, id) do
-      {:ok, client} -> {:ok, client}
-      {:error, :invalid_client} -> {:error, :unknown_client}
-      {:error, reason} -> {:error, :client, reason}
-    end
-  end
-
-  defp redirect_uri(client, uri) do
-    if is_binary(uri) and Redirect.matches?(client.redirect_uris, uri),
-      do: :ok,
-      else: {:error, :redirect_uri}
-  end
-
-  defp validate(config, client, p) do
-    known = config |> Config.scopes() |> Enum.map(&elem(&1, 0))
-    requested = requested_scopes(p, known)
-
-    with :ok <- check_response_type(p),
-         :ok <- check_challenge(p),
-         :ok <- check_grant_type(client),
-         :ok <- check_scopes(requested, known, client),
-         {:ok, resource} <- resource(config, p["resource"]) do
-      {:ok,
-       %{
-         client_id: client.id,
-         redirect_uri: p["redirect_uri"],
-         code_challenge: p["code_challenge"],
-         state: p["state"],
-         scopes: requested,
-         resource: resource
-       }}
-    else
-      :error ->
-        {:error, "invalid_target", "The resource is not served by this authorization server"}
-
-      error ->
-        error
-    end
-  end
-
-  defp requested_scopes(p, known) do
-    if is_binary(p["scope"]) and p["scope"] != "", do: String.split(p["scope"]), else: known
-  end
-
-  defp check_response_type(%{"response_type" => "code"}), do: :ok
-
-  defp check_response_type(_p),
-    do: {:error, "unsupported_response_type", "Only response_type=code is supported"}
-
-  defp check_challenge(p) do
-    cond do
-      not is_binary(p["code_challenge"]) or p["code_challenge"] == "" ->
-        {:error, "invalid_request", "code_challenge is required"}
-
-      p["code_challenge_method"] != "S256" ->
-        {:error, "invalid_request", "code_challenge_method must be S256"}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp check_grant_type(client) do
-    if "authorization_code" in client.grant_types,
-      do: :ok,
-      else: {:error, "unauthorized_client", "The client may not use the authorization code grant"}
-  end
-
-  defp check_scopes(requested, known, client) do
-    cond do
-      requested -- known != [] ->
-        {:error, "invalid_scope", "Unknown scope: #{Enum.join(requested -- known, " ")}"}
-
-      client.scopes && requested -- client.scopes != [] ->
-        {:error, "invalid_scope",
-         "The client may not request: #{Enum.join(requested -- client.scopes, " ")}"}
-
-      true ->
-        :ok
-    end
-  end
-
-  @doc false
-  def resource(config, nil) do
-    case config.resources do
-      [pattern] ->
-        if String.contains?(pattern, ":"), do: :error, else: {:ok, config.issuer <> pattern}
-
-      _ ->
-        :error
-    end
-  end
-
-  def resource(config, value) when is_binary(value) do
-    uri = URI.parse(value)
-    path = String.trim_trailing(uri.path || "", "/")
-
-    cond do
-      not same_origin?(uri, URI.parse(config.issuer)) -> :error
-      config.resources == nil -> {:ok, config.issuer <> path}
-      Enum.any?(config.resources, &Resource.path_match?(&1, path)) -> {:ok, config.issuer <> path}
-      true -> :error
-    end
-  end
-
-  def resource(_config, _), do: :error
-
-  defp same_origin?(uri, issuer) do
-    uri.scheme == issuer.scheme and uri.host == issuer.host and uri.port == issuer.port and
-      uri.fragment == nil and uri.query == nil
-  end
-
-  defp consent_or_issue(conn, config, client, request, principal) do
+  defp decided(conn, config, _request, principal, {:consent, %{request: request} = assigns}) do
     subject_id = config.subject.id(principal)
-    {module, state} = Auth.store(config)
+    blob = Plug.Crypto.sign(secret(config), @salt, %{request: request, subject_id: subject_id})
 
-    remembered =
-      config.remember_consent and
-        case module.get_consent(state, subject_id, client.id, request.resource) do
-          {:ok, %{scopes: granted}} -> request.scopes -- granted == []
-          :error -> false
-        end
+    assigns =
+      Map.merge(assigns, %{request: blob, action: conn.request_path, csrf_token: csrf_token()})
 
-    if remembered do
-      issue_and_redirect(conn, config, request, subject_id)
-    else
-      blob = Plug.Crypto.sign(secret(config), @salt, %{request: request, subject_id: subject_id})
-      known = Map.new(Config.scopes(config))
-      redirect = URI.parse(request.redirect_uri)
-
-      assigns = %{
-        client_name: client.name,
-        client_host: client.client_uri && URI.parse(client.client_uri).host,
-        redirect_host:
-          if(redirect.port && redirect.port not in [80, 443],
-            do: "#{redirect.host}:#{redirect.port}",
-            else: redirect.host
-          ),
-        loopback?: Redirect.loopback?(request.redirect_uri),
-        subject_display: config.subject.display(principal),
-        scopes: Enum.map(request.scopes, &{&1, known[&1]}),
-        resource: request.resource,
-        request: blob,
-        action: conn.request_path,
-        csrf_token: csrf_token(),
-        issuer_name: config.name
-      }
-
-      html(conn, 200, config.consent.render(assigns))
-    end
+    html(conn, 200, config.consent.render(assigns))
   end
+
+  defp decided(conn, config, request, _principal, {:error, code, description}),
+    do: redirect_error(conn, config, request.redirect_uri, code, description, request.state)
 
   # ---- POST
 
@@ -321,8 +161,8 @@ defmodule Sake.Auth.Authorize do
   end
 
   defp decision(conn, config, "approve", request, subject_id) do
-    maybe_remember(config, request, subject_id)
-    issue_and_redirect(conn, config, request, subject_id)
+    {:ok, code} = Grant.approve(config, request, subject_id)
+    redirect_code(conn, config, request, code)
   end
 
   defp decision(conn, config, _decision, request, _subject_id) do
@@ -336,47 +176,15 @@ defmodule Sake.Auth.Authorize do
     )
   end
 
-  defp maybe_remember(config, request, subject_id) do
-    if config.remember_consent do
-      {module, state} = Auth.store(config)
-
-      :ok =
-        module.put_consent(state, %Sake.Auth.Consent{
-          subject_id: subject_id,
-          client_id: request.client_id,
-          resource: request.resource,
-          scopes: request.scopes,
-          inserted_at: DateTime.utc_now()
-        })
-    end
-  end
-
   # ---- codes
 
   @doc "Issues a code for `request` (a map with client_id, redirect_uri, code_challenge, scopes, resource) and `subject_id`; returns the plain code."
   @spec issue_code(Config.t(), map(), String.t()) :: String.t()
-  def issue_code(config, request, subject_id) do
-    {module, state} = Auth.store(config)
-    code = Tokens.generate()
+  defdelegate issue_code(config, request, subject_id), to: Grant
 
-    :ok =
-      module.put_code(state, %Sake.Auth.Code{
-        hash: Tokens.hash(code),
-        client_id: request.client_id,
-        redirect_uri: request.redirect_uri,
-        code_challenge: request.code_challenge,
-        scopes: request.scopes,
-        resource: request.resource,
-        subject_id: subject_id,
-        expires_at: DateTime.add(DateTime.utc_now(), @code_ttl)
-      })
+  # ---- responses
 
-    code
-  end
-
-  defp issue_and_redirect(conn, config, request, subject_id) do
-    code = issue_code(config, request, subject_id)
-
+  defp redirect_code(conn, config, request, code) do
     redirect(conn, request.redirect_uri, %{
       "code" => code,
       "state" => request.state,

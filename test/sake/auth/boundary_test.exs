@@ -62,6 +62,38 @@ defmodule Sake.Auth.BoundaryTest do
            "authorization must not call the rest of Sake:\n  " <> Enum.join(violations, "\n  ")
   end
 
+  # The core of each endpoint (#67) works on plain data: the adapters
+  # read the conn and render the answer, and a core module never calls
+  # `Plug.Conn`, nor the plugs that parse a request or check its CSRF
+  # token. Its compiled imports say what it calls.
+  @cores [
+    Sake.Auth.AuthorizationRequest,
+    Sake.Auth.Grant,
+    Sake.Auth.TokenGrants,
+    Sake.Auth.Revocation,
+    Sake.Auth.Registration,
+    Sake.Auth.Metadata,
+    Sake.Auth.Bearer
+  ]
+
+  test "the endpoint cores call no Plug.Conn function" do
+    violations =
+      for module <- @cores,
+          {target, f, a} <- imports(module),
+          conn_side?(target),
+          do: "#{inspect(module)} -> #{inspect(target)}.#{f}/#{a}"
+
+    assert violations == [],
+           "a core module must not touch the conn:\n  " <> Enum.join(violations, "\n  ")
+  end
+
+  defp conn_side?(module) do
+    name = Atom.to_string(module)
+
+    name in ["Elixir.Plug.Conn", "Elixir.Plug.Parsers", "Elixir.Plug.CSRFProtection"] or
+      String.starts_with?(name, "Elixir.Plug.Conn.")
+  end
+
   test "mix xref finds no edge out of the auth files" do
     output =
       capture_io(fn -> Mix.Task.rerun("xref", ["graph", "--format", "plain", "--no-compile"]) end)

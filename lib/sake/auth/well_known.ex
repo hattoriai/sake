@@ -13,9 +13,10 @@ defmodule Sake.Auth.WellKnown do
   @behaviour Plug
   import Plug.Conn
 
-  alias Sake.Auth.{Config, DPoP, External, JWT, Resource}
+  alias Sake.Auth.{External, Metadata, Resource}
 
-  @id_jag_profile "urn:ietf:params:oauth:grant-profile:id-jag"
+  # The adapter: it routes the request, names the configuration and the
+  # resource, and serves what `Sake.Auth.Metadata` builds.
 
   @impl true
   def init(opts), do: opts
@@ -49,40 +50,8 @@ defmodule Sake.Auth.WellKnown do
 
     case External.for_path(suffix) || Sake.Auth.configured() do
       nil -> send_resp(conn, 404, "")
-      config -> json(conn, resource_metadata(conn, config, suffix))
+      config -> json(conn, Metadata.protected_resource(config, Resource.origin(conn) <> suffix))
     end
-  end
-
-  defp resource_metadata(conn, config, suffix) do
-    body =
-      %{
-        "resource" => Resource.origin(conn) <> suffix,
-        "authorization_servers" => [config.issuer],
-        "scopes_supported" => config |> Config.scopes() |> Enum.map(&elem(&1, 0)),
-        "bearer_methods_supported" => ["header"],
-        "resource_name" => resource_name(config)
-      }
-      |> Map.reject(fn {_k, v} -> v == nil end)
-
-    dpop_required(config, dpop_algs(config, body))
-  end
-
-  defp resource_name(%Config{name: name}), do: name
-  defp resource_name(%External{resource_name: name}), do: name
-
-  # RFC 9449 §5.1 (the authorization server) and RFC 9728 §2 (the
-  # resource): the algorithms DPoP proofs may use, which is how a client
-  # learns that DPoP is on offer at all.
-  defp dpop_algs(%{dpop: false}, body), do: body
-
-  defp dpop_algs(_config, body),
-    do: Map.put(body, "dpop_signing_alg_values_supported", DPoP.algs())
-
-  # RFC 9728 §2: the resource takes DPoP-bound tokens only.
-  defp dpop_required(config, body) do
-    if Config.dpop_required?(config),
-      do: Map.put(body, "dpop_bound_access_tokens_required", true),
-      else: body
   end
 
   # Only Sake's own authorization server has metadata here; an external
@@ -90,53 +59,8 @@ defmodule Sake.Auth.WellKnown do
   defp authorization_server(conn) do
     case Sake.Auth.configured() do
       nil -> send_resp(conn, 404, "")
-      config -> authorization_server(conn, config)
+      config -> json(conn, Metadata.authorization_server(config))
     end
-  end
-
-  defp authorization_server(conn, config) do
-    body = %{
-      "issuer" => config.issuer,
-      "authorization_endpoint" => Config.authorize_url(config),
-      "token_endpoint" => Config.token_url(config),
-      "revocation_endpoint" => Config.revoke_url(config),
-      "scopes_supported" => config |> Config.scopes() |> Enum.map(&elem(&1, 0)),
-      "response_types_supported" => ["code"],
-      "grant_types_supported" => Sake.Auth.Token.grant_types(config),
-      "code_challenge_methods_supported" => ["S256"],
-      "token_endpoint_auth_methods_supported" => auth_methods(),
-      "revocation_endpoint_auth_methods_supported" => auth_methods(),
-      "client_id_metadata_document_supported" => config.cimd != false,
-      "authorization_response_iss_parameter_supported" => true
-    }
-
-    body =
-      if JWT.available?(),
-        do:
-          body
-          |> Map.put("token_endpoint_auth_signing_alg_values_supported", JWT.algs())
-          |> Map.put("revocation_endpoint_auth_signing_alg_values_supported", JWT.algs()),
-        else: body
-
-    # draft-ietf-oauth-identity-assertion-authz-grant §7.2: how a client
-    # learns that ID-JAGs are accepted here.
-    body =
-      if Enum.any?(config.trusted_issuers, &(&1.profile == :id_jag)),
-        do: Map.put(body, "authorization_grant_profiles_supported", [@id_jag_profile]),
-        else: body
-
-    body =
-      if config.dcr,
-        do: Map.put(body, "registration_endpoint", Config.register_url(config)),
-        else: body
-
-    json(conn, dpop_algs(config, body))
-  end
-
-  # `private_key_jwt` needs jose to verify the client's assertion.
-  defp auth_methods do
-    ["none", "client_secret_basic", "client_secret_post"] ++
-      if JWT.available?(), do: ["private_key_jwt"], else: []
   end
 
   defp json(conn, body) do
