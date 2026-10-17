@@ -724,7 +724,7 @@ defmodule Sake.Client.AuthMachineTest do
         assert Map.keys(declared(body)) == [Sake.Tasks.extension()]
       end
 
-      assert Sake.Client.Auth.extensions(Sake.Client.Auth.new(url, [], [])) == %{}
+      assert Sake.Client.Auth.extensions(Sake.Client.Auth.new(url, [], [])) == []
     end
   end
 

@@ -1,15 +1,14 @@
 defmodule Sake.Auth.CIMD do
-  @moduledoc """
-  Client ID Metadata Documents: a client identifies itself with an HTTPS
-  URL, and the authorization server fetches the JSON document there.
-
-  The fetch is guarded: HTTPS only (unless `allow_insecure`), no
-  credentials in the URL, the host must resolve to public addresses, no
-  redirects are followed, the body is limited to 64 KB, and the whole
-  download must finish within 5 seconds. A document may list at most 10
-  redirect URIs. Documents are cached for their `max-age`, clamped to one
-  minute–one day; the cache holds at most 1000 documents.
-  """
+  @moduledoc false
+  # Client ID Metadata Documents: a client identifies itself with an HTTPS
+  # URL, and the authorization server fetches the JSON document there.
+  #
+  # The fetch is guarded: HTTPS only (unless `allow_insecure`), no
+  # credentials in the URL, the host must resolve to public addresses, no
+  # redirects are followed, the body is limited to 64 KB, and the whole
+  # download must finish within 5 seconds. A document may list at most 10
+  # redirect URIs. Documents are cached for their `max-age`, clamped to one
+  # minute–one day; the cache holds at most 1000 documents.
 
   alias Sake.Auth.{Client, Config, Redirect}
 

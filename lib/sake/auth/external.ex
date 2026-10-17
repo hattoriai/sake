@@ -133,7 +133,9 @@ defmodule Sake.Auth.External do
     servers: [],
     dpop: true,
     extensions: [],
-    allow_insecure: false
+    allow_insecure: false,
+    # The Sake secret, for DPoP nonces: `Sake` puts it here when it starts.
+    secret: nil
   ]
 
   @extensions [:client_credentials, :enterprise]
@@ -151,14 +153,15 @@ defmodule Sake.Auth.External do
   end
 
   @doc false
+  # The configurations `Sake.Auth.Supervisor` was started with.
   @spec configs() :: %{atom() => t()}
-  def configs, do: :persistent_term.get({Sake, :external_auth}, %{})
+  def configs, do: :persistent_term.get({__MODULE__, :configs}, %{})
 
   @doc false
-  # The `external_auth:` option of the `Sake` child, checked at start.
-  # Without `resources:` a configuration answers for every path, which
-  # is only unambiguous when it is the one authorization server Sake
-  # knows.
+  # The `external_auth:` option of the `Sake` child, checked at start
+  # (`Sake` calls it). Without `resources:` a configuration answers for
+  # every path, which is only unambiguous when it is the one
+  # authorization server Sake knows.
   @spec new_all(keyword(), Config.t() | nil) :: %{atom() => t()}
   def new_all(opts, auth) do
     configs = Map.new(opts, fn {name, config} -> {name, new(name, config)} end)
@@ -193,7 +196,7 @@ defmodule Sake.Auth.External do
         audiences: audiences(config.audiences, label),
         typ: typ(config.typ, label),
         principal: principal_option(config.principal, label),
-        dpop: Config.dpop_option(config.dpop),
+        dpop: Config.dpop_option(config.dpop, config.secret),
         extensions: extensions(config.extensions, label)
     }
   end
@@ -298,10 +301,10 @@ defmodule Sake.Auth.External do
   end
 
   @doc false
-  # The authorization extensions an endpoint on this server declares.
-  @spec extensions(t()) :: map()
-  def extensions(%__MODULE__{extensions: names}),
-    do: Map.new(names, &{Sake.Auth.extension(&1), %{}})
+  # The authorization extensions an endpoint on this server declares, for
+  # its capabilities (`Sake.Server.Dispatch` calls it).
+  @spec extensions(t()) :: [:client_credentials | :enterprise]
+  def extensions(%__MODULE__{extensions: names}), do: names
 
   # ---- verification
 

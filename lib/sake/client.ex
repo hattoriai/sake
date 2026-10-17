@@ -18,7 +18,7 @@ defmodule Sake.Client do
   (see `set_log_level/2`), and `auth:` to have the client
   run the MCP authorization flow itself on a 401 (see `Sake.Client.Auth`);
   without it, a 401 comes back as
-  `{:error, {:unauthorized, %Sake.Client.Challenge{}}}`.
+  `{:error, {:unauthorized, %Sake.Auth.Challenge{}}}`.
 
   On the modern protocol the client declares the tasks extension, so a
   server may answer a tool call with a task; `call_tool/3` follows it to
@@ -162,7 +162,7 @@ defmodule Sake.Client do
     |> put_capability(opts[:sampling], "sampling", %{})
     |> put_capability(opts[:roots], "roots", %{"listChanged" => false})
     |> put_extensions(if(opts[:ui], do: Sake.UI.client_capability(), else: %{}))
-    |> put_extensions(Auth.extensions(auth))
+    |> put_extensions(Map.new(Auth.extensions(auth), &{Protocol.auth_extension(&1), %{}}))
   end
 
   defp put_capability(caps, nil, _name, _value), do: caps

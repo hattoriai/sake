@@ -1,5 +1,12 @@
 defmodule Sake.Auth.Config do
-  @moduledoc "The authorization configuration given to `{Sake, auth: [...]}`."
+  @moduledoc """
+  The authorization configuration given to `{Sake, auth: [...]}`.
+
+  `secret` is the Sake secret (`secret_key_base:` of the `Sake` child,
+  else `config :sake, :secret_key_base`), which `Sake` reads once when
+  it starts and puts here: it signs the consent form's request and the
+  DPoP nonces.
+  """
 
   @type t :: %__MODULE__{}
   defstruct subject: nil,
@@ -20,7 +27,8 @@ defmodule Sake.Auth.Config do
             allow_insecure: false,
             oauth_path: "/oauth",
             dpop: true,
-            name: nil
+            name: nil,
+            secret: nil
 
   @spec new(keyword()) :: t()
   def new(opts) do
@@ -45,7 +53,7 @@ defmodule Sake.Auth.Config do
       config
       | issuer: String.trim_trailing(config.issuer, "/"),
         trusted_issuers: trusted_issuers(config),
-        dpop: dpop_option(config.dpop),
+        dpop: dpop_option(config.dpop, config.secret),
         store_state: module.init(store_opts),
         name: config.name || uri.host
     }
@@ -75,14 +83,15 @@ defmodule Sake.Auth.Config do
   # DPoP needs jose to check proofs. By default it is on when jose is
   # there, and quietly off when not (the metadata then does not offer it);
   # a host that asks for it by name, nonces or `required:` and all, is
-  # told at start. `Sake.Auth.External` takes the same option.
-  @spec dpop_option(term()) :: false | %{nonce: boolean(), required: boolean()}
-  def dpop_option(false), do: false
+  # told at start. `Sake.Auth.External` takes the same option. Nonces are
+  # made with the configuration's `secret`.
+  @spec dpop_option(term(), binary() | nil) :: false | %{nonce: boolean(), required: boolean()}
+  def dpop_option(false, _secret), do: false
 
-  def dpop_option(true),
+  def dpop_option(true, _secret),
     do: if(Sake.Auth.JWT.available?(), do: %{nonce: false, required: false}, else: false)
 
-  def dpop_option(opts) when is_list(opts) do
+  def dpop_option(opts, secret) when is_list(opts) do
     Sake.Auth.JWT.require!("dpop:")
     nonce = Keyword.get(opts, :nonce, false)
     required = Keyword.get(opts, :required, false)
@@ -95,7 +104,7 @@ defmodule Sake.Auth.Config do
                "dpop: takes [nonce: boolean, required: boolean], got #{inspect(opts)}"
              )
 
-    if nonce and Sake.Secret.configured() == nil,
+    if nonce and secret == nil,
       do:
         raise(
           ArgumentError,
@@ -105,7 +114,7 @@ defmodule Sake.Auth.Config do
     %{nonce: nonce, required: required}
   end
 
-  def dpop_option(other),
+  def dpop_option(other, _secret),
     do:
       raise(
         ArgumentError,

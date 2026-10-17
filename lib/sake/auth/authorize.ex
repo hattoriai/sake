@@ -267,7 +267,7 @@ defmodule Sake.Auth.Authorize do
     if remembered do
       issue_and_redirect(conn, config, request, subject_id)
     else
-      blob = Plug.Crypto.sign(secret(), @salt, %{request: request, subject_id: subject_id})
+      blob = Plug.Crypto.sign(secret(config), @salt, %{request: request, subject_id: subject_id})
       known = Map.new(Config.scopes(config))
       redirect = URI.parse(request.redirect_uri)
 
@@ -304,7 +304,7 @@ defmodule Sake.Auth.Authorize do
     p = conn.body_params
 
     with {:ok, %{request: request, subject_id: subject_id}} <-
-           Plug.Crypto.verify(secret(), @salt, p["request"] || "", max_age: @request_ttl),
+           Plug.Crypto.verify(secret(config), @salt, p["request"] || "", max_age: @request_ttl),
          {:ok, principal} <- config.subject.from_conn(conn),
          true <- config.subject.id(principal) == subject_id do
       decision(conn, config, p["decision"], request, subject_id)
@@ -430,5 +430,12 @@ defmodule Sake.Auth.Authorize do
       else: ""
   end
 
-  defp secret, do: Sake.Secret.fetch!()
+  defp secret(%Config{secret: secret}) when is_binary(secret), do: secret
+
+  defp secret(_config),
+    do:
+      raise(
+        ArgumentError,
+        "Sake needs a secret: start {Sake, secret_key_base: ...}, or set config :sake, :secret_key_base"
+      )
 end

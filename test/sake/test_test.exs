@@ -3,7 +3,8 @@ defmodule Sake.TestTest do
 
   import Sake.Test
 
-  alias Sake.Client.{Challenge, ToolResult}
+  alias Sake.Auth.Challenge
+  alias Sake.Client.ToolResult
 
   defmodule Whoami do
     use Sake.Tool, name: "whoami", description: "Says who is calling", scope: "issues:read"
@@ -511,7 +512,7 @@ defmodule Sake.TestPlugTest do
 
   import Sake.Test
 
-  alias Sake.Client.Challenge
+  alias Sake.Auth.Challenge
   alias Sake.TestTest.Server
 
   @secret String.duplicate("s", 64)

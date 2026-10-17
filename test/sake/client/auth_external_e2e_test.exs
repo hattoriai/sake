@@ -110,7 +110,8 @@ defmodule Sake.Client.AuthExternalE2ETest do
     assert {:ok, session} = Client.connect(ctx.base <> "/mcp", auth: ctx.auth)
     assert {:ok, %{text: "hi"}, session} = Client.call_tool(session, "echo", %{"text" => "hi"})
 
-    assert {:error, {:insufficient_scope, %Client.Challenge{scope: ["issues:write"]}}, _session} =
+    assert {:error, {:insufficient_scope, %Sake.Auth.Challenge{scope: ["issues:write"]}},
+            _session} =
              Client.call_tool(session, "slow", %{"n" => 1})
   end
 

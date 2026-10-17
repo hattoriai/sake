@@ -225,7 +225,8 @@ defmodule Sake.Client.AuthMachineE2ETest do
     # `slow` needs issues:write, which this client may not have: the
     # step-up asks for it, the authorization server grants issues:read
     # again, and the 403 stands.
-    assert {:error, {:insufficient_scope, %Client.Challenge{scope: ["issues:write"]}}, _session} =
+    assert {:error, {:insufficient_scope, %Sake.Auth.Challenge{scope: ["issues:write"]}},
+            _session} =
              Client.call_tool(session, "slow", %{"n" => 1})
   end
 

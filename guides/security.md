@@ -201,7 +201,7 @@ subject, so the same `sub` from two issuers (or one issuer and
 
 ## The CIMD fetch guard, and what it does not cover
 
-`Sake.Auth.CIMD.fetch/2` resolves the client-supplied HTTPS host's
+The CIMD fetch resolves the client-supplied HTTPS host's
 addresses and refuses to proceed unless every one of them is a public
 unicast address (no loopback, link-local, RFC 1918, carrier-grade NAT,
 multicast, reserved or benchmarking range, and no IPv6 address that
@@ -344,6 +344,6 @@ auth: [..., allow_insecure: true]
 ```
 
 Lets the issuer be an `http://` URL (for `mix dev` and tests) and widens
-what `Sake.Auth.CIMD` will fetch from to include plain `http://` client-id
+what the CIMD fetch will fetch from to include plain `http://` client-id
 URLs. Never set this outside development — every guarantee above about
 tokens travelling only over TLS depends on it being false.

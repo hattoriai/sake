@@ -24,6 +24,7 @@ defmodule Sake.Plug do
   @behaviour Plug
   import Plug.Conn
 
+  alias Sake.Auth.Challenge
   alias Sake.{Context, JSONRPC, Protocol, Trace}
   alias Sake.Plug.{Headers, Origin, ProtocolVersion}
   alias Sake.Server.{Dispatch, Legacy, Session}
@@ -64,11 +65,23 @@ defmodule Sake.Plug do
   defp authenticate(conn, %{auth: false} = opts), do: route(conn, opts)
 
   defp authenticate(conn, opts) do
-    case Sake.Auth.Bearer.check(conn, opts) do
+    case Sake.Auth.authenticate(conn, opts) do
       {:ok, conn} -> route(conn, opts)
-      {:error, conn} -> conn
+      {:error, challenge} -> send_challenge(conn, challenge)
     end
   end
+
+  # A refused token: the challenges, the DPoP nonce a `use_dpop_nonce`
+  # error asks for, and the JSON-RPC error of an MCP endpoint.
+  defp send_challenge(conn, %Challenge{status: 401} = challenge) do
+    conn
+    |> put_nonce(challenge.nonce)
+    |> prepend_resp_headers(for(c <- challenge.www_authenticate, do: {"www-authenticate", c}))
+    |> send_error(401, nil, JSONRPC.code(:invalid_request), "Unauthorized")
+  end
+
+  defp put_nonce(conn, nil), do: conn
+  defp put_nonce(conn, nonce), do: put_resp_header(conn, "dpop-nonce", nonce)
 
   defp route(%{method: "POST"} = conn, opts), do: post(conn, opts)
 
@@ -100,7 +113,7 @@ defmodule Sake.Plug do
 
   defp post(conn, opts) do
     with :ok <- accept(conn),
-         {:ok, json, conn} <- Sake.Plug.Body.json(conn, opts.json_limit) do
+         {:ok, json, conn} <- Sake.Auth.Body.json(conn, opts.json_limit) do
       message(conn, opts, json)
     else
       {:error, :accept} ->
@@ -501,9 +514,12 @@ defmodule Sake.Plug do
   # challenge: no token the client could step up to would lift it.
   def outcome_to_response(conn, id, {:forbidden, scopes}) do
     conn =
-      if conn.assigns[:sake_auth] && scopes != [],
-        do: Sake.Auth.Bearer.insufficient_scope(conn, scopes),
-        else: conn
+      if conn.assigns[:sake_auth] && scopes != [] do
+        %Challenge{www_authenticate: [header]} = Sake.Auth.insufficient_scope(conn, scopes)
+        put_resp_header(conn, "www-authenticate", header)
+      else
+        conn
+      end
 
     send_json(conn, 403, %{
       "jsonrpc" => "2.0",

@@ -249,9 +249,7 @@ defmodule Sake.Test do
 
   # A token bound to a new key, as `Sake.Client.Auth` keeps one.
   defp bound_token(opts) do
-    pem = Sake.Auth.DPoP.generate_key()
-    {:ok, key} = Sake.Auth.JWT.private_key(pem)
-    jkt = key |> Sake.Auth.JWT.public_jwk() |> Sake.Auth.JWT.thumbprint()
+    {pem, jkt} = Sake.Auth.dpop_key()
 
     %{"access_token" => issue(opts, jkt), "token_type" => "DPoP", "dpop_key" => pem}
   end
@@ -280,16 +278,13 @@ defmodule Sake.Test do
             "Sake.Test.access_token/1 needs subject: (the ID your subject module fetches), or subject: nil for a machine client"
     end
 
-    {token, _record} =
-      Sake.Auth.Tokens.issue_access(Sake.Auth.config(), %{
-        client_id: opts[:client_id] || "sake-test",
-        subject_id: opts[:subject] && to_string(opts[:subject]),
-        scopes: opts[:scopes] || [],
-        resource: opts[:resource] || @origin <> "/mcp",
-        jkt: jkt
-      })
-
-    token
+    Sake.Auth.issue_access_token(Sake.Auth.config(), %{
+      client_id: opts[:client_id] || "sake-test",
+      subject_id: opts[:subject] && to_string(opts[:subject]),
+      scopes: opts[:scopes] || [],
+      resource: opts[:resource] || @origin <> "/mcp",
+      jkt: jkt
+    })
   end
 
   # ---- the simulated token

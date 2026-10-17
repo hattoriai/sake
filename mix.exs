@@ -85,6 +85,9 @@ defmodule Sake.MixProject do
       source_url: @source_url,
       # The banner of the README, at the same relative path in the docs.
       assets: %{"media" => "media"},
+      # The changelog names modules and functions that are gone or
+      # internal now.
+      skip_undefined_reference_warnings_on: ["CHANGELOG.md"],
       logo: "media/logo.svg",
       extras: [
         "README.md",
@@ -161,13 +164,9 @@ defmodule Sake.MixProject do
           Sake.Auth.External,
           Sake.Auth.Code,
           Sake.Auth.TokenRecord,
-          Sake.Auth.Bearer,
+          Sake.Auth.Challenge,
           Sake.Auth.WellKnown,
           Sake.Auth.Authorize,
-          Sake.Auth.Token,
-          Sake.Auth.Revoke,
-          Sake.Auth.DCR,
-          Sake.Auth.CIMD,
           Sake.Auth.RouterPlug,
           Sake.Auth.Store,
           Sake.Auth.Store.ETS,
@@ -177,7 +176,6 @@ defmodule Sake.MixProject do
         Client: [
           Sake.Client,
           Sake.Client.Session,
-          Sake.Client.Challenge,
           Sake.Client.ToolResult,
           Sake.Client.Auth,
           Sake.Client.Auth.Browser,

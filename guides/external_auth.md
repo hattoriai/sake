@@ -293,8 +293,8 @@ exactly as a bound token of `Sake.Auth` (see the authorization guide):
 sent as a bearer token, with a proof of another key, for another URL, or
 a replayed proof, it is refused. `dpop:` takes the same values as for
 `Sake.Auth`: `dpop: [nonce: true]` makes the endpoint require its own
-nonces (they are the resource's, made with the Sake secret, independent
-of the authorization server's), and `dpop: [required: true]` refuses
+nonces (they are the resource's, made with the Sake secret, which `Sake`
+reads once when it starts, independent of the authorization server's), and `dpop: [required: true]` refuses
 unbound tokens and says `dpop_bound_access_tokens_required` in the
 metadata. Whether your authorization server binds tokens at all is its
 own setting (Keycloak and Okta, among others, can).
@@ -327,7 +327,8 @@ grants Sake's authorization server offers. An external authorization
 server's grants are its own business: by default its endpoints declare
 none, and `extensions: [:client_credentials, :enterprise]` declares the
 ones it does offer (`io.modelcontextprotocol/oauth-client-credentials`,
-`io.modelcontextprotocol/enterprise-managed-authorization`).
+`io.modelcontextprotocol/enterprise-managed-authorization`, the
+identifiers of `Sake.Protocol.auth_extension/1`).
 
 ## Testing
 

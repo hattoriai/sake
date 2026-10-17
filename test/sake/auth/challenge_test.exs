@@ -1,6 +1,6 @@
-defmodule Sake.Client.ChallengeTest do
+defmodule Sake.Auth.ChallengeTest do
   use ExUnit.Case, async: true
-  alias Sake.Client.Challenge
+  alias Sake.Auth.Challenge
 
   test "parses bearer challenges" do
     assert %Challenge{

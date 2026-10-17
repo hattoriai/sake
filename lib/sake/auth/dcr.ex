@@ -1,13 +1,12 @@
 defmodule Sake.Auth.DCR do
-  @moduledoc """
-  Dynamic Client Registration (RFC 7591) for clients that do not use Client
-  ID Metadata Documents. Public clients only; no authentication. Put a rate
-  limit in front of it.
-
-  A client that sends no `grant_types` is registered for both the
-  authorization code and the refresh token grants, and the response says
-  so.
-  """
+  @moduledoc false
+  # Dynamic Client Registration (RFC 7591) for clients that do not use Client
+  # ID Metadata Documents. Public clients only; no authentication. Put a rate
+  # limit in front of it.
+  #
+  # A client that sends no `grant_types` is registered for both the
+  # authorization code and the refresh token grants, and the response says
+  # so.
   @behaviour Plug
   import Plug.Conn
 
@@ -25,7 +24,7 @@ defmodule Sake.Auth.DCR do
     if config.dcr do
       # Every answer goes out on the conn the body read returned: the one
       # `call/2` was given is stale once the body has been read.
-      case Sake.Plug.Body.json(conn, 65_536) do
+      case Sake.Auth.Body.json(conn, 65_536) do
         {:ok, doc, conn} when is_map(doc) -> register(conn, config, doc)
         {:ok, _doc, conn} -> error(conn, "invalid_client_metadata")
         {:error, _reason, conn} -> error(conn, "invalid_client_metadata")

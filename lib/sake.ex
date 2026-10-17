@@ -59,44 +59,33 @@ defmodule Sake do
     if secret = opts[:secret_key_base],
       do: :persistent_term.put({Sake, :secret_key_base}, Sake.Secret.resolve(secret))
 
+    # Authorization reads the secret from its configurations, never from
+    # the rest of Sake: it is read here once, for them.
+    secret =
+      if opts[:auth] || opts[:external_auth] not in [nil, []], do: Sake.Secret.configured()
+
     auth =
       case opts[:auth] do
         nil -> nil
-        auth_opts -> Sake.Auth.Config.new(auth_opts)
+        auth_opts -> Sake.Auth.Config.new(Keyword.put(auth_opts, :secret, secret))
       end
 
-    external = Sake.Auth.External.new_all(opts[:external_auth] || [], auth)
-    Sake.Auth.Replay.configure(replay_store(opts[:replay], auth))
-
-    :persistent_term.put({Sake, :auth}, auth)
-    :persistent_term.put({Sake, :external_auth}, external)
+    external =
+      (opts[:external_auth] || [])
+      |> Enum.map(fn {name, ext_opts} -> {name, Keyword.put(ext_opts, :secret, secret)} end)
+      |> Sake.Auth.External.new_all(auth)
 
     children =
       if(Keyword.get(opts, :streams, true),
         do: [Sake.Plug.Streams.child_spec(pubsub: opts[:pubsub])],
         else: []
       ) ++
-        store_children(auth) ++
-        if(auth || external != %{}, do: [Sake.Auth.CIMD.Cache, Sake.Auth.Replay], else: []) ++
-        if(external != %{}, do: [Sake.Auth.External.Cache], else: []) ++
+        [{Sake.Auth.Supervisor, auth: auth, external: external, replay: opts[:replay]}] ++
         tasks_children(Keyword.get(opts, :tasks, [])) ++
         cluster_children(Sake.Cluster.local_state(opts, auth, external))
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Sake.Supervisor)
   end
-
-  defp store_children(%Sake.Auth.Config{store: {module, opts}}) do
-    if function_exported?(module, :child_spec, 1), do: [module.child_spec(opts)], else: []
-  end
-
-  defp store_children(nil), do: []
-
-  defp replay_store({module, opts}, _auth), do: {module, module.init(opts)}
-
-  defp replay_store(nil, %Sake.Auth.Config{store: {module, _}, store_state: state}),
-    do: {module, state}
-
-  defp replay_store(nil, nil), do: nil
 
   defp tasks_children(false), do: []
   defp tasks_children(opts), do: [{Sake.Tasks, opts}]

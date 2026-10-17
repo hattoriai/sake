@@ -107,7 +107,7 @@ refuses it, with the scopes it needs:
 
 ```elixir
 client = connect(MyApp.MCP, scope: user, scopes: ["issues:read"])
-assert {:error, {:insufficient_scope, %Sake.Client.Challenge{scope: ["issues:write"]}}} =
+assert {:error, {:insufficient_scope, %Sake.Auth.Challenge{scope: ["issues:write"]}}} =
          call_tool(client, "close_issue", %{"id" => 1})
 ```
 
