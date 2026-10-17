@@ -30,7 +30,8 @@ it, and Sake only checks its tokens: see `guides/external_auth.md`.
    then gets `access_denied`.
 5. The consent page (`Sake.Auth.Consent.Default`, or your own) shows the
    client's name, the endpoint URL (the resource) and the scopes it asked
-   for. Approving redirects back to
+   for, narrowed to those the person may hold when the subject module
+   defines `scopes_for/2` (below). Approving redirects back to
    the client with an authorization code.
 6. The client exchanges the code (with its PKCE verifier) for an access
    token and a refresh token at `/oauth/token`.
@@ -38,6 +39,57 @@ it, and Sake only checks its tokens: see `guides/external_auth.md`.
    a key the client holds, when the client uses DPoP (below), or as a
    bearer token — and the refresh token gets a new pair when the access
    token expires.
+
+## Who may hold which scopes
+
+A client asks for scopes, and with no `scope` parameter it asks for
+every scope the servers declare (Claude Code does). Without more, Sake
+grants what was asked: anyone `authorize_resource?/2` lets through gets
+every scope, a viewer `issues:write` as much as an admin. Define
+`scopes_for/2` on the subject module to say which scopes each person may
+hold for an endpoint URL, as a list or `:all`:
+
+```elixir
+defmodule MyApp.MCP.Subject do
+  @behaviour Sake.Auth.Subject
+  # from_conn/1, id/1, fetch/1, display/1 as in the quickstart
+
+  # Only staff may connect at all.
+  @impl true
+  def authorize_resource?(user, _resource), do: user.role in [:admin, :analyst]
+
+  # Analysts read; admins also write.
+  @impl true
+  def scopes_for(%{role: :admin}, _resource), do: :all
+  def scopes_for(%{role: :analyst}, _resource), do: ["reports:read"]
+end
+```
+
+Sake then narrows the scopes everywhere a grant is made or used:
+
+- **Authorize**: the consent page shows, and the code carries, only
+  the requested scopes the person may hold. A request left with none of
+  its scopes is refused with `access_denied` ("You may not hold any of
+  the requested scopes").
+- **Machine clients and JWT grants**: the token gets only the scopes its
+  principal (`client_principal/1`, `assertion_principal/2`) may hold, or
+  `invalid_scope` when none is left.
+- **Refresh**: the grant is renewed with only the scopes the person may
+  still hold; with none left, the refresh fails with `invalid_grant` and
+  the grant is revoked, as for a person `authorize_resource?/2` refuses.
+- **Every request**: the token's scopes are narrowed to those of the
+  principal `fetch/1` has just loaded, before any component is listed or
+  called. An admin demoted to analyst stops seeing write tools at once,
+  not when the access token expires. A wider role never adds a scope the
+  token was not granted: that takes a new authorization.
+
+`scopes_for/2` runs on every request, as `fetch/1` does, so keep it a
+lookup on the principal you already loaded. Anything it returns other
+than a list or `:all` holds no scope. The tokens of an external
+authorization server (`guides/external_auth.md`) are not narrowed: their
+scopes are that server's to grant. A remembered consent covers the
+narrowed scopes, so a person promoted later is asked again for the
+scopes now within reach.
 
 ## The three client kinds
 
