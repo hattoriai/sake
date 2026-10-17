@@ -16,7 +16,7 @@ defmodule Sake.Client.Auth.Grant do
   # the client has one.
 
   alias Sake.Auth.{DPoP, JWT}
-  alias Sake.Client.Auth.HTTP
+  alias Sake.Client.Auth.{HTTP, IDToken}
 
   @jwt_bearer "urn:ietf:params:oauth:grant-type:jwt-bearer"
   @device_code "urn:ietf:params:oauth:grant-type:device_code"
@@ -97,9 +97,12 @@ defmodule Sake.Client.Auth.Grant do
     end
   end
 
+  # A request for `openid` sends a nonce (OpenID Connect Core §3.1.2.1),
+  # which the ID token must carry back.
   defp authorization(server, registration, redirect_uri, scopes, step_up) do
     {verifier, challenge} = pkce()
     state = 24 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
+    nonce = if "openid" in scopes, do: IDToken.nonce()
 
     params =
       [
@@ -111,11 +114,13 @@ defmodule Sake.Client.Auth.Grant do
         state: state,
         resource: server.resource
       ] ++
-        if(scopes == [], do: [], else: [scope: Enum.join(scopes, " ")]) ++ step_up_params(step_up)
+        if(scopes == [], do: [], else: [scope: Enum.join(scopes, " ")]) ++
+        if(nonce, do: [nonce: nonce], else: []) ++ step_up_params(step_up)
 
     {params,
      %{
        state: state,
+       nonce: nonce,
        verifier: verifier,
        redirect_uri: redirect_uri,
        issuer: server.issuer,

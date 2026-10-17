@@ -129,6 +129,26 @@ no `acr_values` or `max_age`:
   machine grant ends with `{:error, {:auth,
   {:insufficient_user_authentication, challenge}}}`.
 
+OpenID Connect (#72) adds to the records, the store, the routes and the
+subject module. Nothing changes on the wire without `openid:`:
+
+- `Sake.Auth.Code` has a `nonce` field (the authorization request's
+  OpenID Connect `nonce`), which a store must keep.
+  `Sake.Auth.Migration.up/1` adds `sake_oauth_codes.nonce`: an existing
+  database needs it (in a migration of your own, or `down/1` and `up/1`
+  again where losing the data does not matter).
+- `Sake.Auth.Subject` has a new optional callback, `claims/2`: a subject
+  module that already defines `claims/2` for something else must
+  rename it.
+- `sake_oauth_api()` and `Sake.Auth.RouterPlug` route `GET /jwks` and
+  `GET` and `POST /userinfo` under the OAuth scope (a 404 without
+  `openid:`), and `Sake.Auth.WellKnown` answers
+  `/.well-known/openid-configuration` (a 404 without it): a host with
+  routes of its own at those paths must move them.
+- `Sake.Client.Auth` sends a `nonce` with every authorization request
+  whose scopes include `openid` (a server may list it in its
+  `scopes_supported`), with or without `openid: true`.
+
 ### Authorization
 
 - The device authorization grant (RFC 8628), for a CLI, a headless agent
@@ -190,6 +210,33 @@ no `acr_values` or `max_age`:
   "Step-up authentication: MFA for a dangerous tool" in
   `guides/authorization.md`, and "Step-up authentication: the claims to
   issue" in `guides/external_auth.md`.
+- OpenID Connect, with `openid: true` (or `[id_token_ttl: seconds]`) and
+  `signing_keys: [[kid: "...", pem: pem]]` in the auth config (it needs
+  `jose`; Sake raises at start without it, or without a key). The keys
+  are PEM private keys, RSA (RS256), P-256 (ES256) or P-384 (ES384),
+  each with a `kid` of its own: the first signs, all of them are
+  published at `GET /oauth/jwks` (the metadata's `jwks_uri`), so a key
+  is rotated by putting the new one first. `openid`, `profile` and
+  `email` are the authorization server's own scopes, granted on the
+  consent page (and narrowed by `scopes_for/2`) like any other. A grant
+  for `openid` (the code flow, a pushed request, the device flow, and
+  every refresh) gets an `id_token` with `iss`, `sub` (the subject
+  module's `id/1`), `aud` and `azp` (the client), `iat`, `exp`, `acr`
+  and `auth_time` when known (a refresh keeps the original ones),
+  `at_hash`, and, on the code flow, the request's `nonce` (at most 512
+  bytes; `invalid_request` otherwise). The optional
+  `c:Sake.Auth.Subject.claims/2` returns the person's `profile` and
+  `email` claims (none by default; Sake never reads your user schema),
+  which `GET` or `POST /oauth/userinfo` returns with `sub`, for a Bearer
+  or DPoP token holding `openid` whatever resource it is bound to;
+  without `openid` it is a 403 `insufficient_scope`, and every refusal
+  is an OAuth error (RFC 6750), not JSON-RPC. A request for `openid`
+  may name the userinfo endpoint as its `resource`, and gets it when it
+  names none and none can be chosen. `/.well-known/openid-configuration`
+  serves the authorization server metadata with `userinfo_endpoint`,
+  `subject_types_supported`, `id_token_signing_alg_values_supported`
+  and `claims_supported`. See "OpenID Connect: who signed in" in
+  `guides/authorization.md`.
 
 ### Client
 
@@ -223,6 +270,14 @@ no `acr_values` or `max_age`:
   `{:error, {:insufficient_user_authentication, challenge}, session}`.
   `Sake.Auth.Challenge` has `acr_values` and `max_age`. See "Step-up on
   how the person signed in" in `guides/client.md`.
+- `openid: true` in `Sake.Client.Auth` adds the `openid` scope to the
+  code and device flows with a server that lists it, sends a `nonce`,
+  and checks the `id_token` it gets back (the signature with a key from
+  the server's `jwks_uri`, `iss`, `aud`, `exp`, the `nonce`, `at_hash`;
+  a refresh's must name the same `sub`), or ends with `{:error, {:auth,
+  {:invalid_id_token, reason}}}`. `Sake.Client.Auth.id_token_claims/1`
+  returns the verified claims of a session. It needs `jose`. See "Who
+  signed in: OpenID Connect" in `guides/client.md`.
 
 ### Server
 

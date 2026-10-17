@@ -4,7 +4,9 @@ defmodule Sake.Auth.WellKnown do
   path) and `/.well-known/oauth-authorization-server`. The protected
   resource metadata of an endpoint on an external authorization server
   (`Sake.Auth.External`) names that server; the authorization server
-  metadata is only `Sake.Auth`'s. Mount at the root:
+  metadata is only `Sake.Auth`'s, and so is
+  `/.well-known/openid-configuration`, OpenID Connect Discovery's, which
+  is there with `openid:` alone. Mount at the root:
 
       forward "/.well-known", Sake.Auth.WellKnown
 
@@ -40,6 +42,12 @@ defmodule Sake.Auth.WellKnown do
       ),
       do: authorization_server(conn)
 
+  def call(%{method: "GET", path_info: ["openid-configuration"]} = conn, _opts),
+    do: openid_configuration(conn)
+
+  def call(%{method: "GET", path_info: [".well-known", "openid-configuration"]} = conn, _opts),
+    do: openid_configuration(conn)
+
   def call(conn, _opts), do: send_resp(conn, 404, "")
 
   # The endpoint at the path names its authorization server: the
@@ -60,6 +68,16 @@ defmodule Sake.Auth.WellKnown do
     case Sake.Auth.configured() do
       nil -> send_resp(conn, 404, "")
       config -> json(conn, Metadata.authorization_server(config))
+    end
+  end
+
+  # Only with `openid:`: without it, Sake is no OpenID Provider.
+  defp openid_configuration(conn) do
+    with %{} = config <- Sake.Auth.configured(),
+         %{} = metadata <- Metadata.openid_configuration(config) do
+      json(conn, metadata)
+    else
+      nil -> send_resp(conn, 404, "")
     end
   end
 

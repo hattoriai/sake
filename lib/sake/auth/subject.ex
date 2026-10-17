@@ -83,6 +83,21 @@ defmodule Sake.Auth.Subject do
       sign-in that still does not meet it calls it again: make sure the
       sign-in it sends the person to can. Default: an error page, "Sign in
       again to continue", which ends the request there.
+
+  ## Who the person is (OpenID Connect)
+
+  With `openid:` (see `Sake.Auth.Config`), a client granted the `openid`
+  scope gets an ID token naming the person by `c:id/1` (its `sub`), and
+  may ask the userinfo endpoint for more. The optional `c:claims/2` says
+  what: the claims of the person for the scopes granted (`profile`,
+  `email`), as a map of OpenID Connect claim names (`"name"`, `"email"`,
+  `"email_verified"`, ...) to JSON values. Sake never reads your user
+  schema: what it returns is all a client learns. Default: no claims
+  but `sub`.
+
+  `c:scopes_for/2` applies to these scopes as to any other: a host whose
+  `scopes_for/2` returns a list withholds `openid`, `profile` and
+  `email` unless the list names them.
   """
 
   @callback from_conn(Plug.Conn.t()) :: {:ok, term()} | :error
@@ -115,12 +130,16 @@ defmodule Sake.Auth.Subject do
               %{acr_values: [String.t()], max_age: non_neg_integer() | nil}
             ) :: Plug.Conn.t()
 
+  @doc "The person's OpenID Connect claims for the granted scopes (`profile`, `email`); default none."
+  @callback claims(principal :: term(), scopes :: [String.t()]) :: map()
+
   @optional_callbacks authorize_resource?: 2,
                       scopes_for: 2,
                       client_principal: 1,
                       assertion_principal: 2,
                       authentication: 1,
-                      reauthenticate: 2
+                      reauthenticate: 2,
+                      claims: 2
 
   @doc false
   # How the person of `conn` signed in, normalized; unknown without
@@ -130,6 +149,19 @@ defmodule Sake.Auth.Subject do
     if exported?(subject, :authentication, 1),
       do: Sake.Auth.Authentication.context(subject.authentication(conn)),
       else: Sake.Auth.Authentication.none()
+  end
+
+  @doc false
+  # The person's claims for `scopes`, with string keys: none without
+  # `claims/2`, and none from an answer that is not a map.
+  @spec claims(module(), term(), [String.t()]) :: map()
+  def claims(subject, principal, scopes) do
+    with true <- exported?(subject, :claims, 2),
+         %{} = claims <- subject.claims(principal, scopes) do
+      Map.new(claims, fn {name, value} -> {to_string(name), value} end)
+    else
+      _ -> %{}
+    end
   end
 
   @doc false

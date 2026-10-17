@@ -164,13 +164,26 @@ defmodule Sake.Client.Auth do
       pushed anyway. A push the server refuses ends the flow with
       `{:error, {:auth, {:par_failed, status, body}}}`.
 
+  OpenID Connect tells the client who signed in:
+
+    * `:openid` — `true` adds the `openid` scope to the person's grants
+      (the code flow and the device flow) with an authorization server
+      whose metadata lists it, sends a `nonce` with an authorization
+      request, and checks the `id_token` that comes back with the
+      tokens: its signature (with a key from the server's `jwks_uri`),
+      `iss`, `aud` (the client), `exp`, the `nonce` and `at_hash`; an ID
+      token from a refresh must name the same person. An ID token that
+      fails ends the flow with `{:error, {:auth, {:invalid_id_token,
+      reason}}}`. `id_token_claims/1` returns the verified claims. It
+      needs the optional `jose` dependency. Default `false`.
+
   Without `auth:`, a 401 is returned as
   `{:error, {:unauthorized, %Sake.Auth.Challenge{}}}` and the caller
   handles it. A failure inside the flow is `{:error, {:auth, reason}}`.
   """
 
   alias Sake.Auth.{Challenge, DPoP, JWT}
-  alias Sake.Client.Auth.{Browser, Device, Discovery, Enterprise, Grant, Registration}
+  alias Sake.Client.Auth.{Browser, Device, Discovery, Enterprise, Grant, IDToken, Registration}
 
   @type t :: %__MODULE__{}
 
@@ -238,6 +251,7 @@ defmodule Sake.Client.Auth do
     # stand-in for `Process.sleep/1`.
     :sleep,
     grant: :authorization_code,
+    openid: false,
     dpop: :auto,
     par: :auto,
     clients: %{},
@@ -275,6 +289,7 @@ defmodule Sake.Client.Auth do
       store: opts[:store],
       dpop: dpop(Keyword.get(opts, :dpop, :auto)),
       par: par(Keyword.get(opts, :par, :auto)),
+      openid: openid(Keyword.get(opts, :openid, false)),
       req: defaults[:req] || [],
       static: opts[:static] == true
     }
@@ -294,6 +309,20 @@ defmodule Sake.Client.Auth do
     do: [grant]
 
   def extensions(_auth), do: []
+
+  @doc """
+  The verified claims of the ID token of a session's authorization, with
+  `openid: true`: `{:ok, claims}` (`"sub"`, the person's ID at the
+  authorization server, `"iss"`, `"auth_time"`, ...), or `:error` when
+  the session holds none (no `auth:`, no authorization yet, a server
+  without OpenID Connect, a machine grant). For the `profile` and
+  `email` claims, ask the server's userinfo endpoint with the token.
+  """
+  @spec id_token_claims(%{auth: t() | nil}) :: {:ok, map()} | :error
+  def id_token_claims(%{auth: %__MODULE__{token: %{"id_token_claims" => %{} = claims}}}),
+    do: {:ok, claims}
+
+  def id_token_claims(_session), do: :error
 
   defp device_prompt(nil), do: &Device.prompt/1
   defp device_prompt(prompt) when is_function(prompt, 1), do: prompt
@@ -316,6 +345,16 @@ defmodule Sake.Client.Auth do
 
   defp par(other),
     do: raise(ArgumentError, "auth: :par must be :auto or false, got #{inspect(other)}")
+
+  defp openid(false), do: false
+
+  defp openid(true) do
+    JWT.require!("auth: [openid: true]")
+    true
+  end
+
+  defp openid(other),
+    do: raise(ArgumentError, "auth: :openid must be true or false, got #{inspect(other)}")
 
   defp grant(opts) do
     grant = Keyword.get(opts, :grant, :authorization_code)
@@ -695,6 +734,8 @@ defmodule Sake.Client.Auth do
   end
 
   defp authorize_code(auth, server, scopes, step_up) do
+    scopes = openid_scope(auth, server, scopes)
+
     case Registration.client(auth, server) do
       {:ok, registration, auth} ->
         pem = new_key(auth, server)
@@ -710,8 +751,10 @@ defmodule Sake.Client.Auth do
                  code,
                  auth.req,
                  proofs(auth, pem, server.metadata["token_endpoint"])
-               ) do
-          {:ok, put(auth, {:token, auth.url}, token(body, server, registration, scopes, pem))}
+               ),
+             {:ok, identity} <- identify(auth, server, registration, body, request[:nonce]) do
+          token = Map.merge(token(body, server, registration, scopes, pem), identity)
+          {:ok, put(auth, {:token, auth.url}, token)}
         else
           {:error, reason} -> {:error, reason, auth}
         end
@@ -720,6 +763,40 @@ defmodule Sake.Client.Auth do
         {:error, reason, auth}
     end
   end
+
+  # With `openid: true`, the person's grants ask for `openid` from a
+  # server that lists it.
+  defp openid_scope(%__MODULE__{openid: true}, server, scopes) do
+    if "openid" in List.wrap(server.metadata["scopes_supported"]) and "openid" not in scopes,
+      do: scopes ++ ["openid"],
+      else: scopes
+  end
+
+  defp openid_scope(_auth, _server, scopes), do: scopes
+
+  # The ID token of a token answer, checked (`Sake.Client.Auth.IDToken`),
+  # and what the token keeps of it: nothing without `openid: true`, or
+  # from a server that sent none.
+  defp identify(%__MODULE__{openid: true} = auth, server, registration, body, nonce)
+       when is_map_key(body, "id_token") do
+    jwks_uri = server.metadata["jwks_uri"]
+    expect = %{nonce: nonce}
+
+    with {:ok, claims} <-
+           IDToken.verify(
+             body,
+             server.issuer,
+             jwks_uri,
+             registration["client_id"],
+             expect,
+             auth.req
+           ) do
+      {:ok,
+       %{"id_token" => body["id_token"], "id_token_claims" => claims, "jwks_uri" => jwks_uri}}
+    end
+  end
+
+  defp identify(_auth, _server, _registration, _body, _nonce), do: {:ok, %{}}
 
   # RFC 9126: the request is pushed to the server, with a DPoP proof
   # when the client uses DPoP (which binds the code to its key), and the
@@ -745,6 +822,8 @@ defmodule Sake.Client.Auth do
   # RFC 8628: the device authorization request, the person told where to
   # go, then the token endpoint polled until they decide.
   defp authorize_device(auth, server, scopes, step_up) do
+    scopes = openid_scope(auth, server, scopes)
+
     with true <-
            is_binary(server.metadata["device_authorization_endpoint"]) ||
              {:error, :no_device_endpoint, auth},
@@ -761,8 +840,10 @@ defmodule Sake.Client.Auth do
                registration,
                start,
                proofs(auth, pem, server.metadata["token_endpoint"])
-             ) do
-        {:ok, put(auth, {:token, auth.url}, token(body, server, registration, scopes, pem))}
+             ),
+           {:ok, identity} <- identify(auth, server, registration, body, nil) do
+        token = Map.merge(token(body, server, registration, scopes, pem), identity)
+        {:ok, put(auth, {:token, auth.url}, token)}
       else
         {:error, reason} -> {:error, reason, auth}
       end
@@ -1001,12 +1082,34 @@ defmodule Sake.Client.Auth do
              token["resource"],
              auth.req,
              proofs(auth, token["dpop_key"], endpoint)
-           ) do
-      {:ok, put(auth, {:token, auth.url}, refreshed(body, token))}
+           ),
+         {:ok, identity} <- reidentify(auth, token, registration, body) do
+      {:ok, put(auth, {:token, auth.url}, Map.merge(refreshed(body, token), identity))}
     else
       _ -> {:error, put(auth, {:token, auth.url}, Map.delete(token, "refresh_token"))}
     end
   end
+
+  # A refresh's ID token (OpenID Connect Core §12.2) is checked as the
+  # first one was, without a nonce, and must name the same person; an
+  # answer without one keeps the ID token there was.
+  defp reidentify(%__MODULE__{openid: true} = auth, token, registration, body)
+       when is_map_key(body, "id_token") do
+    expect = %{sub: get_in(token, ["id_token_claims", "sub"])}
+
+    with {:ok, claims} <-
+           IDToken.verify(
+             body,
+             token["issuer"],
+             token["jwks_uri"],
+             registration["client_id"],
+             expect,
+             auth.req
+           ),
+         do: {:ok, %{"id_token" => body["id_token"], "id_token_claims" => claims}}
+  end
+
+  defp reidentify(_auth, _token, _registration, _body), do: {:ok, %{}}
 
   # ---- DPoP keys
 

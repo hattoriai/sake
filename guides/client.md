@@ -545,6 +545,40 @@ nobody to sign in again: the 401 comes back as
 at once. With `static: true`, as for any refusal, it is
 `{:error, {:insufficient_user_authentication, challenge}, session}`.
 
+### Who signed in: OpenID Connect
+
+An access token says nothing the client can read. With `openid: true`,
+a client authorized by a person learns who they are from the
+authorization server, when it speaks OpenID Connect (Sake's own does
+with `openid:`, see "OpenID Connect" in `guides/authorization.md`):
+
+```elixir
+{:ok, session} =
+  Sake.Client.connect("https://mcp.example.com/mcp", auth: [openid: true])
+
+{:ok, %{"sub" => sub, "iss" => issuer}} = Sake.Client.Auth.id_token_claims(session)
+```
+
+The code flow and the device flow then ask for the `openid` scope too,
+from a server whose metadata lists it in `scopes_supported` (a server
+that does not gets the request as before, and the session no claims),
+and the code flow sends a `nonce`. The ID token that comes back is
+checked before the token is kept: its signature, with a key from the
+server's `jwks_uri`; `iss`, the server's issuer; `aud`, the client's
+`client_id`; `exp`; the `nonce`; and `at_hash`, against the access
+token. A refresh that brings a new ID token is checked the same way,
+without a nonce, and must name the same `sub`. An ID token that fails
+ends the flow with `{:error, {:auth, {:invalid_id_token, reason}}}`.
+The verified claims stay with the token (in the `:store` too), and
+`Sake.Client.Auth.id_token_claims/1` returns them, or `:error` without
+any (no `auth:`, no authorization yet, a machine grant, a server without
+OpenID Connect).
+
+The ID token names the person (`sub`), and says how and when they
+signed in (`auth_time`, `acr`); their name and address are at the
+server's userinfo endpoint, which takes the session's access token. It
+needs the optional `jose` dependency: `openid: true` raises without it.
+
 ### DPoP
 
 With DPoP (RFC 9449, SEP-1932) the client's tokens are bound to a key it

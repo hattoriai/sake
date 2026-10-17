@@ -14,7 +14,17 @@ defmodule Sake.Auth.AuthorizationRequest do
   # parameter of that name, or from the proof of a pushed request. It
   # holds `"acr_values"` (a list) and `"max_age"` (seconds) when the
   # client asks how the person must have signed in (RFC 9470), on every
-  # path: the authorize endpoint, a pushed request, a device request.
+  # path: the authorize endpoint, a pushed request, a device request. It
+  # holds `"nonce"` with `openid:`, when the client sends OpenID
+  # Connect's `nonce` (on the code flow alone), for the ID token.
+  #
+  # With `openid:`, the scopes may include the authorization server's
+  # own `openid`, `profile` and `email`, which no server declares (a
+  # request without `scope` gets the servers' scopes, without those). A
+  # request for `openid` may name the userinfo endpoint as its
+  # `resource`, and one that names no resource where none can be chosen
+  # for it gets a token for the userinfo endpoint: a client that only
+  # signs people in needs no MCP endpoint.
   #
   # A device authorization request (RFC 8628) has no redirect URI, state
   # or PKCE challenge: those three are nil on that path alone, and
@@ -85,13 +95,13 @@ defmodule Sake.Auth.AuthorizationRequest do
   @spec validate(Config.t(), Client.t(), map(), :authorization_code | :device) ::
           {:ok, t()} | {:error, String.t(), String.t()}
   def validate(config, client, p, flow \\ :authorization_code) do
-    known = config |> Config.scopes() |> Enum.map(&elem(&1, 0))
-    requested = requested_scopes(p, known)
+    known = config |> Config.request_scopes() |> Enum.map(&elem(&1, 0))
+    requested = requested_scopes(p, config |> Config.scopes() |> Enum.map(&elem(&1, 0)))
 
     with :ok <- check_flow(flow, p, client),
          :ok <- check_scopes(requested, known, client),
          {:ok, extra} <- extra(config, flow, p),
-         {:ok, resource} <- resource(config, p["resource"]) do
+         {:ok, resource} <- requested_resource(config, p["resource"], requested) do
       {:ok, %{request(flow, client, p, requested, resource) | extra: extra}}
     else
       :error ->
@@ -135,8 +145,31 @@ defmodule Sake.Auth.AuthorizationRequest do
   # (RFC 9470).
   defp extra(config, flow, p) do
     with {:ok, dpop} <- dpop_jkt(config, flow, p),
+         {:ok, nonce} <- nonce(config, flow, p),
          {:ok, authentication} <- Authentication.params(p, config.acr_values),
-         do: {:ok, Map.merge(dpop, authentication)}
+         do: {:ok, dpop |> Map.merge(nonce) |> Map.merge(authentication)}
+  end
+
+  # OpenID Connect Core §3.1.2.1: the `nonce` the ID token carries back,
+  # for the client to tie it to its request. A server without `openid:`
+  # ignores it; a device request has no ID token to put it in before
+  # the person approves, and takes none (no browser carries it).
+  @max_nonce 512
+
+  defp nonce(%Config{openid: false}, _flow, _p), do: {:ok, %{}}
+  defp nonce(_config, :device, _p), do: {:ok, %{}}
+
+  defp nonce(_config, :authorization_code, p) do
+    case p["nonce"] do
+      nil ->
+        {:ok, %{}}
+
+      nonce when is_binary(nonce) and nonce != "" and byte_size(nonce) <= @max_nonce ->
+        {:ok, %{"nonce" => nonce}}
+
+      _ ->
+        {:error, "invalid_request", "nonce must be a string of at most #{@max_nonce} bytes"}
+    end
   end
 
   # RFC 9449 §10: `dpop_jkt` binds the code to a DPoP key, by its RFC
@@ -200,6 +233,22 @@ defmodule Sake.Auth.AuthorizationRequest do
 
       true ->
         :ok
+    end
+  end
+
+  # With `openid:`, a request for `openid` may be for the userinfo
+  # endpoint: named, or when no other resource can be chosen.
+  defp requested_resource(%Config{openid: false} = config, value, _scopes),
+    do: resource(config, value)
+
+  defp requested_resource(config, value, scopes) do
+    userinfo = Config.userinfo_url(config)
+
+    cond do
+      "openid" not in scopes -> resource(config, value)
+      value == userinfo -> {:ok, userinfo}
+      value == nil -> with :error <- resource(config, nil), do: {:ok, userinfo}
+      true -> resource(config, value)
     end
   end
 

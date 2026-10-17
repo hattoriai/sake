@@ -81,6 +81,14 @@ defmodule Sake.Auth do
       `c:Sake.Auth.Subject.authentication/1` and call
       `c:Sake.Auth.Subject.reauthenticate/2`) and for the components'
       `authentication:` requirements alike.
+    * OpenID Connect: `signing_keys.ex` reads `signing_keys:` and builds
+      the JWK Set, which `public_keys.ex` serves at `/jwks`;
+      `id_token.ex` makes the ID token the token endpoint's grants add
+      for `openid`; `claims.ex` is the userinfo endpoint, checking the
+      token through `bearer.ex`, and `user_info.ex` its adapter, which
+      renders a refusal as an OAuth error (RFC 6750) rather than
+      JSON-RPC. `metadata.ex` builds the OpenID Provider metadata from
+      the authorization server's, and `Sake.Auth.WellKnown` serves it.
 
   A new endpoint is a core module and an adapter, a route in
   `Sake.Router` and in `Sake.Auth.RouterPlug`, and a URL helper in

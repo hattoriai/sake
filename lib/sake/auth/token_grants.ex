@@ -7,6 +7,9 @@ defmodule Sake.Auth.TokenGrants do
   # JWTs from a `Sake.Auth.TrustedIssuer`: an enterprise ID-JAG, or a
   # workload identity token.
   #
+  # With `openid:`, the first three add an ID token to the answer when
+  # the scopes include `openid` (`Sake.Auth.IDToken`).
+  #
   # The last two issue an access token alone. A machine client asks again
   # with its credentials when it needs a new one (RFC 6749 §4.4.3), and a
   # JWT grant goes back through its issuer, so that the issuer's policy
@@ -33,6 +36,7 @@ defmodule Sake.Auth.TokenGrants do
     ClientAuth,
     Config,
     DPoP,
+    IDToken,
     JWTGrant,
     PKCE,
     Subject,
@@ -218,7 +222,8 @@ defmodule Sake.Auth.TokenGrants do
             jkt: jkt,
             refresh_jkt: refresh_binding(client, jkt),
             acr: record.acr,
-            auth_time: record.auth_time
+            auth_time: record.auth_time,
+            nonce: record.nonce
           })
         end
     end
@@ -598,13 +603,20 @@ defmodule Sake.Auth.TokenGrants do
       else: {:error, "invalid_scope", "The scope exceeds what was granted"}
   end
 
+  # With `openid:`, a person's grant for `openid` gets an ID token with
+  # its tokens (`Sake.Auth.IDToken`): the code's, the device code's and
+  # a refresh's alike.
   defp response(config, attrs, access, refresh) do
-    %{
+    response = %{
       "access_token" => access,
       "token_type" => token_type(attrs),
       "expires_in" => config.access_token_ttl,
       "refresh_token" => refresh,
       "scope" => Enum.join(attrs.scopes, " ")
     }
+
+    if IDToken.issued?(config, attrs),
+      do: Map.put(response, "id_token", IDToken.issue(config, attrs, access)),
+      else: response
   end
 end

@@ -393,6 +393,140 @@ meaning.
 An external authorization server's tokens carry the same in their `acr`
 and `auth_time` claims; see `guides/external_auth.md`.
 
+## OpenID Connect: who signed in
+
+An access token from Sake is opaque: a client can use it, but cannot
+read who signed in. With OpenID Connect on, a client that asks for the
+`openid` scope also gets an ID token, a JWT your app signs that names
+the person, and may ask the userinfo endpoint for their name and email
+address. A client or an agent then knows whose tools it is calling, and
+other apps can use your login as their sign-in ("Sign in with
+MyApp"). Implicit and hybrid flows, `prompt`, `display`, request
+objects and logout are not supported.
+
+It needs the optional `jose` package and the keys the ID tokens are
+signed with:
+
+```elixir
+{Sake,
+ auth: [
+   ...,
+   openid: true,
+   signing_keys: [
+     [kid: "2026-10", pem: System.fetch_env!("OIDC_SIGNING_KEY")]
+   ]
+ ]}
+```
+
+Each key is a PEM private key with a `kid` of its own: RSA of 2048 bits
+or more (signing RS256, which every OpenID Connect client takes), P-256
+(ES256) or P-384 (ES384). Make one with `openssl genpkey -algorithm RSA
+-pkeyopt rsa_keygen_bits:2048`. Sake raises when it starts with
+`openid:` but no key or no `jose`, with a key it cannot read, or with
+two keys of the same `kid`. `openid: [id_token_ttl: 300]` sets how long
+an ID token lasts, in seconds (the access token's lifetime by default).
+
+The first key signs; every key is published at `GET /oauth/jwks`, the
+metadata's `jwks_uri`, as public keys only. To rotate, put the new key
+first and keep the old one second until the ID tokens it signed have
+expired (and clients have refetched the set: it is cached for five
+minutes), then drop it.
+
+### The scopes
+
+`openid`, `profile` and `email` are the authorization server's own
+scopes: no server declares them, the authorization server metadata
+lists them in `scopes_supported` (the protected resource metadata does
+not), and a request without `scope` does not get them. The consent page
+shows them as any other ("Know who you are", "See your name and
+profile", "See your email address"), and your `scopes_for/2` applies to
+them as well: a `scopes_for/2` that returns a list withholds them unless
+the list names them, so a host decides who may share their identity
+with which client. The client credentials and JWT bearer grants cannot
+ask for them: they have no person signing in at the browser.
+
+### The ID token
+
+A grant whose scopes include `openid` (the authorization code, from the
+authorize endpoint or a pushed request, the device code, and each
+refresh) gets an `id_token` next to the access token:
+
+| claim | value |
+| --- | --- |
+| `iss` | the issuer |
+| `sub` | the person's `id/1` |
+| `aud`, `azp` | the client's `client_id` |
+| `iat`, `exp` | now, and `id_token_ttl` later |
+| `auth_time`, `acr` | how the person signed in, from `authentication/1`, when known |
+| `nonce` | the authorization request's, when it sent one |
+| `at_hash` | the left half of the SHA-256 (SHA-384 for ES384) of the access token |
+
+Its header names the key (`kid`) and says `typ: JWT`. A refresh issues a
+new ID token with the original `auth_time` and `acr`, since a refresh is
+no new sign-in, and no `nonce`; so does the device flow, which has no
+nonce at all. The authorize endpoint takes a `nonce` of at most 512
+bytes (`invalid_request` otherwise) and keeps it on the code.
+
+### Claims and the userinfo endpoint
+
+The ID token says who, not what they are called. The person's profile
+and address come from the optional `claims/2` callback on the subject
+module, for the scopes the token holds; Sake never reads your user
+schema, so what it returns is all a client learns:
+
+```elixir
+defmodule MyApp.MCP.Subject do
+  @behaviour Sake.Auth.Subject
+  # from_conn/1, id/1, fetch/1, display/1 as in the quickstart
+
+  @impl true
+  def claims(user, scopes) do
+    profile =
+      if "profile" in scopes,
+        do: %{"name" => user.name, "preferred_username" => user.handle, "locale" => user.locale},
+        else: %{}
+
+    email =
+      if "email" in scopes,
+        do: %{"email" => user.email, "email_verified" => user.confirmed_at != nil},
+        else: %{}
+
+    Map.merge(profile, email)
+  end
+end
+```
+
+Without it, a client learns `sub` alone. `GET` or `POST /oauth/userinfo`
+returns `sub` and these claims, read with `fetch/1` and narrowed by
+`scopes_for/2` at each request, for a token sent with the Bearer or the
+DPoP scheme (a DPoP proof names the userinfo URL), as at the MCP
+endpoint. Sake's access tokens are bound to a resource, the MCP endpoint
+they were issued for; the userinfo endpoint is the exception, and takes
+any token of Sake's that holds `openid`, whatever its resource, so that
+a client that signed a person in for an MCP endpoint can ask who they
+are with the token it has. A token without `openid` gets a 403
+`insufficient_scope`. The refusals are OAuth errors (RFC 6750): the
+`WWW-Authenticate` challenge, and a JSON body with `error` and
+`error_description`, not the JSON-RPC error of an MCP endpoint.
+
+A client that only signs people in has no MCP endpoint to name: a
+request for `openid` may name the userinfo URL as its `resource`, and
+one that names none, where `resources:` does not pick one (more than a
+single fixed path), gets a token for the userinfo endpoint. Your
+`authorize_resource?/2` and `scopes_for/2` are asked with that URL.
+
+### Discovery
+
+`/.well-known/openid-configuration` (served by `Sake.Auth.WellKnown`,
+404 without `openid:`) is the authorization server metadata with
+`userinfo_endpoint`, `subject_types_supported` (`public`: every client
+sees the same `sub`), `id_token_signing_alg_values_supported` (the
+algorithms of your keys) and `claims_supported`; the authorization
+server metadata itself gains `jwks_uri`. Mount the JWKS and userinfo
+endpoints with `sake_oauth_api()` (or `Sake.Auth.RouterPlug`): they
+need no session. `Sake.Client` verifies the ID token with `auth:
+[openid: true]` (see `guides/client.md`).
+
 ## Machine clients (client credentials)
 
 A service that calls your endpoint as itself — a nightly job, a CI
@@ -660,8 +794,10 @@ authorization server's and the protected resource's) list
 `dpop_bound_access_tokens_required`. With `par:`, the authorization
 server's lists `pushed_authorization_request_endpoint` and
 `require_pushed_authorization_requests`, with `device:`
-`device_authorization_endpoint` and the device code grant, and with
-`acr_values:` `acr_values_supported`.
+`device_authorization_endpoint` and the device code grant, with
+`acr_values:` `acr_values_supported`, and with `openid:` `jwks_uri` and
+the OpenID Connect scopes (the rest is in
+`/.well-known/openid-configuration`, above).
 
 `client_secret_jwt` is never listed, and the token endpoint refuses its
 assertions with `invalid_client`. It is an HMAC keyed with the client

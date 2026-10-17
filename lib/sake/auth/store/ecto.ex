@@ -96,6 +96,7 @@ if Code.ensure_loaded?(Ecto.Query) do
         dpop_jkt: c.dpop_jkt,
         acr: c.acr,
         auth_time: c.auth_time && DateTime.truncate(c.auth_time, :second),
+        nonce: c.nonce,
         expires_at: DateTime.truncate(c.expires_at, :second)
       }
 
@@ -124,6 +125,7 @@ if Code.ensure_loaded?(Ecto.Query) do
              dpop_jkt: r.dpop_jkt,
              acr: r.acr,
              auth_time: r.auth_time,
+             nonce: r.nonce,
              expires_at: r.expires_at
            }}
 

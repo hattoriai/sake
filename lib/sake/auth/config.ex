@@ -32,6 +32,24 @@ defmodule Sake.Auth.Config do
   request's `acr_values` are then narrowed to those, and a request that
   names none of them is refused with `invalid_request`. Without it,
   the metadata says nothing and any `acr_values` are taken as they come.
+
+  `openid:` turns on OpenID Connect: `true`, or `[id_token_ttl:
+  seconds]` (how long an ID token lasts, the access token's lifetime by
+  default). The token endpoint then answers a grant whose scopes include
+  `openid` with an `id_token` as well, `GET {oauth_path}/jwks` publishes
+  the signing keys, `{oauth_path}/userinfo` returns the person's claims,
+  and `/.well-known/openid-configuration` describes it all. The
+  `openid`, `profile` and `email` scopes are the authorization server's
+  own: no server declares them. It is off by default, and needs the
+  `jose` package and `signing_keys:`.
+
+  `signing_keys:` are the keys ID tokens are signed with: a list of
+  `[kid: "2026-10", pem: pem]` (or maps with those keys), each a PEM
+  private key, RSA (2048 bits or more, signing RS256), P-256 (ES256) or
+  P-384 (ES384), with a `kid` of its own. The first one signs, and all
+  of them are published at the JWKS endpoint, so a key is rotated by
+  putting the new one first, and dropped once the ID tokens it signed
+  have expired. Only with `openid:`.
   """
 
   @type t :: %__MODULE__{}
@@ -56,6 +74,8 @@ defmodule Sake.Auth.Config do
             device: false,
             par: false,
             acr_values: nil,
+            openid: false,
+            signing_keys: [],
             name: nil,
             secret: nil
 
@@ -86,6 +106,8 @@ defmodule Sake.Auth.Config do
         device: device_option(config.device, config.secret),
         par: par_option(config.par),
         acr_values: acr_values_option(config.acr_values),
+        openid: openid_option(config.openid, config.access_token_ttl),
+        signing_keys: Sake.Auth.SigningKeys.new(config.signing_keys, config.openid != false),
         store_state: module.init(store_opts),
         name: config.name || uri.host
     }
@@ -232,6 +254,33 @@ defmodule Sake.Auth.Config do
         "acr_values: must be a non-empty list of strings without spaces, got #{inspect(values)}"
       )
 
+  # OpenID Connect: false, or how long an ID token lasts. It signs with
+  # jose, which the host is told about at start.
+  defp openid_option(false, _ttl), do: false
+  defp openid_option(true, ttl), do: openid_option([], ttl)
+
+  defp openid_option(opts, ttl) when is_list(opts) do
+    Sake.Auth.JWT.require!("openid:")
+    openid = Map.merge(%{id_token_ttl: ttl}, Map.new(opts))
+
+    unless Keyword.keys(opts) -- [:id_token_ttl] == [] and is_integer(openid.id_token_ttl) and
+             openid.id_token_ttl > 0,
+           do:
+             raise(
+               ArgumentError,
+               "openid: takes [id_token_ttl: seconds], got #{inspect(opts)}"
+             )
+
+    openid
+  end
+
+  defp openid_option(other, _ttl),
+    do:
+      raise(
+        ArgumentError,
+        "openid: must be true, false or [id_token_ttl: seconds], got #{inspect(other)}"
+      )
+
   @doc """
   Whether `client`'s authorization requests must be pushed: with `par:
   [required: true]`, or a client registered with
@@ -253,6 +302,28 @@ defmodule Sake.Auth.Config do
   def scopes(%{servers: servers}),
     do: servers |> Enum.flat_map(& &1.__sake__(:scopes)) |> Enum.uniq_by(&elem(&1, 0))
 
+  @openid_scopes [
+    {"openid", "Know who you are"},
+    {"profile", "See your name and profile"},
+    {"email", "See your email address"}
+  ]
+
+  @doc """
+  The OpenID Connect scopes, with descriptions, with `openid:`: the
+  authorization server's own, which no server declares; none without it.
+  """
+  @spec openid_scopes(t()) :: [{String.t(), String.t()}]
+  def openid_scopes(%__MODULE__{openid: false}), do: []
+  def openid_scopes(%__MODULE__{}), do: @openid_scopes
+
+  @doc """
+  Every scope an authorization request may ask for: the servers' (see
+  `scopes/1`), then the OpenID Connect ones (see `openid_scopes/1`).
+  """
+  @spec request_scopes(t()) :: [{String.t(), String.t()}]
+  def request_scopes(config),
+    do: Enum.uniq_by(scopes(config) ++ openid_scopes(config), &elem(&1, 0))
+
   def authorize_url(c), do: c.issuer <> c.oauth_path <> "/authorize"
   def token_url(c), do: c.issuer <> c.oauth_path <> "/token"
   def register_url(c), do: c.issuer <> c.oauth_path <> "/register"
@@ -260,4 +331,6 @@ defmodule Sake.Auth.Config do
   def device_authorization_url(c), do: c.issuer <> c.oauth_path <> "/device_authorization"
   def device_url(c), do: c.issuer <> c.oauth_path <> "/device"
   def par_url(c), do: c.issuer <> c.oauth_path <> "/par"
+  def jwks_url(c), do: c.issuer <> c.oauth_path <> "/jwks"
+  def userinfo_url(c), do: c.issuer <> c.oauth_path <> "/userinfo"
 end

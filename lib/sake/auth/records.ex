@@ -5,7 +5,9 @@ defmodule Sake.Auth.Code do
   request that redeems a bound code must carry a proof made with that
   key. `acr` and `auth_time` are how and when the person signed in
   when they approved it (`c:Sake.Auth.Subject.authentication/1`), or
-  nil, which its tokens carry (RFC 9470).
+  nil, which its tokens carry (RFC 9470). `nonce` is the authorization
+  request's OpenID Connect `nonce`, or nil, which the ID token issued
+  for the code carries.
   """
   @type t :: %__MODULE__{}
   defstruct [
@@ -19,6 +21,7 @@ defmodule Sake.Auth.Code do
     :dpop_jkt,
     :acr,
     :auth_time,
+    :nonce,
     scopes: []
   ]
 end
