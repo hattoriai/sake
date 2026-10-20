@@ -86,6 +86,29 @@ The library's own access rules (visibility, row limits, read-only
 connections) apply as for any other caller: MCP is one more front end,
 not a way around them.
 
+## URLs to the host
+
+A tool that hands the person a link into the host, or a one-time URL to
+upload a file to, needs the host's address, which the library does not
+know. `ctx.base_url` is the URL of the endpoint the request reached
+(`https://example.com/acme/mcp`, see `Sake.Context`); build on its
+origin, with a path the host configures:
+
+```elixir
+def execute(%{name: name}, ctx) do
+  with base when is_binary(base) <- ctx.base_url do
+    path = Application.get_env(:reports, :mcp, [])[:upload_path] || "/reports/uploads"
+    token = Reports.Uploads.grant(ctx.scope, name)
+    {:ok, %{upload_url: URI.to_string(%{URI.parse(base) | path: path <> "/" <> token})}}
+  else
+    nil -> {:error, "Uploads need the server over HTTP."}
+  end
+end
+```
+
+It is `nil` over stdio and in the in-memory test client (`base_url:`
+sets it there, see `guides/testing.md`).
+
 ## Scopes and annotations
 
 Declare the scopes the library's tools require with `scope`, under the
@@ -164,3 +187,7 @@ assert {:error, {:insufficient_scope, _}} = call_tool(client, "save_report", %{"
 See `guides/testing.md`. The library's own test suite has Sake without
 anything more: Mix fetches a project's optional dependencies for the
 project itself.
+
+Sake takes Phoenix 1.7.14 and later as well as 1.8 (Phoenix is optional
+for it), so a library that depends on Sake resolves in a host, or a CI
+job, on either.

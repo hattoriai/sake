@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+For libraries that mount into a host's Sake server, and their hosts.
+
+### Fixed
+
+- **Phoenix 1.7 hosts.** The optional Phoenix was `~> 1.8`, so a host
+  on Phoenix 1.7, or a library depending on Sake tested on one, could
+  not resolve its dependencies, even without using `Sake.Router`. Nothing
+  in Sake needs 1.8: `Sake.Router`'s macros are `forward`, `get`, `post`
+  and `match`, and the test host's endpoint and router are as `mix
+  phx.new` generates them on 1.7 too. The requirement is now `~> 1.7.14
+  or ~> 1.8`, and CI runs the tests on Phoenix 1.7.14 (`phoenix-1.7`).
+
+### Added
+
+- `ctx.base_url` (`Sake.Context`): the URL of the endpoint the request
+  reached, as its clients reach it (`https://example.com/acme/mcp`), for
+  a tool that builds absolute URLs to its host. `Sake.Plug` sets it from
+  the request; with `auth:`, its origin is the one the token's audience
+  is on. `nil` over stdio and in `Sake.Test`'s in-memory client, which
+  takes `base_url:`.
+- `Sake.Test.mcp_connect/2`: `connect/2` under another name, for a test
+  that imports `Phoenix.ChannelTest`, whose `connect` macro clashes with
+  it. "Beside `Phoenix.ChannelTest`" in the testing guide.
+
 ## 0.4.1 (2026-10-17)
 
 Two fixes: for apps behind a proxy, and for an `{m, f, a}` secret.

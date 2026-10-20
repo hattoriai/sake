@@ -53,7 +53,7 @@ defmodule Sake.MixProject do
       {:jose, "~> 1.11", optional: true},
       {:opentelemetry, "~> 1.7", only: :test},
       {:opentelemetry_api, "~> 1.5", optional: true},
-      {:phoenix, "~> 1.8", optional: true},
+      {:phoenix, "~> 1.7.14 or ~> 1.8", optional: true},
       {:phoenix_html, "~> 4.1", optional: true},
       {:phoenix_pubsub, "~> 2.1", optional: true},
       {:plug, "~> 1.16"},

@@ -80,7 +80,9 @@ jobs:
   # certificate with the serverAuth extended key usage, as in the chain
   # of builds.hex.pm, so setup-beam could not install Rebar or Hex. Each
   # entry's `check` is its job's name, so the 1.18 run keeps the name
-  # `floor` that branch protection may require.
+  # `floor` that branch protection may require. `phoenix-1.7` is the floor
+  # of the optional Phoenix (mix.exs takes ~> 1.7.14 or ~> 1.8): the same
+  # Elixir as `floor`, with Phoenix pinned to 1.7.14 before deps.get.
   floor:
     name: ${{ matrix.check }}
     runs-on: ubuntu-latest
@@ -95,6 +97,10 @@ jobs:
           - check: elixir-1.19
             elixir: "1.19.5"
             otp: "28.5"
+          - check: phoenix-1.7
+            elixir: "1.18.3"
+            otp: "27.2.2"
+            phoenix: "1.7.14"
 
     services:
       postgres:
@@ -122,9 +128,16 @@ jobs:
           path: |
             deps
             _build
-          key: mix-floor-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
+          key: mix-floor-${{ matrix.check }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('mix.lock') }}
           restore-keys: |
-            mix-floor-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+            mix-floor-${{ matrix.check }}-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+
+      - name: Pin Phoenix
+        if: matrix.phoenix
+        run: |
+          sed -i 's/{:phoenix, "[^"]*", optional: true}/{:phoenix, "== ${{ matrix.phoenix }}", optional: true}/' mix.exs
+          grep -q '{:phoenix, "== ${{ matrix.phoenix }}"' mix.exs
+          mix deps.update phoenix
 
       - run: mix deps.get
 

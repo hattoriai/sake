@@ -62,6 +62,13 @@ defmodule Sake.TestTest do
     end
   end
 
+  defmodule Where do
+    use Sake.Tool, name: "where", description: "Says the endpoint's URL"
+
+    @impl true
+    def execute(%{}, ctx), do: {:ok, ctx.base_url || "nowhere"}
+  end
+
   defmodule Server do
     use Sake.Server, name: "test-server", version: "1"
     scope "issues:read", "Read issues"
@@ -69,6 +76,7 @@ defmodule Sake.TestTest do
 
     tools [
       Whoami,
+      Where,
       Boom,
       Wait,
       Changes,
@@ -488,6 +496,23 @@ defmodule Sake.TestTest do
     assert_received {^ref, [:sake, :client, :request, :stop],
                      %{method: "tools/call", transport: :local}}
   end
+
+  test "base_url: nil in memory, unless the test gives one" do
+    assert {:ok, %{text: "nowhere"}} = call_tool(connect(Server), "where")
+
+    for era <- [:modern, :legacy] do
+      client = connect(Server, era: era, base_url: "https://example.com/acme/mcp")
+      assert {:ok, %{text: "https://example.com/acme/mcp"}} = call_tool(client, "where")
+    end
+  end
+
+  test "mcp_connect/2 is connect/2, for a test that imports Phoenix.ChannelTest" do
+    client = mcp_connect(Server, base_url: "https://example.com/mcp")
+    assert {:ok, %{text: "https://example.com/mcp"}} = call_tool(client, "where")
+
+    assert {:ok, %{text: "hi"}} =
+             call_tool(mcp_connect(Server), "echo", %{"text" => "hi"})
+  end
 end
 
 defmodule Sake.TestSharedTest do
@@ -522,6 +547,7 @@ defmodule Sake.TestPlugTest do
     assert session(client).url == "http://www.example.com/mcp"
 
     assert {:ok, %{text: "hi"}} = call_tool(client, "echo", %{"text" => "hi"})
+    assert {:ok, %{text: "http://www.example.com/mcp"}} = call_tool(client, "where")
 
     # The headers are checked: Sake.Client mirrors an argument into its
     # header once it has listed the tool, as a client does before a call.
@@ -554,6 +580,14 @@ defmodule Sake.TestPlugTest do
     client = connect(Server, plug: {Sake.Plug, server: Server, secret: @secret}, era: :legacy)
     assert session(client).revision == "2025-11-25"
     assert {:ok, %{text: "hi"}} = call_tool(client, "echo", %{"text" => "hi"})
+    assert {:ok, %{text: "http://www.example.com/mcp"}} = call_tool(client, "where")
+
+    assert_raise ArgumentError, ~r/base_url/, fn ->
+      connect(Server,
+        plug: {Sake.Plug, server: Server, secret: @secret},
+        base_url: "https://example.com/mcp"
+      )
+    end
 
     # The client asks for progress, so an error comes on the call's stream,
     # as a JSON-RPC error, the same as in memory.
@@ -608,6 +642,14 @@ defmodule Sake.TestPlugTest do
     assert_raise RuntimeError, ~r/unauthorized/, fn ->
       connect(SakeDev.Server, plug: SakeTest.PhoenixEndpoint, path: "/acme/mcp")
     end
+
+    # With authorization, base_url is on the issuer's origin, as the
+    # token's audience, whatever host a proxy sent the request with.
+    conn =
+      Plug.Test.conn(:post, "http://app.internal:4000/acme/mcp/")
+      |> Plug.Conn.assign(:sake_auth, true)
+
+    assert Sake.Plug.base_url(conn) == "http://www.example.com/acme/mcp"
   end
 
   test "through a Phoenix endpoint that requires DPoP: a bound token, a proof per request" do
@@ -675,5 +717,21 @@ defmodule Sake.TestPlugTest do
     end
 
     assert_raise ArgumentError, ~r/subject/, fn -> access_token(scopes: []) end
+  end
+end
+
+defmodule Sake.TestChannelCaseTest do
+  # A test that imports Phoenix.ChannelTest, as a ChannelCase does, and
+  # Sake.Test beside it: its connect macro has connect/2's name, so the
+  # test leaves Sake.Test's out and connects with mcp_connect/2.
+  use ExUnit.Case, async: true
+
+  import Phoenix.ChannelTest
+  import Sake.Test, except: [connect: 1, connect: 2]
+
+  test "mcp_connect/2 connects beside Phoenix.ChannelTest" do
+    client = mcp_connect(Sake.TestTest.Server)
+    assert {:ok, %{text: "hi"}} = call_tool(client, "echo", %{"text" => "hi"})
+    refute_push("nothing", %{}, 0)
   end
 end
