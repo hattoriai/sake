@@ -1,0 +1,111 @@
+name: Bug report
+description: Something in Sake does not work as the docs say.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A security problem goes to a private report instead (see SECURITY.md).
+
+  - type: input
+    id: sake
+    attributes:
+      label: Sake version
+      description: From `mix.lock`, or `mix deps | grep sake`.
+      placeholder: "0.4.2"
+    validations:
+      required: true
+
+  - type: input
+    id: stack
+    attributes:
+      label: Elixir, OTP and Phoenix versions
+      description: Phoenix if the endpoint is in a Phoenix router; say "none" for a plain Plug or stdio.
+      placeholder: "Elixir 1.20.1, OTP 29, Phoenix 1.8.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: part
+    attributes:
+      label: Part of Sake
+      multiple: true
+      options:
+        - Server (Sake.Server, tools, resources, prompts, tasks, MCP Apps)
+        - Authorization server (Sake.Auth)
+        - An external authorization server (Sake.Auth.External)
+        - Client (Sake.Client)
+        - Middleware, composing or proxying
+        - Stdio
+        - Sake.Test
+        - Something else
+    validations:
+      required: true
+
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: Protocol version
+      description: The one the client and server agreed on, if you know it.
+      options:
+        - 2026-07-28
+        - 2025-11-25
+        - 2025-06-18
+        - 2025-03-26
+        - I do not know
+        - Not about the protocol
+
+  - type: input
+    id: peer
+    attributes:
+      label: The other side
+      description: The MCP client or server at the other end, and its version.
+      placeholder: "Claude Code 2.1.0, the MCP Inspector, my own Sake.Client"
+
+  - type: input
+    id: stores
+    attributes:
+      label: Stores and deployment
+      description: For authorization, tasks or several nodes. The stores (ETS, Ecto and the database), the number of nodes, and any proxy in front.
+      placeholder: "Ecto stores on PostgreSQL 16, two nodes, behind Fly.io's proxy"
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: The smallest code that shows it
+      description: The server, tool or client call and its options, or a test with `Sake.Test`, or a link to a small repository.
+      render: elixir
+    validations:
+      required: true
+
+  - type: textarea
+    id: wire
+    attributes:
+      label: The messages
+      description: The requests and responses that went over the wire, with their HTTP status and headers if it is about HTTP or authorization. Take tokens, secrets and personal data out first.
+      render: text
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: The error and its stacktrace, from the server log or the client.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I use a release from Hex, not `main`.
+          required: true
+        - label: I searched the open and closed issues.
+          required: true
