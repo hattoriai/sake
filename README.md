@@ -207,7 +207,7 @@ open a public issue for one.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md): when a change needs an issue
+See [CONTRIBUTING.md](https://github.com/hattoriai/sake/blob/main/CONTRIBUTING.md): when a change needs an issue
 first, and what a pull request needs.
 
 ## License
