@@ -205,6 +205,11 @@ across eras.
 Report a vulnerability privately, as `SECURITY.md` says; please do not
 open a public issue for one.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md): when a change needs an issue
+first, and what a pull request needs.
+
 ## License
 
 Sake is released under the MIT License. See `LICENSE`.
