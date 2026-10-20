@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.2 (2026-10-20)
 
 For libraries that mount into a host's Sake server, and their hosts.
 
