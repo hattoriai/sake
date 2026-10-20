@@ -325,9 +325,21 @@ defmodule Sake.Plug do
       conn_assigns: conn.assigns,
       secret: secret(opts),
       server: opts.server,
-      reraise: opts.reraise
+      reraise: opts.reraise,
+      base_url: base_url(conn)
     )
   end
+
+  # The endpoint's URL as the client reaches it (`Sake.Context`'s
+  # `base_url`): with authorization, on the origin the token's audience
+  # is on; without, the request's own.
+  @doc false
+  @spec base_url(Plug.Conn.t()) :: String.t()
+  def base_url(%{assigns: %{sake_auth: auth}} = conn) when auth not in [nil, false],
+    do: Sake.Auth.endpoint_url(conn)
+
+  def base_url(conn),
+    do: Sake.Auth.Resource.origin(conn) <> String.trim_trailing(conn.request_path, "/")
 
   # ---- legacy
 
@@ -339,7 +351,8 @@ defmodule Sake.Plug do
         server: opts.server,
         reraise: opts.reraise,
         scope: opts.scope.(conn),
-        conn_assigns: conn.assigns
+        conn_assigns: conn.assigns,
+        base_url: base_url(conn)
       )
 
     outcome =
@@ -378,7 +391,8 @@ defmodule Sake.Plug do
             conn_assigns: conn.assigns,
             secret: secret(opts),
             server: opts.server,
-            reraise: opts.reraise
+            reraise: opts.reraise,
+            base_url: base_url(conn)
           )
 
         conn = renew_session(conn, opts, session, parsed)

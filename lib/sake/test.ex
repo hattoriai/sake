@@ -57,8 +57,17 @@ defmodule Sake.Test do
       a client would get (`false`).
     * `:secret` — signs cursors and request states. Default the `Sake`
       configuration's, else a fixed one shared by every test client.
+    * `:base_url` — the endpoint's URL, what components see as
+      `ctx.base_url` (see `Sake.Context`), for a tool that builds
+      absolute URLs to its host. Default `nil`, as over stdio: the
+      in-memory client has no request to take it from. Through a plug
+      (below), `Sake.Plug` sets it from the request, as in production.
 
   The era is modern unless `era: :legacy` asks for the handshake.
+
+  `mcp_connect/2` is `connect/2` under another name, for a test that also
+  imports `Phoenix.ChannelTest` (a `ChannelCase`), whose `connect` macro
+  has the same name and arity.
 
   ## Answering the server
 
@@ -201,6 +210,18 @@ defmodule Sake.Test do
     end
   end
 
+  @doc """
+  `connect/2` under another name, for a test that imports
+  `Phoenix.ChannelTest` too, whose `connect` macro clashes with it:
+
+      import Phoenix.ChannelTest
+      import Sake.Test, except: [connect: 1, connect: 2]
+
+      client = mcp_connect(MyApp.MCP, scope: user)
+  """
+  @spec mcp_connect(module(), keyword()) :: Client.t()
+  def mcp_connect(server, opts \\ []), do: connect(server, opts)
+
   defp target(server, opts, client_opts) do
     case opts[:plug] do
       nil -> {{:local, Endpoint.new(server, Keyword.put(opts, :token, token(opts)))}, client_opts}
@@ -215,6 +236,11 @@ defmodule Sake.Test do
     if Keyword.has_key?(opts, :scope) do
       raise ArgumentError,
             "Sake.Test: with plug:, the stack computes the principal; pass headers:, or scopes: and subject: for a bearer token"
+    end
+
+    if Keyword.has_key?(opts, :base_url) do
+      raise ArgumentError,
+            "Sake.Test: with plug:, Sake.Plug takes base_url from the request; leave out base_url:"
     end
 
     # A legacy server asks its questions on the call's response stream,

@@ -28,7 +28,7 @@ defmodule Sake.Test.Endpoint do
   @dialyzer {:no_opaque, loop: 2}
 
   @type t :: %__MODULE__{}
-  defstruct [:server, :scope, :token, :secret, reraise: true]
+  defstruct [:server, :scope, :token, :secret, :base_url, reraise: true]
 
   @spec new(module(), keyword()) :: t()
   def new(server, opts) do
@@ -37,6 +37,7 @@ defmodule Sake.Test.Endpoint do
       scope: opts[:scope],
       token: opts[:token],
       secret: opts[:secret],
+      base_url: opts[:base_url],
       reraise: Keyword.get(opts, :reraise, true)
     }
   end
@@ -186,7 +187,8 @@ defmodule Sake.Test.Endpoint do
       scopes: if(token, do: token.scopes, else: []),
       secret: secret(endpoint),
       server: endpoint.server,
-      reraise: endpoint.reraise
+      reraise: endpoint.reraise,
+      base_url: endpoint.base_url
     ]
     |> Keyword.merge(opts)
     |> Context.new()

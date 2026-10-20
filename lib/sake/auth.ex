@@ -159,6 +159,17 @@ defmodule Sake.Auth do
     end
   end
 
+  @doc false
+  # The URL of the endpoint a request to an endpoint with `auth:` reached,
+  # as its clients reach it: on the origin of its authorization server's
+  # resources (`Sake.Plug` puts it in `Sake.Context`'s `base_url`).
+  @spec endpoint_url(Plug.Conn.t()) :: String.t()
+  def endpoint_url(conn),
+    do:
+      conn
+      |> Resource.url(endpoint_config(conn.assigns.sake_auth))
+      |> String.trim_trailing("/")
+
   # The authorization server an endpoint's `auth:` names.
   defp endpoint_config(true), do: config()
   defp endpoint_config(name), do: External.fetch!(name)

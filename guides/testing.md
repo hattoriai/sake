@@ -46,6 +46,25 @@ ExUnit.start()
 `start/1` leaves alone what already runs, and takes `tasks:` (the
 `Sake.Tasks` options, or `false`).
 
+### Beside `Phoenix.ChannelTest`
+
+`Phoenix.ChannelTest`, which a `ChannelCase` imports, has a `connect`
+macro of the same name and arity as `connect/2`, so a test that imports
+both cannot call either unqualified. `mcp_connect/2` is `connect/2` under
+another name; leave `Sake.Test`'s `connect` out of the import:
+
+```elixir
+import Phoenix.ChannelTest
+import Sake.Test, except: [connect: 1, connect: 2]
+
+client = mcp_connect(MyApp.MCP, scope: user)
+```
+
+(Or keep `Sake.Test`'s and leave out the channel one, with
+`import Phoenix.ChannelTest, except: [connect: 2, connect: 3]`.)
+`Phoenix.ConnTest` has no `connect` and imports beside `Sake.Test` as
+it is.
+
 The assertions below read best without parentheses; with `:sake` in the
 `import_deps` of your `.formatter.exs`, `mix format` leaves them so.
 
@@ -124,6 +143,21 @@ connect(MyApp.MCP, scope: service, scopes: ["issues:read"], subject: nil, client
 The token is a `Sake.Auth.TokenRecord` in `ctx.token`, as Sake's bearer
 check leaves it; nothing is stored, and `Sake.Auth` need not be
 configured.
+
+## The endpoint's URL
+
+A tool that builds absolute URLs to its host reads `ctx.base_url` (see
+`Sake.Context`). The in-memory client has no request to take it from,
+so it is `nil`, as over stdio, unless the test gives one:
+
+```elixir
+client = connect(MyApp.MCP, scope: user, base_url: "https://example.com/acme/mcp")
+assert {:ok, %{structured: %{"upload_url" => "https://example.com/uploads/" <> _}}} =
+         call_tool(client, "start_upload", %{"name" => "a.jpg"})
+```
+
+Through a plug (below) `Sake.Plug` sets it from the request, as in
+production: `http://www.example.com` and the `path:`.
 
 `acr:` and `auth_time:` say how and when the token's person signed in,
 for components with `authentication:` (see "Step-up authentication" in

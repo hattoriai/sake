@@ -486,4 +486,51 @@ defmodule Sake.PlugTest do
       assert conn.status == 400 and LegacyClient.json(conn)["error"]["code"] == -32_022
     end
   end
+
+  describe "base_url" do
+    defmodule Where do
+      @moduledoc false
+      use Sake.Tool, name: "where", description: "Says the endpoint's URL"
+
+      @impl true
+      def execute(%{}, ctx), do: {:ok, ctx.base_url}
+    end
+
+    defmodule WhereServer do
+      @moduledoc false
+      use Sake.Server, name: "where", version: "1"
+      tools [Where]
+    end
+
+    defmodule Mounted do
+      @moduledoc false
+      use Plug.Router
+      plug :match
+      plug :dispatch
+
+      forward "/tenants/acme/mcp",
+        to: Sake.Plug,
+        init_opts: [server: WhereServer, secret: String.duplicate("s", 64)]
+    end
+
+    test "is the endpoint's URL as the request reached it, without the query or trailing slash" do
+      assert Sake.Plug.base_url(conn(:post, "https://example.com:8443/acme/mcp/?x=1")) ==
+               "https://example.com:8443/acme/mcp"
+
+      assert Sake.Plug.base_url(conn(:post, "https://Example.com:443/mcp")) ==
+               "https://example.com/mcp"
+
+      assert Sake.Plug.base_url(conn(:post, "http://example.com/")) == "http://example.com"
+    end
+
+    test "a tool sees it, with the path the endpoint is mounted at, on both eras" do
+      for era <- [:modern, :legacy] do
+        client =
+          Sake.Test.connect(WhereServer, plug: Mounted, path: "/tenants/acme/mcp", era: era)
+
+        assert {:ok, %{text: "http://www.example.com/tenants/acme/mcp"}} =
+                 Sake.Test.call_tool(client, "where")
+      end
+    end
+  end
 end
