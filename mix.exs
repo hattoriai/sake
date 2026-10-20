@@ -110,6 +110,7 @@ defmodule Sake.MixProject do
         "guides/security.md",
         "guides/clustering.md",
         "CHANGELOG.md",
+        "CONTRIBUTING.md",
         "SECURITY.md"
       ],
       groups_for_extras: [
