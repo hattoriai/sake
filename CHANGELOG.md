@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.3 (2026-10-21)
+
+Documentation only. Nothing changes in the code.
+
+### Documentation
+
+- `SECURITY.md` says what is in scope: a request, token or upstream
+  response that gets past Sake's authorization, gets or forges a
+  credential, sends a token where it should not go, or crashes the
+  server.
+- The README links to `CONTRIBUTING.md`: when a change needs an issue
+  first, and what a pull request needs.
+
 ## 0.4.2 (2026-10-20)
 
 For libraries that mount into a host's Sake server, and their hosts.
