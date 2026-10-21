@@ -307,7 +307,7 @@ defmodule Sake.Server.Dispatch do
   defp call_validated(spec, params, ctx) do
     raw_args = params["arguments"] || %{}
 
-    case Sake.Schema.validate(spec.input_schema, raw_args) do
+    case Sake.Schema.validate(spec.input_schema, raw_args, absent: spec.absent) do
       {:ok, args} ->
         with :ok <- task_capability(spec, ctx) do
           with_inputs(spec.name, raw_args, params, ctx, &run_tool(spec, args, &1))

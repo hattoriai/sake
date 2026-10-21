@@ -49,6 +49,26 @@ defmodule Sake.SchemaTest do
     assert Schema.build([]) == %{"type" => "object", "additionalProperties" => false}
   end
 
+  test "validate with absent: :omit leaves out what the client left out, at every level" do
+    schema =
+      Schema.build([
+        {:query, :string, required: true},
+        {:limit, :integer, default: 20},
+        {:since, :string, []},
+        {:edits, {:array, {:object, [{:row, :integer, required: true}, {:before, :any, []}]}}, []}
+      ])
+
+    input = %{"query" => "x", "edits" => [%{"row" => 1}, %{"row" => 2, "before" => nil}]}
+
+    # By default, an absent optional property is nil.
+    assert {:ok, %{since: nil, edits: [%{row: 1, before: nil}, _]}} =
+             Schema.validate(schema, input)
+
+    # Omitted: what the client sent, a null it sent included; defaults still apply.
+    assert {:ok, args} = Schema.validate(schema, input, absent: :omit)
+    assert args == %{query: "x", limit: 20, edits: [%{row: 1}, %{row: 2, before: nil}]}
+  end
+
   test "validate coerces keys, applies defaults, reports paths" do
     schema = Schema.build(@args)
 

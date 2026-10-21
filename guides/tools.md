@@ -34,7 +34,8 @@ below), `meta` (a map merged into the tool's `_meta`), and `input_schema`
 (a raw JSON Schema map instead of `arg` lines, for a shape `arg` cannot
 express), `task` (`:optional` or `:required`; see `guides/tasks.md`),
 and `ui` and `visibility` (the MCP App the host shows with the tool's
-result, and who may call the tool; see `guides/apps.md`).
+result, and who may call the tool; see `guides/apps.md`), and `absent`
+(`:omit`: see Arguments).
 
 List the tool on a server:
 
@@ -79,6 +80,17 @@ Declared arguments become the map `execute/2` receives, with atom keys
 exactly as declared (no camelCase conversion — an argument written
 `arg :resourceUri, :string` is looked up on the wire as `"resourceUri"`
 and pattern-matched as `%{resourceUri: ...}`).
+
+An optional argument the client leaves out is `nil` in that map (or its
+`default`), at every level, so `execute/2` can match on every declared
+key. A tool that must tell a left-out argument from one sent as `null`
+(`before: null`, "the cell was empty", is not an edit with no `before`)
+says `absent: :omit`: a left-out argument with no default is then left
+out of the map, in nested objects and the objects of arrays too.
+
+```elixir
+use Sake.Tool, name: "edit_cells", description: "Edits cells", absent: :omit
+```
 
 ## Output and results
 
