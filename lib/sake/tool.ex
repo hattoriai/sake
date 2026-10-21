@@ -20,7 +20,11 @@ defmodule Sake.Tool do
   (`[:model, :app]` by default; `[:app]` for a tool only an app calls,
   which a client without MCP Apps does not see), `authentication`
   (`[acr: ["mfa"], max_age: 300]`: how the person must have signed in
-  to call it, see "Step-up authentication" in `Sake.Server`).
+  to call it, see "Step-up authentication" in `Sake.Server`), `absent`
+  (`:nil` by default: an optional argument the client left out is `nil`;
+  `:omit`: it is left out, at every level, so `execute/2` gets what the
+  client sent and tells a left-out argument from one sent as `null`, see
+  `Sake.Schema.validate/3`).
   """
 
   alias Sake.Schema
@@ -75,7 +79,8 @@ defmodule Sake.Tool do
       visibility: [:model, :app],
       headers: %{},
       mount: nil,
-      proxy: nil
+      proxy: nil,
+      absent: nil
     ]
 
     @spec to_wire(t(), String.t()) :: map()
@@ -182,9 +187,19 @@ defmodule Sake.Tool do
       meta: opts[:meta],
       ui: ui_uri!(module, opts[:ui]),
       visibility: visibility!(module, opts[:visibility]),
-      headers: Schema.header_paths(input_schema)
+      headers: Schema.header_paths(input_schema),
+      absent: absent!(module, opts[:absent])
     }
   end
+
+  defp absent!(_module, absent) when absent in [nil, nil, :omit], do: absent
+
+  defp absent!(module, other),
+    do:
+      raise(
+        ArgumentError,
+        "#{inspect(module)}: absent: must be :nil or :omit, got #{inspect(other)}"
+      )
 
   defp task_support!(_module, nil), do: nil
   defp task_support!(_module, false), do: nil

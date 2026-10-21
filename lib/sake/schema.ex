@@ -129,17 +129,50 @@ defmodule Sake.Schema do
   arguments with atom keys for declared properties (undeclared properties
   keep their string keys when the schema allows them, so client input never
   creates atoms), defaults applied, and `nil` for absent optional properties.
+
+  With `absent: :omit`, an absent optional property with no default is left
+  out instead, at every level (objects in arrays too): the arguments are
+  what the client sent, and a tool tells a property the client left out
+  from one it sent as `null`.
   """
-  @spec validate(map(), map()) ::
+  @spec validate(map(), map(), keyword()) ::
           {:ok, map()} | {:error, [%{path: [String.t()], message: String.t()}]}
-  def validate(schema, input) when is_map(input) do
+  def validate(schema, input, opts \\ []) when is_map(input) do
     input = Map.new(input, fn {k, v} -> {to_string(k), v} end)
 
     case check(schema, input, []) do
-      {:ok, value} -> {:ok, value}
-      {:error, errors} -> {:error, List.flatten(errors)}
+      {:ok, value} ->
+        if Keyword.get(opts, :absent, nil) == :omit,
+          do: {:ok, omit_absent(schema, value, input)},
+          else: {:ok, value}
+
+      {:error, errors} ->
+        {:error, List.flatten(errors)}
     end
   end
+
+  # The validated value without the declared properties the input did not
+  # have (and that have no default), level by level along the schema.
+  defp omit_absent(%{"type" => "object"} = schema, value, input)
+       when is_map(value) and is_map(input) do
+    input = Map.new(input, fn {k, v} -> {to_string(k), v} end)
+
+    Enum.reduce(schema["properties"] || %{}, value, fn {name, prop}, acc ->
+      omit_property(acc, String.to_atom(name), prop, Map.fetch(input, name))
+    end)
+  end
+
+  defp omit_absent(%{"type" => "array", "items" => items}, value, input)
+       when is_list(value) and is_list(input) and length(value) == length(input),
+       do: value |> Enum.zip(input) |> Enum.map(fn {v, given} -> omit_absent(items, v, given) end)
+
+  defp omit_absent(_schema, value, _input), do: value
+
+  defp omit_property(acc, key, prop, {:ok, given}),
+    do: Map.update!(acc, key, &omit_absent(prop, &1, given))
+
+  defp omit_property(acc, key, prop, :error),
+    do: if(Map.has_key?(prop, "default"), do: acc, else: Map.delete(acc, key))
 
   defp check(%{"type" => "object"} = schema, value, path) when is_map(value) do
     props = schema["properties"] || %{}
