@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.4 (2026-10-21)
+
+### Added
+
+- `absent: :omit` (`use Sake.Tool`): a tool gets its arguments as the
+  client sent them. By default, an optional argument the client left out
+  is `nil` in the arguments (or its `default`), at every level. With
+  `absent: :omit`, a left-out argument with no default is left out of
+  the map, in nested objects and the objects of arrays too. Thus the
+  tool can tell a left-out argument from one sent as `null`. The default
+  behaviour does not change. "Arguments" in the tools guide. (#88)
+
 ## 0.4.3 (2026-10-21)
 
 Documentation only. Nothing changes in the code.
