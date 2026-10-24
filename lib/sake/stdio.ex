@@ -425,7 +425,13 @@ defmodule Sake.Stdio do
   # ---- legacy
 
   defp initialize({:request, id, "initialize", params} = parsed, state) do
-    ctx = Context.new(era: :legacy, secret: state.secret, server: state.server)
+    ctx =
+      Context.new(
+        era: :legacy,
+        client_info: map(params["clientInfo"]),
+        secret: state.secret,
+        server: state.server
+      )
 
     outcome =
       Trace.server(parsed, ctx, {:stdio, state.nonce}, fn ->

@@ -1,8 +1,10 @@
 defmodule Sake.Server.Session do
   @moduledoc """
   Legacy session IDs are signed tokens that carry the negotiated revision,
-  the client capabilities, the log level `logging/setLevel` last set, and
-  a random nonce. The server stores nothing per session.
+  the client capabilities, the client's name, title and version (from the
+  `clientInfo` of its `initialize`, what components see as
+  `ctx.client_info`), the log level `logging/setLevel` last set, and a
+  random nonce. The server stores nothing per session.
 
   The nonce is the session's identity: a re-minted ID (after
   `logging/setLevel`, or when the ID gets old) keeps it, so the session's
@@ -17,27 +19,55 @@ defmodule Sake.Server.Session do
   @type session :: %{
           revision: String.t(),
           capabilities: map(),
+          client_info: map(),
           minted_at: integer(),
           log_level: String.t() | nil,
           nonce: String.t()
         }
 
-  @doc "Mints a new session ID; `nonce` is the identity of an existing session being renewed."
-  @spec mint(binary(), String.t(), map(), String.t() | nil, String.t() | nil) :: String.t()
-  def mint(secret, revision, capabilities, log_level \\ nil, nonce \\ nil) do
-    Plug.Crypto.sign(secret, @salt, %{
-      v: revision,
-      c: capabilities,
-      t: System.system_time(:second),
-      l: log_level,
-      n: nonce || new_nonce()
-    })
-  end
+  @doc """
+  Mints a new session ID for the client's `clientInfo`, of which it keeps
+  the name, title and version (see `client_info/1`).
+  """
+  @spec mint(binary(), String.t(), map(), term()) :: String.t()
+  def mint(secret, revision, capabilities, client_info \\ %{}),
+    do: sign(secret, revision, capabilities, client_info(client_info), nil, new_nonce())
 
   @doc "Re-mints `session` with the same nonce and the given log level."
   @spec renew(binary(), session(), String.t() | nil) :: String.t()
   def renew(secret, session, log_level),
-    do: mint(secret, session.revision, session.capabilities, log_level, session.nonce)
+    do:
+      sign(
+        secret,
+        session.revision,
+        session.capabilities,
+        session.client_info,
+        log_level,
+        session.nonce
+      )
+
+  defp sign(secret, revision, capabilities, client_info, log_level, nonce) do
+    Plug.Crypto.sign(secret, @salt, %{
+      v: revision,
+      c: capabilities,
+      i: client_info,
+      t: System.system_time(:second),
+      l: log_level,
+      n: nonce
+    })
+  end
+
+  @doc """
+  The part of a client's `clientInfo` a session keeps: its `name`,
+  `title` and `version`, when they are strings. The ID travels in a
+  header on every request, so the rest (icons, a website URL) stays out.
+  """
+  @spec client_info(term()) :: map()
+  def client_info(info) when is_map(info),
+    do:
+      info |> Map.take(["name", "title", "version"]) |> Map.filter(fn {_, v} -> is_binary(v) end)
+
+  def client_info(_info), do: %{}
 
   defp new_nonce, do: 16 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
 
@@ -49,6 +79,7 @@ defmodule Sake.Server.Session do
          %{
            revision: v,
            capabilities: c,
+           client_info: Map.get(payload, :i, %{}),
            minted_at: t,
            log_level: Map.get(payload, :l),
            nonce: n

@@ -127,8 +127,12 @@ defmodule Sake.Test.Endpoint do
 
   # ---- legacy
 
-  defp initialize(endpoint, session, {:request, id, "initialize", _params} = parsed) do
-    ctx = context(endpoint, era: :legacy)
+  defp initialize(endpoint, session, {:request, id, "initialize", params} = parsed) do
+    ctx =
+      context(endpoint,
+        era: :legacy,
+        client_info: Sake.Server.Session.client_info(params["clientInfo"])
+      )
 
     outcome =
       Trace.server(parsed, ctx, {:local, nil}, fn ->
@@ -137,7 +141,7 @@ defmodule Sake.Test.Endpoint do
 
     case outcome do
       {:initialize, revision, capabilities, result} ->
-        session_id = Sake.Server.Session.mint(ctx.secret, revision, capabilities)
+        session_id = Sake.Server.Session.mint(ctx.secret, revision, capabilities, ctx.client_info)
         reply(%{session | session_id: session_id}, JSONRPC.result(id, result))
 
       {:error, error} ->
@@ -154,6 +158,7 @@ defmodule Sake.Test.Endpoint do
           context(endpoint,
             era: :legacy,
             protocol_version: legacy.revision,
+            client_info: legacy.client_info,
             client_capabilities: legacy.capabilities,
             log_level: legacy.log_level
           )
