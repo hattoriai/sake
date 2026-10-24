@@ -69,6 +69,13 @@ defmodule Sake.TestTest do
     def execute(%{}, ctx), do: {:ok, ctx.base_url || "nowhere"}
   end
 
+  defmodule Who do
+    use Sake.Tool, name: "who", description: "Says who the client is"
+
+    @impl true
+    def execute(%{}, ctx), do: {:ok, ctx.client_info}
+  end
+
   defmodule Server do
     use Sake.Server, name: "test-server", version: "1"
     scope "issues:read", "Read issues"
@@ -77,6 +84,7 @@ defmodule Sake.TestTest do
     tools [
       Whoami,
       Where,
+      Who,
       Boom,
       Wait,
       Changes,
@@ -512,6 +520,17 @@ defmodule Sake.TestTest do
 
     assert {:ok, %{text: "hi"}} =
              call_tool(mcp_connect(Server), "echo", %{"text" => "hi"})
+  end
+
+  describe "client_info" do
+    test "a component sees the client's clientInfo, on both eras" do
+      for era <- [:modern, :legacy] do
+        client = connect(Server, era: era, client_info: %{"name" => "orchard", "version" => "1"})
+
+        assert {:ok, %ToolResult{structured: %{"name" => "orchard", "version" => "1"}}} =
+                 call_tool(client, "who")
+      end
+    end
   end
 end
 

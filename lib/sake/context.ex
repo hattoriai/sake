@@ -10,6 +10,13 @@ defmodule Sake.Context do
   component runs as a task (see `Sake.Tasks`); `assigns` holds what the
   server's middleware decided for this request (see `Sake.Middleware`).
 
+  `client_info` is the client's `clientInfo`, such as
+  `%{"name" => "claude-code", "version" => "2.1.0"}`: on the modern
+  protocol, from the request's `_meta`; on a legacy session, from its
+  `initialize`. Over HTTP (`Sake.Plug`), and in `Sake.Test`, a legacy
+  session keeps only its `name`, `title` and `version`, which ride in the
+  signed session ID. It is `%{}` when the client sent none.
+
   `base_url` is the URL of the MCP endpoint the request reached, as the
   client reaches it: scheme, host, the port when it is not the scheme's
   default, and the endpoint's path, without a query or a trailing slash

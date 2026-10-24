@@ -29,4 +29,36 @@ defmodule Sake.Server.SessionTest do
     {:ok, renewed} = Session.verify(@secret, Session.renew(@secret, a, "debug"))
     assert renewed.nonce == a.nonce and renewed.log_level == "debug"
   end
+
+  test "a session keeps the client's name, title and version, across a renewal" do
+    info = %{
+      "name" => "claude-code",
+      "title" => "Claude Code",
+      "version" => "2.1.0",
+      "icons" => [%{"src" => "https://example.com/icon.png"}]
+    }
+
+    {:ok, session} = Session.verify(@secret, Session.mint(@secret, "2025-11-25", %{}, info))
+    kept = %{"name" => "claude-code", "title" => "Claude Code", "version" => "2.1.0"}
+    assert session.client_info == kept
+
+    {:ok, renewed} = Session.verify(@secret, Session.renew(@secret, session, "debug"))
+    assert renewed.client_info == kept
+
+    assert {:ok, %{client_info: %{}}} =
+             Session.verify(@secret, Session.mint(@secret, "2025-11-25", %{}, "nope"))
+  end
+
+  test "an ID minted before sessions kept the client's info still verifies" do
+    id =
+      Plug.Crypto.sign(@secret, "sake.session", %{
+        v: "2025-06-18",
+        c: %{},
+        t: System.system_time(:second),
+        l: nil,
+        n: "nonce"
+      })
+
+    assert {:ok, %{client_info: %{}, nonce: "nonce"}} = Session.verify(@secret, id)
+  end
 end

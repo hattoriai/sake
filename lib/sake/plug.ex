@@ -343,10 +343,13 @@ defmodule Sake.Plug do
 
   # ---- legacy
 
-  defp legacy(conn, opts, {:request, id, "initialize", _} = parsed, _header_version) do
+  defp legacy(conn, opts, {:request, id, "initialize", params} = parsed, _header_version) do
+    client_info = Session.client_info(params["clientInfo"])
+
     ctx =
       Context.new(
         era: :legacy,
+        client_info: client_info,
         secret: secret(opts),
         server: opts.server,
         reraise: opts.reraise,
@@ -363,7 +366,10 @@ defmodule Sake.Plug do
     case outcome do
       {:initialize, revision, caps, result} ->
         conn
-        |> put_resp_header("mcp-session-id", Session.mint(secret(opts), revision, caps))
+        |> put_resp_header(
+          "mcp-session-id",
+          Session.mint(secret(opts), revision, caps, client_info)
+        )
         |> send_json(200, JSONRPC.result(id, result))
 
       {:error, error} ->
@@ -383,6 +389,7 @@ defmodule Sake.Plug do
           Context.new(
             era: :legacy,
             protocol_version: session.revision,
+            client_info: session.client_info,
             client_capabilities: session.capabilities,
             log_level: session.log_level,
             scope: opts.scope.(conn),

@@ -533,4 +533,83 @@ defmodule Sake.PlugTest do
       end
     end
   end
+
+  describe "client_info" do
+    defmodule Who do
+      @moduledoc false
+      use Sake.Tool, name: "who", description: "Says who the client is"
+
+      @impl true
+      def execute(%{}, ctx), do: {:ok, ctx.client_info}
+    end
+
+    defmodule WhoServer do
+      @moduledoc false
+      use Sake.Server, name: "who", version: "1"
+      tools [Who]
+    end
+
+    defp who(opts, session) do
+      conn = LegacyClient.post(opts, session, "tools/call", %{"name" => "who"})
+      assert conn.status == 200
+      LegacyClient.json(conn)["result"]["structuredContent"]
+    end
+
+    test "a legacy session keeps the initialize request's clientInfo, on every revision" do
+      opts = ModernClient.opts(server: WhoServer)
+
+      for revision <- ["2025-03-26", "2025-06-18", "2025-11-25"] do
+        session = LegacyClient.initialize(opts, revision)
+        assert who(opts, session) == %{"name" => "legacy-test", "version" => "0"}
+      end
+    end
+
+    test "only its name, title and version, in the session ID, across a renewal" do
+      opts = ModernClient.opts(server: WhoServer)
+
+      conn =
+        LegacyClient.raw(
+          opts,
+          nil,
+          Sake.JSONRPC.request(0, "initialize", %{
+            "protocolVersion" => "2025-11-25",
+            "capabilities" => %{},
+            "clientInfo" => %{
+              "name" => "claude-code",
+              "title" => "Claude Code",
+              "version" => "2.1.0",
+              "icons" => [%{"src" => "https://example.com/icon.png"}],
+              "websiteUrl" => "https://example.com"
+            }
+          }),
+          header: "2025-11-25"
+        )
+
+      [id] = get_resp_header(conn, "mcp-session-id")
+      session = %{id: id, revision: "2025-11-25"}
+      info = %{"name" => "claude-code", "title" => "Claude Code", "version" => "2.1.0"}
+      assert who(opts, session) == info
+
+      conn = LegacyClient.post(opts, session, "logging/setLevel", %{"level" => "debug"})
+      [renewed] = get_resp_header(conn, "mcp-session-id")
+      assert who(opts, %{session | id: renewed}) == info
+    end
+
+    test "the request telemetry names the legacy client" do
+      opts = ModernClient.opts(server: WhoServer)
+      session = LegacyClient.initialize(opts)
+
+      :telemetry.attach(
+        "client-name",
+        [:sake, :server, :request, :stop],
+        fn _e, _m, meta, pid -> send(pid, {:stop, meta}) end,
+        self()
+      )
+
+      who(opts, session)
+      :telemetry.detach("client-name")
+
+      assert_receive {:stop, %{method: "tools/call", era: :legacy, client_name: "legacy-test"}}
+    end
+  end
 end

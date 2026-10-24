@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`ctx.client_info` on a legacy session over HTTP.** On the
+  handshake-era revisions (2025-03-26, 2025-06-18, 2025-11-25) through
+  `Sake.Plug`, a component's `ctx.client_info` was always `%{}`: the
+  session did not keep the `clientInfo` of its `initialize`, so an app
+  could not tell which client called (Claude Code, for one, still
+  connects this way), and the `client_name` of the
+  `[:sake, :server, :request]` telemetry and of middleware was `nil`.
+  The session ID now carries the client's `name`, `title` and `version`
+  (only these, as the ID rides in a header on every request), and
+  `ctx.client_info` has them, as over stdio. `Sake.Test`'s in-memory
+  client on `era: :legacy` does the same. A session ID minted before
+  this keeps working, with `ctx.client_info` `%{}` until the client
+  initializes again. `Sake.Server.Session.mint/4` takes the client's
+  `clientInfo` in place of the log level and nonce, which only
+  `renew/3` sets.
+
 ## 0.4.4 (2026-10-21)
 
 ### Added
