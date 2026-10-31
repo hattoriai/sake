@@ -44,6 +44,7 @@ defmodule Sake.MixProject do
   defp deps do
     [
       {:bandit, "~> 1.5", only: [:dev, :test]},
+      {:benchee, "~> 1.3", only: :dev},
       {:bypass, "~> 2.1", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
@@ -111,13 +112,15 @@ defmodule Sake.MixProject do
         "guides/protocol_versions.md",
         "guides/security.md",
         "guides/clustering.md",
+        "guides/performance.md",
         "CHANGELOG.md",
         "SECURITY.md"
       ],
       groups_for_extras: [
         Guides:
           ~w(guides/quickstart.md guides/tools.md guides/tasks.md guides/apps.md guides/skills.md guides/extensions.md guides/resources_and_prompts.md guides/authorization.md guides/external_auth.md guides/tenants.md guides/middleware.md guides/composing.md guides/libraries.md guides/client.md guides/stdio.md guides/observability.md guides/testing.md),
-        Reference: ~w(guides/protocol_versions.md guides/security.md guides/clustering.md)
+        Reference:
+          ~w(guides/protocol_versions.md guides/security.md guides/clustering.md guides/performance.md)
       ],
       groups_for_modules: [
         Server: [
