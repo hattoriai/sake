@@ -65,7 +65,7 @@ defmodule Sake.Proxy.Forward do
         if tasks?(ctx), do: {:task, task}, else: unexpected_task()
 
       {:ok, result} ->
-        {:ok, tool_result(result)}
+        {:ok, tool_result(result, ctx)}
 
       error ->
         error
@@ -77,12 +77,21 @@ defmodule Sake.Proxy.Forward do
 
   # The result as Sake's own tools give it: what an upstream adds beyond a
   # `CallToolResult` (its server info, a `resultType`) stays behind.
-  defp tool_result(result) do
+  # Its structuredContent is any JSON value the upstream sent (`[]` and
+  # `null` included), and on a revision before 2026-07-28 only an object,
+  # as for a local tool's.
+  defp tool_result(result, ctx) do
     %{
       "content" => result |> Map.get("content") |> List.wrap() |> Enum.filter(&is_map/1),
       "isError" => result["isError"] == true
     }
-    |> put_some("structuredContent", map(result["structuredContent"]))
+    |> then(fn wire ->
+      case Map.fetch(result, "structuredContent") do
+        {:ok, value} -> Map.put(wire, "structuredContent", value)
+        :error -> wire
+      end
+    end)
+    |> Sake.Server.Results.compatible(ctx)
     |> put_some("_meta", meta(result["_meta"]))
   end
 
@@ -459,7 +468,7 @@ defmodule Sake.Proxy.Forward do
         :cancelled
 
       task["status"] == "completed" ->
-        {:ok, tool_result(map(task["result"]) || %{})}
+        {:ok, tool_result(map(task["result"]) || %{}, ctx)}
 
       task["status"] == "failed" ->
         {:failed, task_error(task["error"])}

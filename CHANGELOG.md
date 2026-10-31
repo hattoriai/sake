@@ -4,6 +4,32 @@
 
 ### Added
 
+- **JSON Schema 2020-12 validation.** `Sake.Schema.Validator` validates a
+  tool's arguments against its whole input schema. That covers local
+  `$ref`s (pointers, `$anchor`s, embedded `$id`s), `allOf`, `anyOf`,
+  `oneOf`, `not`, `if`/`then`/`else`, `dependentSchemas`,
+  `dependentRequired`, `unevaluatedProperties`/`unevaluatedItems`,
+  `prefixItems`, `contains`, `const`, type lists and `null`,
+  `multipleOf`, the exclusive bounds and the size keywords. Before, a raw
+  `input_schema:` was validated only for what `arg` lines emit, and the
+  rest was accepted without being checked, so a published schema could
+  promise validation the tool did not get. No remote reference is
+  fetched, and work is bounded (64 nested references, 100 000 schemas
+  per validation). A raw `input_schema:` or `output_schema:` is checked
+  when the tool compiles. Another `$schema` dialect, `$dynamicRef` or
+  `$recursiveRef`, a `$ref` that does not resolve within the schema, or a
+  `pattern` that does not compile is a compile error. See "Raw schemas"
+  in `guides/tools.md`.
+- **`Sake.Tool.Result`**, for a structured result of any JSON type:
+  `{:ok, Sake.Tool.Result.new(structured: [], text: "No issues")}`.
+  `structured:` may be `[]`, `nil`, a string, a number or a boolean,
+  which the convenient return forms read as no content or as text. The
+  model's text or content, `_meta` and `isError` are given on their own.
+- **Output validation.** A local tool's structured result is checked
+  against its output schema. A mismatch is logged by default; with
+  `validate_output: :error` the client gets a tool error instead.
+  `output_schema:` takes a raw schema.
+
 - **Skills over MCP** (the `io.modelcontextprotocol/skills` extension,
   SEP-2640, as its beta specification has it against base revision
   2026-07-28). A library or app can ship the workflows that use its
@@ -44,6 +70,20 @@
   on. `Sake.Resource.Spec` has a new `skill` field.
 
 ### Fixed
+
+- **A proxied tool's schema and structured result keep what the
+  upstream sent.** An upstream input schema without a top-level `type`
+  was replaced by an open object, which lost its composition, references
+  and every constraint. It is now kept, with `"type": "object"` added.
+  An upstream's `structuredContent` that was not an object (`[]`,
+  `null`, a scalar) was dropped; it now passes through on 2026-07-28.
+
+- **`structuredContent` is an object on the revisions before
+  2026-07-28.** A list result was sent as an array in
+  `structuredContent` on every revision, though 2025-06-18 and
+  2025-11-25 allow only an object there. On those revisions it is now
+  left out, and its JSON text stays. An output schema whose root is not
+  an object is listed on 2026-07-28 only, which allows one.
 
 - **An MCP App's own calls under a mount prefix.** A mount renamed an
   app's tools and its `ui://` URI, but the names written into the app's

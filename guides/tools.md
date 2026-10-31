@@ -30,9 +30,10 @@ snake-cased — `MyApp.MCP.Add` becomes `"add"`), `title`, `description`,
 `icons`, `scope` (a string, or a list — see Scopes below), `annotations`
 (`read_only`, `destructive`, `idempotent`, `open_world` — all booleans, plus
 `title`), `stream` (see Streaming below), `ttl` (milliseconds; see Caching
-below), `meta` (a map merged into the tool's `_meta`), and `input_schema`
-(a raw JSON Schema map instead of `arg` lines, for a shape `arg` cannot
-express), `task` (`:optional` or `:required`; see `guides/tasks.md`),
+below), `meta` (a map merged into the tool's `_meta`), `input_schema`
+and `output_schema` (raw JSON Schema maps instead of `arg` lines and an
+`output` block, for a shape `arg` cannot express; see "Raw schemas"),
+`validate_output` (see "Output schemas"), `task` (`:optional` or `:required`; see `guides/tasks.md`),
 and `ui` and `visibility` (the MCP App the host shows with the tool's
 result, and who may call the tool; see `guides/apps.md`), and `absent`
 (`:omit`: see Arguments).
@@ -92,14 +93,86 @@ out of the map, in nested objects and the objects of arrays too.
 use Sake.Tool, name: "edit_cells", description: "Edits cells", absent: :omit
 ```
 
+## Raw schemas
+
+`input_schema:` takes a JSON Schema 2020-12 map, for a shape `arg` lines
+cannot express: alternatives, conditions, shared definitions.
+
+```elixir
+use Sake.Tool,
+  name: "contact",
+  description: "Records how to reach a customer",
+  input_schema: %{
+    "type" => "object",
+    "$defs" => %{"phone" => %{"type" => "string", "pattern" => "^\\+?[0-9 ]+$"}},
+    "properties" => %{
+      "method" => %{"enum" => ["phone", "email"]},
+      "phone" => %{"$ref" => "#/$defs/phone"},
+      "email" => %{"type" => "string"}
+    },
+    "required" => ["method"],
+    "if" => %{"properties" => %{"method" => %{"const" => "phone"}}},
+    "then" => %{"required" => ["phone"]},
+    "else" => %{"required" => ["email"]},
+    "additionalProperties" => false
+  }
+```
+
+Sake validates the arguments against all of it (`Sake.Schema.Validator`),
+the same way for `arg` lines and raw schemas:
+
+- **Dialect:** JSON Schema 2020-12, the MCP default. A `$schema` naming
+  another dialect is refused.
+- **References:** `$ref` to the schema itself (`#`), to a JSON Pointer in
+  it (`#/$defs/phone`), to an `$anchor`, and to a schema embedded with
+  its own `$id`. A remote reference is never fetched.
+- **Composition and conditions:** `allOf`, `anyOf`, `oneOf`, `not`,
+  `if`/`then`/`else`, `dependentSchemas`, `dependentRequired`.
+- **Objects and arrays:** `properties`, `patternProperties`,
+  `additionalProperties`, `unevaluatedProperties`, `propertyNames`,
+  `required`, the size keywords; `prefixItems`, `items`, `contains`
+  (with `minContains`/`maxContains`), `unevaluatedItems`, `uniqueItems`.
+- **Values:** `type` (one or a list, `"null"` included), `enum`, `const`,
+  the numeric bounds and `multipleOf`, `minLength`, `maxLength` and
+  `pattern`.
+- **Annotations:** `format`, `default`, `title`, `description`,
+  `x-mcp-header` and unknown keywords don't fail a value.
+- **Regular expressions:** `pattern` uses Erlang's PCRE in Unicode mode,
+  which reads ECMA-262 patterns the same way for everything but a few
+  escapes.
+
+The schema is checked when the tool compiles. Another dialect, a
+`$dynamicRef` or `$recursiveRef`, a `$ref` that does not resolve within
+the schema, or a `pattern` that does not compile is a compile error.
+Silently validating less than the schema promises would be worse.
+
+Validation work is bounded: references nest at most 64 deep, and one
+call evaluates at most 100 000 schemas. Past either, the call is
+refused.
+
+The arguments `execute/2` receives follow the schema's `properties`.
+Each declared property is under its atom key, with its `default` or
+`nil` when left out. Anything else the schema allows keeps its string
+key, so client input never creates atoms. A property declared only
+inside a composition branch (an `allOf`'s `properties`, say) is
+validated, but keeps its string key. A raw schema without a top-level
+`"type": "object"` gives the arguments with string keys, as before. The
+specification requires that type at the root of every tool's input
+schema, so give it.
+
 ## Output and results
 
 `output do ... end` declares the tool's `outputSchema` with the same `arg`
-syntax. `execute/2` returns:
+syntax; `output_schema:` takes a raw one (see "Output schemas"). `execute/2`
+returns:
 
 - `{:ok, text}` — a single text content block.
-- `{:ok, %{...} | [...]}` — a map or a list is sent as JSON text *and* as
-  `structuredContent`, whether or not `output` is declared.
+- `{:ok, %{...} | [...]}` — a map or a non-empty list is sent as JSON
+  text *and* as `structuredContent`, whether or not `output` is
+  declared. On a revision before 2026-07-28, which allows only an object
+  there, a list's `structuredContent` is left out and its JSON text
+  stays.
+- `{:ok, %Sake.Tool.Result{}}` — each part said explicitly, below.
 - `{:ok, [%Sake.Content{}, ...]}` — full control: `Sake.Content.text/2`,
   `image/3`, `audio/3`, `resource/3` (embedded), `resource_link/2`.
 - `{:ok, value, meta: %{...}}` — the three shapes above, plus a `_meta` map
@@ -117,6 +190,55 @@ syntax. `execute/2` returns:
   `data.requiredCapabilities` is `capabilities`, e.g.
   `%{"sampling" => %{}}`. Resources' `read/2` and prompts' `get/2` may
   return it too.
+
+### Explicit results
+
+The forms above read a value's shape: a string is text, `[]` is no
+content, `nil` is the text `""`. A tool whose structured result is an
+empty list, `null`, a string, a number or a boolean says so with
+`Sake.Tool.Result.new/1`:
+
+```elixir
+def execute(%{query: q}, ctx) do
+  issues = Issues.search(ctx.scope, q)
+  {:ok, Sake.Tool.Result.new(structured: issues, text: "#{length(issues)} issues")}
+end
+```
+
+- `structured:` is any JSON value, and it is present only when given,
+  so `structured: nil` sends `null`.
+- `text:` (a string) or `content:` (a `[%Sake.Content{}, ...]` list) is
+  what the model reads. Without either, it reads the structured value's
+  JSON.
+- `meta:` is the result's `_meta`.
+- `error: true` makes it a tool error (`isError`) that still carries
+  structured content.
+
+| Revision | `structuredContent` |
+|---|---|
+| 2026-07-28 | any JSON value |
+| 2025-11-25, 2025-06-18 | an object only: any other value is left out, and the model's text (its JSON, or `text:`) carries it |
+| 2025-03-26 | an object only, as above (clients of this revision ignore it) |
+
+A proxied tool's `structuredContent` passes through as the upstream sent
+it, under the same rule for the client's revision.
+
+### Output schemas
+
+`output do ... end` and `output_schema:` give the tool's `outputSchema`.
+A raw one is checked when the tool compiles, as an input schema is. On
+2026-07-28 it may be any 2020-12 schema (`%{"type" => "array", ...}`).
+The revisions before it allow only an object at its root, so there an
+output schema whose root is not `"type": "object"` is left out of the
+tool's listing.
+
+Each structured result of a local tool is checked against the output
+schema. By default a result that does not match is still sent, and
+logged as a warning naming what did not match. With `validate_output:
+:error` the client gets a tool error instead (`isError: true`, "The
+tool's result does not match its output schema: ..."), so a client that
+trusts the schema never sees a result that breaks it. A proxied tool's
+result is its upstream's to check.
 
 Sake encodes maps and lists with Elixir's `JSON`, which encodes a struct
 only when it implements `JSON.Encoder`. Ecto schemas and other structs

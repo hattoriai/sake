@@ -3,10 +3,10 @@ defmodule Sake.Schema do
   Builds JSON Schema 2020-12 from `arg` declarations and validates arguments
   against it.
 
-  The validator covers what the declarations emit: object properties,
-  `required`, `additionalProperties`, the primitive types, `enum`, arrays of
-  one type, `minimum`/`maximum`, `minLength`/`maxLength`, `pattern`, and
-  `default`. It never fetches a `$ref`.
+  Validation is JSON Schema 2020-12 (`Sake.Schema.Validator`): what the
+  declarations emit, and the rest of the dialect a tool's own
+  `input_schema:` may use, local `$ref`s, composition and conditions
+  included. It never fetches a remote `$ref`.
   """
 
   @type arg :: {atom(), type(), keyword()}
@@ -125,10 +125,14 @@ defmodule Sake.Schema do
   def valid_header_name?(_), do: false
 
   @doc """
-  Validates `input` (string or atom keys) against `schema`. Returns the
-  arguments with atom keys for declared properties (undeclared properties
-  keep their string keys when the schema allows them, so client input never
-  creates atoms), defaults applied, and `nil` for absent optional properties.
+  Validates `input` (string or atom keys) against `schema` with
+  `Sake.Schema.Validator`, which implements JSON Schema 2020-12 (local
+  references, composition, conditions and the rest; see its
+  documentation). Returns the arguments with atom keys for the properties
+  `properties` declares (undeclared properties keep their string keys,
+  so client input never creates atoms), defaults applied, and `nil` for
+  absent optional properties. A whole number sent where an integer is
+  expected (`2.0`) becomes one (`2`).
 
   With `absent: :omit`, an absent optional property with no default is left
   out instead, at every level (objects in arrays too): the arguments are
@@ -140,14 +144,16 @@ defmodule Sake.Schema do
   def validate(schema, input, opts \\ []) when is_map(input) do
     input = Map.new(input, fn {k, v} -> {to_string(k), v} end)
 
-    case check(schema, input, []) do
-      {:ok, value} ->
+    case Sake.Schema.Validator.validate(schema, input) do
+      :ok ->
+        value = shape(schema, input)
+
         if Keyword.get(opts, :absent, nil) == :omit,
           do: {:ok, omit_absent(schema, value, input)},
           else: {:ok, value}
 
       {:error, errors} ->
-        {:error, List.flatten(errors)}
+        {:error, errors}
     end
   end
 
@@ -174,152 +180,29 @@ defmodule Sake.Schema do
   defp omit_property(acc, key, prop, :error),
     do: if(Map.has_key?(prop, "default"), do: acc, else: Map.delete(acc, key))
 
-  defp check(%{"type" => "object"} = schema, value, path) when is_map(value) do
-    props = schema["properties"] || %{}
-    required = schema["required"] || []
-    additional = Map.get(schema, "additionalProperties", true)
+  # The arguments a tool receives, from input the validator accepted:
+  # declared properties under atom keys (the names come from the host's
+  # schema, never from the client), defaults and `nil` for absent ones,
+  # whole numbers as integers where the schema says `integer`.
+  defp shape(%{"type" => "object"} = schema, value) when is_map(value) do
+    props = if is_map(schema["properties"]), do: schema["properties"], else: %{}
 
-    {results, errors} = process_properties(props, required, value, path, {%{}, []})
+    declared =
+      Map.new(props, fn {name, prop} ->
+        key = String.to_atom(name)
 
-    {results, errors} =
-      process_extra_properties(
-        Map.drop(value, Map.keys(props)),
-        additional,
-        path,
-        {results, errors}
-      )
+        case Map.fetch(value, name) do
+          {:ok, v} -> {key, shape(prop, v)}
+          :error -> {key, if(is_map(prop), do: Map.get(prop, "default"))}
+        end
+      end)
 
-    if errors == [], do: {:ok, results}, else: {:error, Enum.reverse(errors)}
+    value |> Map.drop(Map.keys(props)) |> Map.merge(declared)
   end
 
-  defp check(%{"type" => "object"}, _value, path),
-    do: {:error, %{path: path, message: "must be an object"}}
+  defp shape(%{"type" => "array", "items" => items}, value) when is_list(value),
+    do: Enum.map(value, &shape(items, &1))
 
-  defp check(%{"type" => "array", "items" => items}, value, path) when is_list(value) do
-    value
-    |> Enum.with_index()
-    |> Enum.reduce({[], []}, fn {v, i}, {acc, errs} ->
-      case check(items, v, path ++ [Integer.to_string(i)]) do
-        {:ok, v} -> {[v | acc], errs}
-        {:error, e} -> {acc, [e | errs]}
-      end
-    end)
-    |> case do
-      {acc, []} -> {:ok, Enum.reverse(acc)}
-      {_, errs} -> {:error, Enum.reverse(errs)}
-    end
-  end
-
-  defp check(%{"type" => "array"}, _value, path),
-    do: {:error, %{path: path, message: "must be an array"}}
-
-  defp check(%{"enum" => values} = schema, value, path) do
-    if value in values,
-      do: check(Map.delete(schema, "enum"), value, path),
-      else: {:error, %{path: path, message: "must be one of #{Enum.join(values, ", ")}"}}
-  end
-
-  defp check(%{"type" => "string"} = s, value, path) when is_binary(value) do
-    cond do
-      s["minLength"] && String.length(value) < s["minLength"] ->
-        {:error, %{path: path, message: "must be at least #{s["minLength"]} characters"}}
-
-      s["maxLength"] && String.length(value) > s["maxLength"] ->
-        {:error, %{path: path, message: "must be at most #{s["maxLength"]} characters"}}
-
-      s["pattern"] && not Regex.match?(Regex.compile!(s["pattern"]), value) ->
-        {:error, %{path: path, message: "does not match #{s["pattern"]}"}}
-
-      true ->
-        {:ok, value}
-    end
-  end
-
-  defp check(%{"type" => "string"}, _value, path),
-    do: {:error, %{path: path, message: "must be a string"}}
-
-  defp check(%{"type" => "integer"} = s, value, path) when is_float(value) do
-    if Float.floor(value) == value,
-      do: check(s, trunc(value), path),
-      else: {:error, %{path: path, message: "must be an integer"}}
-  end
-
-  defp check(%{"type" => "integer"} = s, value, path) when is_integer(value),
-    do: range(s, value, path)
-
-  defp check(%{"type" => "integer"}, _value, path),
-    do: {:error, %{path: path, message: "must be an integer"}}
-
-  defp check(%{"type" => "number"} = s, value, path) when is_number(value),
-    do: range(s, value, path)
-
-  defp check(%{"type" => "number"}, _value, path),
-    do: {:error, %{path: path, message: "must be a number"}}
-
-  defp check(%{"type" => "boolean"}, value, _path) when is_boolean(value), do: {:ok, value}
-
-  defp check(%{"type" => "boolean"}, _value, path),
-    do: {:error, %{path: path, message: "must be a boolean"}}
-
-  defp check(_schema, value, _path), do: {:ok, value}
-
-  defp process_properties(props, required, value, path, acc) do
-    Enum.reduce(props, acc, fn {name, prop}, {results, errors} ->
-      # Declared property names come from the host's schema, not from the client; undeclared keys stay strings.
-      key = String.to_atom(name)
-
-      case Map.fetch(value, name) do
-        {:ok, v} ->
-          validate_and_update(key, prop, v, path ++ [name], results, errors)
-
-        :error ->
-          handle_missing_property(name, prop, key, path, required, results, errors)
-      end
-    end)
-  end
-
-  defp validate_and_update(key, prop, value, path, results, errors) do
-    case check(prop, value, path) do
-      {:ok, v} -> {Map.put(results, key, v), errors}
-      {:error, e} -> {results, [e | errors]}
-    end
-  end
-
-  defp handle_missing_property(name, prop, key, path, required, results, errors) do
-    cond do
-      name in required -> {results, [%{path: path ++ [name], message: "is required"} | errors]}
-      Map.has_key?(prop, "default") -> {Map.put(results, key, prop["default"]), errors}
-      true -> {Map.put(results, key, nil), errors}
-    end
-  end
-
-  defp process_extra_properties(extra, additional, path, {results, errors}) do
-    cond do
-      extra == %{} ->
-        {results, errors}
-
-      additional == false ->
-        {results,
-         Enum.map(extra, fn {k, _} ->
-           %{path: path ++ [k], message: "is not an accepted argument"}
-         end) ++
-           errors}
-
-      true ->
-        {Map.merge(results, extra), errors}
-    end
-  end
-
-  defp range(s, value, path) do
-    cond do
-      s["minimum"] && value < s["minimum"] ->
-        {:error, %{path: path, message: "must be at least #{s["minimum"]}"}}
-
-      s["maximum"] && value > s["maximum"] ->
-        {:error, %{path: path, message: "must be at most #{s["maximum"]}"}}
-
-      true ->
-        {:ok, value}
-    end
-  end
+  defp shape(%{"type" => "integer"}, value) when is_float(value), do: trunc(value)
+  defp shape(_schema, value), do: value
 end

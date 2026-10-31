@@ -37,24 +37,39 @@ defmodule Sake.Tasks.Worker do
 
     # Bound here, in the `tools/call` request, so the run's span is the
     # child of the request's (see `Sake.Trace.task/3`).
+    caller = self()
+    ref = make_ref()
+
     {:ok, pid} =
       Task.Supervisor.start_child(
         Tasks.Supervisor,
-        Trace.bind(fn -> run(spec, args, ctx, follow) end),
+        Trace.bind(fn -> run(spec, args, ctx, follow, {caller, ref}) end),
         restart: :temporary
       )
+
+    # The worker is registered before the task is handed to the client:
+    # a `tasks/cancel` or `tasks/update` that follows at once reaches it.
+    monitor = Process.monitor(pid)
+
+    receive do
+      {^ref, :registered} -> :ok
+      {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+    end
+
+    Process.demonitor(monitor, [:flush])
 
     # A task outlives its request but not its time-to-live.
     {:ok, _} = :timer.kill_after(record.ttl_ms, pid)
     :ok
   end
 
-  defp run(spec, args, ctx, follow) do
+  defp run(spec, args, ctx, follow, {caller, ref}) do
     # Trapping exits turns a crash in a process the tool started (a linked
     # `Task`) into an error the tool sees, rather than a silent death that
     # would leave the task working until it expires.
     Process.flag(:trap_exit, true)
     {:ok, _} = Registry.register(Tasks.Registry, ctx.task, :worker)
+    send(caller, {ref, :registered})
     meta = %{task_id: ctx.task, tool: spec.name, server: ctx.server}
 
     Trace.task(spec.name, ctx.task, fn ->
