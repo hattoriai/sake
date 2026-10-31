@@ -49,6 +49,7 @@
       <section class="column"><h2>Closed</h2><div id="closed"></div></section>
     </div>
     <div id="details"></div>
+    <%= Sake.UI.json_script("sake-names", @names) %>
     <script><%= raw inline("dev/lib/sake_dev/ui/issue_board.js") %></script>
   </body>
 </html>
