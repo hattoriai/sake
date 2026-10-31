@@ -4,6 +4,24 @@
 
 ### Added
 
+- **Paged client lists and cache metadata.**
+  - **Paging:** `Sake.Client.list_tools_page/2`, `list_resources_page/2`,
+    `list_resource_templates_page/2` and `list_prompts_page/2` fetch one
+    page and return a `Sake.Client.Page`: its entries, its `next_cursor`
+    and its cache metadata.
+  - **Lazy enumeration:** `Sake.Client.reduce_list/5` goes through a
+    list's entries and fetches pages only as it needs them, so it can stop
+    after a bounded number of entries. It returns the session as the last
+    request left it, a refreshed token included, on success and on error.
+  - **Read metadata:** `Sake.Client.read_resource_result/2` returns a
+    `Sake.Client.ReadResult` with the read's cache metadata.
+  - **Cache metadata:** `Sake.Client.CacheInfo` holds a result's `ttlMs`
+    and `cacheScope`, with `fresh?/2`.
+  - **Unchanged:** the eager `list_*` functions and `read_resource/2`
+    return what they did. The client still caches nothing;
+    `guides/client.md` has a large-catalog example and a caching policy
+    built on the metadata.
+
 - **Resumable SSE streams** on legacy sessions (revisions 2025-03-26 to
   2025-11-25, "Resumability and Redelivery"):
   - **Server:** every event of a call's stream and of the session's `GET`
