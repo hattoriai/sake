@@ -4,6 +4,35 @@
 
 ### Added
 
+- **Recoverable task execution.** A persistent task store kept a task's
+  state, but its run was a process of the node that started it. When
+  that node went away, the task stayed `working` until it expired, with
+  nothing to finish it. Now:
+  - **Leases and recovery:** every run holds a lease on its task, which
+    it renews while it lives. When the lease lapses, the reaper of any
+    node recovers the task under the tool's new `recovery:` option:
+    `:fail` (the default, a terminal `-32603` with
+    `data.reason: "worker_lost"`) or `{:retry, attempts}` (the tool runs
+    again, at least once, never exactly once; answers the client already
+    gave are kept). A run claims the task first, and records its outcome
+    only while it holds the lease, so duplicate deliveries and stale runs
+    change nothing.
+  - **Runners:** `Sake.Tasks.Runner` lets a durable queue (Oban, say) run
+    tasks: the runner hands `Sake.Tasks.Job.encode/1` to the queue, whose
+    worker calls `Sake.Tasks.run/1`. The default,
+    `Sake.Tasks.Runner.Local`, runs tasks in-process as before. Sake adds
+    no dependency.
+  - **External jobs:** a tool can return `{:external, handle}` to hand its
+    task to an outside system, which reports back with
+    `Sake.Tasks.complete/3`, `fail/3` and `progress/5`.
+  - **Options:** new `tasks:` options `runner:` and `lease:`.
+    `Sake.Tasks.Store` has an optional `orphans/2`.
+
+  For an app on `Sake.Tasks.Store.Ecto` with an existing table: add the
+  new columns with `Sake.Tasks.Migration.add_execution/1`. Existing task
+  tools run as before, in-process, with no queue or database added. See
+  "State and execution" in `guides/tasks.md`.
+
 - **`Sake.Extension`: implement an MCP extension (SEP-2133) on a Sake
   server.** Before, `extensions:` could only advertise an extension. Sake
   answered its methods as unknown, so an extension needed a fork or a

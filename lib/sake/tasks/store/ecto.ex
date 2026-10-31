@@ -91,6 +91,20 @@ if Code.ensure_loaded?(Ecto.Query) do
     end
 
     @impl true
+    def orphans(%{repo: repo} = s, now) do
+      now = usec(now)
+
+      query =
+        from(t in Row,
+          where:
+            t.status in ["working", "input_required"] and t.expires_at > ^now and
+              not is_nil(t.lease_until) and t.lease_until < ^now and is_nil(t.handle)
+        )
+
+      query |> repo.all(prefix: s.prefix) |> Enum.map(&record/1)
+    end
+
+    @impl true
     def prune(%{repo: repo} = s, now) do
       now = usec(now)
       repo.delete_all(from(t in Row, where: t.expires_at <= ^now), prefix: s.prefix)
@@ -112,8 +126,28 @@ if Code.ensure_loaded?(Ecto.Query) do
         poll_interval_ms: r.poll_interval_ms,
         created_at: usec(r.created_at),
         updated_at: usec(r.updated_at),
-        expires_at: usec(r.expires_at)
+        expires_at: usec(r.expires_at),
+        job: if(r.job, do: :erlang.term_to_binary(r.job)),
+        attempt: r.attempt,
+        lease_owner: r.lease_owner,
+        lease_until: r.lease_until && usec(r.lease_until),
+        handle: r.handle
       ]
+    end
+
+    # A job is stored as Erlang terms: read back only with the atoms the
+    # node already knows (its server and tool modules, its argument
+    # names), so a row cannot create atoms. One that no longer decodes (a
+    # module renamed since) is no job: the task cannot be run again.
+    defp job(nil), do: nil
+
+    defp job(binary) do
+      case :erlang.binary_to_term(binary, [:safe]) do
+        %Sake.Tasks.Job{} = job -> job
+        _ -> nil
+      end
+    rescue
+      ArgumentError -> nil
     end
 
     defp record(row) do
@@ -132,7 +166,12 @@ if Code.ensure_loaded?(Ecto.Query) do
         poll_interval_ms: row.poll_interval_ms,
         created_at: DateTime.truncate(row.created_at, :millisecond),
         updated_at: DateTime.truncate(row.updated_at, :millisecond),
-        expires_at: DateTime.truncate(row.expires_at, :millisecond)
+        expires_at: DateTime.truncate(row.expires_at, :millisecond),
+        job: job(row.job),
+        attempt: row.attempt || 1,
+        lease_owner: row.lease_owner,
+        lease_until: row.lease_until && DateTime.truncate(row.lease_until, :millisecond),
+        handle: row.handle
       }
     end
 

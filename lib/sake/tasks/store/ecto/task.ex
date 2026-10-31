@@ -19,6 +19,11 @@ if Code.ensure_loaded?(Ecto.Schema) do
       field(:created_at, :utc_datetime_usec)
       field(:updated_at, :utc_datetime_usec)
       field(:expires_at, :utc_datetime_usec)
+      field(:job, :binary)
+      field(:attempt, :integer, default: 1)
+      field(:lease_owner, :string)
+      field(:lease_until, :utc_datetime_usec)
+      field(:handle, :string)
     end
   end
 end

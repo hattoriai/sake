@@ -30,4 +30,13 @@ defmodule Sake.Tasks.Store do
 
   @doc "Deletes the tasks that expired by `now`."
   @callback prune(state(), now :: DateTime.t()) :: :ok
+
+  @doc """
+  The orphans at `now` (`Sake.Tasks.Record.orphan?/2`): live tasks held by
+  a run whose lease lapsed. A store without it recovers no task: its
+  orphans stay `working` until they expire.
+  """
+  @callback orphans(state(), now :: DateTime.t()) :: [Record.t()]
+
+  @optional_callbacks orphans: 2
 end

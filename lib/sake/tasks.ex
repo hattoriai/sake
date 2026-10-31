@@ -65,10 +65,65 @@ defmodule Sake.Tasks do
   several), `ttl` (how long a task is kept after it was created, in ms;
   default one hour), `poll_interval` (the `pollIntervalMs` suggested to
   clients, and how often a waiting task checks the store; default one
-  second) and `max_per_principal` (how many live tasks one owner may
-  have at once, see below; default 100, or `:infinity`). `tasks: false`
-  turns tasks off: task tools then run like any other tool, and the
-  extension is not advertised.
+  second), `max_per_principal` (how many live tasks one owner may
+  have at once, see below; default 100, or `:infinity`), `runner` (where
+  the tools run, a `Sake.Tasks.Runner`; default
+  `Sake.Tasks.Runner.Local`, a process of the node that started the task)
+  and `lease` (how long a run holds its task without renewing, in ms;
+  default 30 seconds, see "Recovery"). `tasks: false` turns tasks off:
+  task tools then run like any other tool, and the extension is not
+  advertised.
+
+  ## State and execution
+
+  The store keeps a task's state (its status, input requests and answers,
+  result); the runner executes its tool. A persistent store
+  (`Sake.Tasks.Store.Ecto`) lets any node answer for a task, but does not
+  by itself keep the run going: with the default runner, the run is a
+  process of the node that started it, and goes with that node.
+
+  ## Recovery
+
+  A run holds a lease on its task, which it renews every third of `lease`
+  while it lives, waiting for the client's input included. When the node
+  running it goes away (a deploy, a crash), the lease lapses, and the
+  reaper of any node (every half lease) recovers the task, under its
+  tool's `recovery:` option:
+
+    * `:fail` (the default) — the task fails: `-32603`, "The task's worker
+      stopped before the task ended.", with `data.reason` `"worker_lost"`.
+      A client polling it sees a terminal status, not `working` forever.
+    * `{:retry, attempts}` — the task runs again, from the start, with the
+      same arguments and request context, through the runner, until it
+      has run `attempts` times in all; then it fails as above. Answers
+      the client already gave are kept: a run that asks the same key again
+      gets the same answer at once, so a task that was waiting for input
+      keeps waiting for the same question.
+
+  Retrying is at least once, never exactly once: the run that died may
+  have done some of its work (sent the email, charged the card) before
+  it did. Opt a tool in only when running it again is harmless, or when
+  it makes itself idempotent (by the task's ID, `ctx.task`).
+
+  A run records its outcome only while it holds the lease: a run that
+  stalled past its lease and was replaced, or a job delivered twice,
+  never overwrites the task. Only a store every node shares
+  (`Sake.Tasks.Store.Ecto`) lets another node find an orphan; with the
+  ETS store, a node's tasks are gone with it anyway. A custom store
+  recovers tasks once it implements `Sake.Tasks.Store`'s `orphans/2`.
+
+  A runner whose jobs survive the node themselves (a durable queue, see
+  `Sake.Tasks.Runner`) says so with `recovers?/0`: Sake then leaves its
+  tasks to it, and they end when the queue runs them, or expire.
+
+  ## External jobs
+
+  A tool may hand its task to a job it does not run itself (a provider's
+  export API, a build system) by returning `{:external, handle}` from
+  `execute/2`. The task keeps working, with no lease to lapse, until the
+  host reports the job's outcome, from a webhook say, with
+  `complete/3` or `fail/3` (and `progress/5` meanwhile), or the task
+  expires. A cancelled task ignores the job's report.
 
   An owner with `max_per_principal` tasks neither ended nor expired gets
   no new one until one ends: a `task: :optional` tool then runs like any
@@ -89,9 +144,11 @@ defmodule Sake.Tasks do
   @extension "io.modelcontextprotocol/tasks"
   @defaults [
     store: {Sake.Tasks.Store.ETS, []},
+    runner: Sake.Tasks.Runner.Local,
     ttl: 3_600_000,
     poll_interval: 1_000,
-    max_per_principal: 100
+    max_per_principal: 100,
+    lease: 30_000
   ]
 
   @doc "Whether the client asked to cancel the task the component runs in; always `false` outside a task."
@@ -126,9 +183,11 @@ defmodule Sake.Tasks do
 
     :persistent_term.put({__MODULE__, :config}, %{
       store: {module, module.init(store_opts)},
+      runner: runner!(opts[:runner]),
       ttl: opts[:ttl],
       poll_interval: opts[:poll_interval],
-      max_per_principal: opts[:max_per_principal]
+      max_per_principal: opts[:max_per_principal],
+      lease: lease!(opts[:lease])
     })
 
     store =
@@ -144,6 +203,83 @@ defmodule Sake.Tasks do
 
     Supervisor.start_link(children, strategy: :one_for_one, name: __MODULE__.Root)
   end
+
+  defp runner!({module, opts} = runner) when is_atom(module) and is_list(opts) do
+    Code.ensure_loaded!(module)
+
+    if not function_exported?(module, :start, 2) do
+      raise ArgumentError, "tasks: runner: #{inspect(module)} is not a Sake.Tasks.Runner"
+    end
+
+    runner
+  end
+
+  defp runner!(module) when is_atom(module), do: runner!({module, []})
+
+  defp runner!(other),
+    do:
+      raise(
+        ArgumentError,
+        "tasks: runner: must be a module or {module, opts}, got #{inspect(other)}"
+      )
+
+  defp lease!(ms) when is_integer(ms) and ms >= 30, do: ms
+
+  defp lease!(other),
+    do: raise(ArgumentError, "tasks: lease: must be at least 30 ms, got #{inspect(other)}")
+
+  # ---- running a task: the public side of `Sake.Tasks.Runner`
+
+  @doc """
+  Runs the task of `job` in the calling process, and records how it
+  ended: what a `Sake.Tasks.Runner` calls once the job reached the process
+  that should run it (a durable queue's worker, say).
+
+  The run first claims the task. It does nothing, and returns
+  `{:skipped, reason}`, when the task already ended (`:ended`), expired
+  (`:expired`), was handed to an external job (`:external`), or is held
+  by another run whose lease has not lapsed (`:running`): a job delivered
+  twice, or again after its task ended, runs the tool once per claim.
+  Otherwise it executes the tool with the context of the request that
+  started the task, renews the task's lease while it runs (or waits for
+  the client's input), and returns the task's final status (`:completed`,
+  `:failed`, `:cancelled`; `:external` once handed to an external job;
+  `:expired` when the task expired meanwhile). A run that lost its lease
+  to another (it stalled past it, and the task was recovered) does not
+  record its outcome over the other's.
+  """
+  @spec run(Sake.Tasks.Job.t()) :: Record.status() | :external | :expired | {:skipped, atom()}
+  def run(%Sake.Tasks.Job{} = job), do: Sake.Tasks.Worker.run(job)
+
+  @doc """
+  Completes a task that a tool handed to an external job (by returning
+  `{:external, handle}` from `execute/2`): `result` is what `execute/2`
+  would have returned (`{:ok, value}`, `{:ok, value, opts}`,
+  `{:error, text}`), and goes through the tool's result handling and its
+  `:after_call` middleware as if it had. `handle` must be the one the
+  tool returned. `:error` when the task is unknown, ended, expired, or
+  not that job's.
+  """
+  @spec complete(String.t(), String.t(), term()) :: :ok | :error
+  def complete(task_id, handle, result) when is_binary(task_id) and is_binary(handle),
+    do: Sake.Tasks.Worker.report(task_id, handle, result)
+
+  @doc """
+  Fails a task that a tool handed to an external job: the client gets
+  `-32603` with `message`. See `complete/3`.
+  """
+  @spec fail(String.t(), String.t(), String.t()) :: :ok | :error
+  def fail(task_id, handle, message) when is_binary(message),
+    do: Sake.Tasks.Worker.report(task_id, handle, {:failed, message})
+
+  @doc """
+  Reports an external job's progress, as `Sake.Progress.report/4` does
+  from inside a task: the task's `statusMessage`. See `complete/3`.
+  """
+  @spec progress(String.t(), String.t(), number(), number() | nil, String.t() | nil) ::
+          :ok | :error
+  def progress(task_id, handle, current, total \\ nil, message \\ nil),
+    do: Sake.Tasks.Worker.external_progress(task_id, handle, current, {total, message})
 
   @doc false
   def config do
@@ -217,8 +353,15 @@ defmodule Sake.Tasks do
     end
   end
 
-  defp touch(before, updated, _now) when before == updated, do: updated
-  defp touch(_before, updated, now), do: %{updated | updated_at: now}
+  # A renewed lease is not a change the client sees: `lastUpdatedAt`
+  # moves only when something on the wire does.
+  @lease [:lease_owner, :lease_until]
+
+  defp touch(before, updated, now) do
+    if Map.drop(before, @lease) == Map.drop(updated, @lease),
+      do: updated,
+      else: %{updated | updated_at: now}
+  end
 
   @doc false
   # Whom a task is bound to, and through what: the principal, the server,
@@ -296,19 +439,45 @@ defmodule Sake.Tasks do
   @doc false
   def now, do: DateTime.utc_now() |> DateTime.truncate(:millisecond)
 
+  @doc false
+  # Recovers the store's orphans now (the reaper does every half lease):
+  # how many it ran again and failed. For a test, or an operator.
+  @spec reap() :: %{retried: non_neg_integer(), failed: non_neg_integer()}
+  def reap do
+    %{store: {module, store}} = config()
+
+    orphans =
+      if function_exported?(module, :orphans, 2) and not Sake.Tasks.Runner.recovers?(),
+        do: module.orphans(store, now()),
+        else: []
+
+    orphans
+    |> Enum.map(&Sake.Tasks.Worker.recover/1)
+    |> Enum.reduce(%{retried: 0, failed: 0}, fn
+      :retried, acc -> %{acc | retried: acc.retried + 1}
+      :failed, acc -> %{acc | failed: acc.failed + 1}
+      :skipped, acc -> acc
+    end)
+  end
+
   defmodule Pruner do
     @moduledoc false
-    # Deletes expired tasks from the store every minute. Several nodes
-    # pruning the same database is harmless.
+    # Deletes expired tasks from the store every minute, and recovers
+    # orphans (tasks whose run's lease lapsed) every half lease. Several
+    # nodes pruning and reaping the same database is harmless: each
+    # orphan is recovered by one of them (`Sake.Tasks.Worker.recover/1`).
     use GenServer
 
-    @interval 60_000
+    require Logger
+
+    @prune 60_000
 
     def start_link(_), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
 
     @impl true
     def init(nil) do
-      Process.send_after(self(), :prune, @interval)
+      Process.send_after(self(), :prune, @prune)
+      Process.send_after(self(), :reap, reap_interval())
       {:ok, nil}
     end
 
@@ -316,8 +485,22 @@ defmodule Sake.Tasks do
     def handle_info(:prune, state) do
       %{store: {module, store}} = Sake.Tasks.config()
       :ok = module.prune(store, Sake.Tasks.now())
-      Process.send_after(self(), :prune, @interval)
+      Process.send_after(self(), :prune, @prune)
       {:noreply, state}
     end
+
+    def handle_info(:reap, state) do
+      try do
+        Sake.Tasks.reap()
+      rescue
+        exception ->
+          Logger.error("Sake.Tasks could not recover orphans: " <> Exception.message(exception))
+      end
+
+      Process.send_after(self(), :reap, reap_interval())
+      {:noreply, state}
+    end
+
+    defp reap_interval, do: max(div(Sake.Tasks.config().lease, 2), 10)
   end
 end
