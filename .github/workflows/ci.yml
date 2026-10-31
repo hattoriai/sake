@@ -179,6 +179,24 @@ jobs:
             def application, do: [extra_applications: [:logger]]
           end
           EOF
+          # An extension (Sake.Extension) defined outside Sake, as a
+          # package of its own would: it must compile against Sake's
+          # public API alone.
+          cat > app/lib/app_extension.ex <<'EOF'
+          defmodule App.Extension do
+            use Sake.Extension, id: "com.example/app"
+
+            method "app/ping"
+
+            @impl true
+            def handle("app/ping", _params, _ctx), do: {:ok, %{"pong" => true}}
+          end
+
+          defmodule App.MCP do
+            use Sake.Server, name: "app", version: "0.1.0"
+            extensions [App.Extension]
+          end
+          EOF
 
       - name: Compile Sake and the host with warnings as errors
         working-directory: _consumer/app

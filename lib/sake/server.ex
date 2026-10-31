@@ -13,7 +13,9 @@ defmodule Sake.Server do
   Options: `name`, `version` (required), `instructions`, `ttl` (default
   300 000 ms), `cache_scope` (`:public` or `:private`; default: private
   when the endpoint has authorization, public otherwise), `page_size`
-  (default 100), `extensions` (a map for extension negotiation),
+  (default 100), `extensions` (a map advertised as the server's
+  extension capabilities, for an extension Sake does not implement; to
+  implement one, see `Sake.Extension` and `extensions/1`),
   `authentication` (how the person must have signed in to call a tool,
   read a resource or get a prompt of this server, see below).
 
@@ -83,6 +85,7 @@ defmodule Sake.Server do
       @sake_resources []
       @sake_prompts []
       @sake_skills []
+      @sake_extensions []
       Module.register_attribute(__MODULE__, :sake_scopes, accumulate: true)
       Module.register_attribute(__MODULE__, :sake_middleware, accumulate: true)
       Module.register_attribute(__MODULE__, :sake_mounts, accumulate: true)
@@ -96,6 +99,7 @@ defmodule Sake.Server do
           resources: 1,
           prompts: 1,
           skills: 1,
+          extensions: 1,
           middleware: 2,
           mount: 1,
           mount: 2
@@ -118,6 +122,13 @@ defmodule Sake.Server do
   gives at runtime. See `guides/skills.md`.
   """
   defmacro skills(list), do: quote(do: @sake_skills(unquote(list)))
+
+  @doc """
+  The extensions the server implements: `Sake.Extension` modules, whose
+  methods it answers and whose settings it advertises. See
+  `guides/extensions.md`.
+  """
+  defmacro extensions(list), do: quote(do: @sake_extensions(unquote(list)))
 
   defmacro middleware(event, plugs),
     do: quote(do: @sake_middleware({unquote(event), unquote(plugs)}))
@@ -159,12 +170,21 @@ defmodule Sake.Server do
                           @sake_authentication
                         )
 
+      @sake_extension_specs Sake.Server.Extensions.compile!(
+                              __MODULE__,
+                              @sake_extensions,
+                              @sake_mounted,
+                              @sake_authentication,
+                              @sake_opts[:extensions]
+                            )
+
       @sake_pipelines Sake.Server.compile_middleware!(__MODULE__, Enum.reverse(@sake_middleware))
 
       @impl Sake.Server
       unquote(Sake.Server.info_defs(name, version, opts))
       unquote(Sake.Server.list_defs())
       unquote(Sake.Server.setting_defs(opts))
+      unquote(Sake.Server.extension_defs())
     end
   end
 
@@ -198,6 +218,13 @@ defmodule Sake.Server do
 
       def __sake__(:sources),
         do: unquote(__MODULE__).sources(@sake_proxy, __MODULE__, @sake_mounted)
+    end
+  end
+
+  @doc false
+  def extension_defs do
+    quote do
+      def __sake__(:extension_specs), do: @sake_extension_specs
     end
   end
 

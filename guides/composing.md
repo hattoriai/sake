@@ -276,6 +276,11 @@ upstream's era, whichever it is, to clients of either era.
   the server it is mounted in, is left out: an upstream never shadows a
   local component.
 
+A proxy forwards no extension method (see `Sake.Extension`): it
+advertises the extensions Sake serves itself (tasks, MCP Apps, skills
+with `skills: true`) and those its own module lists, never an
+upstream's other extensions, whose methods it answers as unknown.
+
 An upstream's MCP App is its document as the upstream rendered it:
 under the proxy's prefix, the tool calls the app makes by its upstream's
 names do not resolve. A proxy whose upstream has apps works without a

@@ -14,7 +14,7 @@ defmodule Sake.Server.Dispatch do
 
   alias Sake.{Context, JSONRPC, Protocol, Server}
   alias Sake.Proxy.Forward
-  alias Sake.Server.{Cursor, Middleware, Mount, Results, Skills, Tasks, UI}
+  alias Sake.Server.{Cursor, Extensions, Middleware, Mount, Results, Skills, Tasks, UI}
 
   @type outcome ::
           {:reply, map()}
@@ -74,12 +74,6 @@ defmodule Sake.Server.Dispatch do
   defp dispatch(server, "prompts/get", params, ctx), do: get_prompt(server, params, ctx)
   defp dispatch(server, "completion/complete", params, ctx), do: complete(server, params, ctx)
 
-  defp dispatch(server, "skills/list", params, ctx), do: skills(server, params, ctx)
-  defp dispatch(server, "skills/get", params, ctx), do: skill(server, params, ctx)
-
-  defp dispatch(server, "resources/directory/read", params, ctx),
-    do: read_directory(server, params, ctx)
-
   defp dispatch(server, "tasks/get", params, ctx), do: Tasks.get(server, params, ctx)
   defp dispatch(server, "tasks/update", params, ctx), do: Tasks.update(server, params, ctx)
   defp dispatch(server, "tasks/cancel", params, ctx), do: Tasks.cancel(server, params, ctx)
@@ -90,8 +84,9 @@ defmodule Sake.Server.Dispatch do
 
   defp dispatch(_server, "subscriptions/listen", _params, _ctx), do: {:listen, %{}}
 
-  defp dispatch(_server, _method, _params, _ctx),
-    do: {:error, JSONRPC.code(:method_not_found), "Method not found"}
+  # Any other method is an extension's (`Sake.Extension`), skills
+  # included, or unknown.
+  defp dispatch(server, method, params, ctx), do: Extensions.handle(server, method, params, ctx)
 
   @doc false
   def capabilities(server, ctx) do
@@ -101,7 +96,8 @@ defmodule Sake.Server.Dispatch do
   end
 
   # The server's own `extensions:`, plus the tasks extension when a tool
-  # can run as a task, MCP Apps when the server has a UI, and the
+  # can run as a task, MCP Apps when the server has a UI, the extensions
+  # it serves (`Sake.Extension`, skills among them), and the
   # authorization extensions of the endpoint's authorization server.
   # These come from the endpoint, not the server: the same server may be
   # served with and without `auth:`, and the answer is the same for every
@@ -114,31 +110,9 @@ defmodule Sake.Server.Dispatch do
         do: Map.put_new(ext, Sake.Tasks.extension(), %{}),
         else: ext
 
-    Map.merge(auth_extensions(ctx), ext |> UI.extensions(server) |> Skills.extensions(server))
+    ext = ext |> UI.extensions(server) |> Map.merge(Extensions.advertised(server, ctx))
+    Map.merge(auth_extensions(ctx), ext)
   end
-
-  # The skills extension's methods, on a server that serves skills; on
-  # any other, as for a method the server does not have.
-  @doc false
-  def skills(server, params, ctx) do
-    if Server.skills?(server),
-      do: Skills.list_skills(server, params, ctx),
-      else: method_not_found()
-  end
-
-  @doc false
-  def skill(server, params, ctx) do
-    if Server.skills?(server), do: Skills.get_skill(server, params, ctx), else: method_not_found()
-  end
-
-  @doc false
-  def read_directory(server, params, ctx) do
-    if Server.skills?(server),
-      do: Skills.read_directory(server, params, ctx),
-      else: method_not_found()
-  end
-
-  defp method_not_found, do: {:error, JSONRPC.code(:method_not_found), "Method not found"}
 
   @doc false
   # The authorization extensions an endpoint with `auth:` advertises. A

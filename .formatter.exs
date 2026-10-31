@@ -6,6 +6,7 @@ locals_without_parens = [
   resources: 1,
   prompts: 1,
   skills: 1,
+  extensions: 1,
   middleware: 2,
   mount: 1,
   mount: 2,

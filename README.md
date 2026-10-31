@@ -208,6 +208,7 @@ end
 - Tools, resources, resource templates, prompts and completion
 - Elicitation (form and URL), sampling, roots, progress, logging
 - Tasks (`io.modelcontextprotocol/tasks`), MCP Apps (`io.modelcontextprotocol/ui`), Skills (`io.modelcontextprotocol/skills`)
+- Your own extensions (`Sake.Extension`): methods, settings and notifications under an identifier of yours
 - Subscriptions: `subscriptions/listen` on modern clients, `resources/subscribe` on older ones
 - Streamable HTTP and stdio, with JSON-RPC batching on 2025-03-26
 
@@ -289,7 +290,7 @@ features you use. Signed JWTs and DPoP need `{:jose, "~> 1.11"}`.
 
 - **Start:** [Quickstart](guides/quickstart.md) · [Tools](guides/tools.md) · [Resources and prompts](guides/resources_and_prompts.md) · [Testing](guides/testing.md)
 - **Auth:** [Authorization](guides/authorization.md) · [Bring your own authorization server](guides/external_auth.md) · [Multi-tenant endpoints](guides/tenants.md) · [Security](guides/security.md)
-- **Protocol:** [Tasks](guides/tasks.md) · [MCP Apps](guides/apps.md) · [Skills](guides/skills.md) · [Protocol versions](guides/protocol_versions.md) · [Stdio](guides/stdio.md)
+- **Protocol:** [Tasks](guides/tasks.md) · [MCP Apps](guides/apps.md) · [Skills](guides/skills.md) · [Extensions](guides/extensions.md) · [Protocol versions](guides/protocol_versions.md) · [Stdio](guides/stdio.md)
 - **Architecture:** [Middleware](guides/middleware.md) · [Composing and proxying](guides/composing.md) · [Shipping a server in a library](guides/libraries.md) · [The client](guides/client.md)
 - **Operations:** [Observability](guides/observability.md) · [Running on several nodes](guides/clustering.md) · [Performance](guides/performance.md)
 
