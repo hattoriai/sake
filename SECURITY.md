@@ -8,7 +8,8 @@ backported to older ones.
 
 | Version | Supported |
 | --- | --- |
-| 0.2.x | yes |
+| 0.5.x | yes |
+| 0.4.x and earlier | no |
 | 0.1.x | no (an early preview, retired) |
 
 ## Reporting a vulnerability

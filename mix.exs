@@ -1,7 +1,7 @@
 defmodule Sake.MixProject do
   use Mix.Project
 
-  @version "0.4.4"
+  @version "0.5.0"
   @source_url "https://github.com/hattoriai/sake"
 
   def project do
@@ -205,10 +205,10 @@ defmodule Sake.MixProject do
       dev: "run --no-halt dev.exs",
       "test.conformance": ["cmd --cd conformance ./run.sh"],
       release: [
+        "cmd mix sake.release_check",
         "hex.publish --yes",
-        "cmd git tag v#{@version} -f",
-        "cmd git push",
-        "cmd git push --tags"
+        "cmd git tag v#{@version}",
+        "cmd git push origin v#{@version}"
       ],
       precommit: [
         "compile --warnings-as-errors",

@@ -12,7 +12,7 @@ Most of the library's users will not want MCP, so make Sake optional:
 
 ```elixir
 # the library's mix.exs
-{:sake, "~> 0.4", optional: true}
+{:sake, "~> 0.5", optional: true}
 ```
 
 and compile the MCP modules only when the host has Sake:
@@ -36,7 +36,7 @@ end
 ```
 
 Wrap each tool, resource and prompt module the same way. A host that
-adds `{:sake, "~> 0.4"}` to its own deps gets them; Mix compiles an
+adds `{:sake, "~> 0.5"}` to its own deps gets them; Mix compiles an
 optional dependency the host has before the library that names it.
 `version:` may be a module attribute (`@version` set from the library's
 version) as well as a literal.

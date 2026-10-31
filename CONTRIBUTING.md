@@ -87,6 +87,14 @@ to.
   changelog, the supported versions in `SECURITY.md` and the tags are
   changed by the maintainers, at a release.
 
+  A release is a pull request that bumps the version, renames the
+  changelog's `Unreleased` heading to the version and its date, and
+  updates the `{:sake, "~> ..."}` requirements in the README and guides
+  and the supported series in `SECURITY.md`. Once it is merged, `mix
+  release` on an up-to-date `main` runs `mix sake.release_check` (which
+  checks all of that, and that the tag is new), publishes to Hex, then
+  creates and pushes the tag `v<version>`.
+
 ## Style
 
 Match the code around your change: its naming, its comments and the way
