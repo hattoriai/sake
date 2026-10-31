@@ -264,11 +264,13 @@ defmodule Sake.Server.Mount do
   @doc """
   The context a component runs with: its own server's in `ctx.server`, so
   what it broadcasts with its own URIs reaches the parent's clients under
-  the prefix.
+  the prefix, and the prefixes between that server and the client's in
+  `ctx.prefixes`, innermost first, so that it can name its siblings as
+  the client knows them (`Sake.UI.tool_name/2`).
   """
   @spec component_ctx(struct(), Sake.Context.t()) :: Sake.Context.t()
-  def component_ctx(%{mount: {server, _prefix, inner}}, ctx),
-    do: component_ctx(inner, %{ctx | server: server})
+  def component_ctx(%{mount: {server, prefix, inner}}, ctx),
+    do: component_ctx(inner, %{ctx | server: server, prefixes: [prefix | ctx.prefixes]})
 
   def component_ctx(_spec, ctx), do: ctx
 

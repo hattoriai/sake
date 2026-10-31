@@ -156,10 +156,8 @@ defmodule Sake.Server.Skills do
   defp skill_path(_uri), do: :error
 
   defp fetch(%{module: module} = spec, path, ctx) do
-    ctx = Mount.component_ctx(spec, ctx)
-
     if function_exported?(module, :fetch, 2) do
-      case module.fetch(path, ctx) do
+      case module.fetch(path, Mount.component_ctx(spec, ctx)) do
         {:ok, %Skill{} = skill} -> {:ok, skill}
         _ -> :error
       end

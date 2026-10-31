@@ -126,6 +126,108 @@ defmodule Sake.UI do
     File.read!(path)
   end
 
+  @doc """
+  The name the client calls one of the app's tools by: `tool` (a
+  `Sake.Tool` module, or the name its server gives it) under the prefix
+  of every mount between that server and the one the client reached (see
+  `Sake.Server.mount/2`). Served directly, it is the tool's own name.
+
+  An app's tool calls go through the host to the server the client
+  reached, by that name; a name hard-coded in the document stops working
+  once a host mounts the app's server under a prefix. Give the document
+  the names it needs instead, with `names/2` and `json_script/2`.
+
+  Raises (`ArgumentError`) for a tool the app's server does not have.
+  """
+  @spec tool_name(Sake.Context.t(), module() | String.t()) :: String.t()
+  def tool_name(ctx, tool) do
+    name = if is_atom(tool), do: tool.spec().name, else: tool
+    server = ctx.server
+
+    if server && not Enum.any?(server.__sake__(:tools), &(&1.name == name)) do
+      raise ArgumentError, "#{inspect(server)} has no tool #{inspect(name)}"
+    end
+
+    Enum.reduce(ctx.prefixes, name, &Sake.Server.Mount.name/2)
+  end
+
+  @doc """
+  The URI the client reads one of the app's resources at: `resource` (a
+  `Sake.Resource` or `Sake.UI` module, or the URI or URI template its
+  server gives it) under the mounts' prefixes, as `tool_name/2` names a
+  tool. A template stays a template (`issue://{id}` may become
+  `issue://billing/{id}`): the app fills in its parameters.
+
+  Raises (`ArgumentError`) for a resource the app's server does not have.
+  """
+  @spec resource_uri(Sake.Context.t(), module() | String.t()) :: String.t()
+  def resource_uri(ctx, resource) do
+    uri = if is_atom(resource), do: resource.spec().uri, else: resource
+    server = ctx.server
+
+    if server && not Enum.any?(server.__sake__(:resources), &(&1.uri == uri)) do
+      raise ArgumentError, "#{inspect(server)} has no resource #{inspect(uri)}"
+    end
+
+    Enum.reduce(ctx.prefixes, uri, fn prefix, uri ->
+      case Sake.Server.Mount.uri(prefix, uri) do
+        {:ok, uri} -> uri
+        :error -> raise ArgumentError, "#{inspect(uri)} has no scheme:// to put a prefix after"
+      end
+    end)
+  end
+
+  @doc """
+  The names the document needs, as the client knows them: a map of
+  `"tools"` and `"resources"`, each from the name or URI the app's server
+  gives (the key) to the one the client uses (the value), for the
+  `tools:` and `resources:` given (modules, names or URIs; see
+  `tool_name/2` and `resource_uri/2`).
+
+      def assigns(ctx) do
+        %{names: Sake.UI.names(ctx, tools: [MyApp.MCP.IssueDetails])}
+      end
+
+  and in the template, for the script to read with
+  `JSON.parse(document.getElementById("names").textContent)`:
+
+      <%= Sake.UI.json_script("names", @names) %>
+  """
+  @spec names(Sake.Context.t(), keyword()) :: %{String.t() => %{String.t() => String.t()}}
+  def names(ctx, opts) do
+    %{
+      "tools" => Map.new(opts[:tools] || [], &{local_name(&1), tool_name(ctx, &1)}),
+      "resources" => Map.new(opts[:resources] || [], &{local_uri(&1), resource_uri(ctx, &1)})
+    }
+  end
+
+  defp local_name(tool) when is_atom(tool), do: tool.spec().name
+  defp local_name(name), do: name
+
+  defp local_uri(resource) when is_atom(resource), do: resource.spec().uri
+  defp local_uri(uri), do: uri
+
+  @doc """
+  A `<script type="application/json">` element with `data` as JSON, for
+  the document's script to read: `<`, `>`, `&` and the line separators
+  are escaped, so no value can end the element or the document's script.
+  """
+  @spec json_script(String.t(), term()) :: {:safe, iodata()}
+  def json_script(id, data) do
+    json =
+      data
+      |> JSON.encode!()
+      |> String.replace(["<", ">", "&", "\u2028", "\u2029"], fn
+        "<" -> "\\u003c"
+        ">" -> "\\u003e"
+        "&" -> "\\u0026"
+        "\u2028" -> "\\u2028"
+        "\u2029" -> "\\u2029"
+      end)
+
+    {:safe, [~s(<script type="application/json" id="), escape(id), ~s(">), json, "</script>"]}
+  end
+
   @doc "Marks `iodata` as HTML that a template must not escape."
   @spec raw(iodata() | {:safe, iodata()}) :: {:safe, iodata()}
   def raw({:safe, _} = safe), do: safe

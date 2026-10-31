@@ -349,6 +349,9 @@ send({ method: "ui/notifications/initialized", params: {} });
 const result = await request("tools/call", { name: "sales_for", arguments: { region: "north" } });
 ```
 
+Call the tool by the name the server gives the document (next section),
+not by a name written into the script.
+
 The development server's issue board (`dev/lib/sake_dev/ui/`) is a
 complete app of this kind: it also follows the host's theme and reports
 its size with `ui/notifications/size-changed`, so that the host can size
@@ -362,6 +365,73 @@ its `App` class does the handshake, the notifications (`ontoolresult`,
 the host's theme and fonts. Install it in `assets/` with npm, import it
 from your app's entry point, bundle it with esbuild as above, and inline
 the bundle. Sake ships no JavaScript of its own for this.
+
+## Names under a mount
+
+The host sends an app's `tools/call` and `resources/read` to the server
+the client connected to, by the names that server lists. When a host
+mounts your server under a prefix (`mount Reports.MCP, prefix:
+"reports"`, see `guides/composing.md`), `sales_for` becomes
+`reports_sales_for` and `sales://{region}` becomes
+`sales://reports/{region}`. Sake renames the tool, the UI's URI and the
+tool's `_meta.ui.resourceUri`, but not the names inside your HTML and
+JavaScript. Sake never searches and replaces in your document. So a
+name written into the script stops working once the server is mounted.
+Worse, it can reach another tool that happens to have that name.
+
+Render the names into the document instead. `Sake.UI.names/2` gives
+them as the client knows them, under every prefix between the app's
+server and the one the client reached, nested mounts included.
+`Sake.UI.json_script/2` puts them in a `<script type="application/json">`
+element whose JSON cannot end the element:
+
+```elixir
+defmodule MyApp.MCP.SalesMap do
+  use Sake.UI, uri: "ui://my-app/sales-map", template: "sales_map.html.eex"
+
+  @impl true
+  def assigns(ctx) do
+    %{names: Sake.UI.names(ctx, tools: [MyApp.MCP.SalesFor], resources: [MyApp.MCP.Region])}
+  end
+end
+```
+
+```eex
+<%= Sake.UI.json_script("names", @names) %>
+<script><%= raw inline("priv/static/assets/sales_map.js") %></script>
+```
+
+```js
+const names = JSON.parse(document.getElementById("names").textContent);
+// names.tools.sales_for: "sales_for" served directly, "reports_sales_for" under "reports".
+await request("tools/call", { name: names.tools.sales_for, arguments: { region: "north" } });
+// A URI template stays a template; fill in its parameters.
+const uri = names.resources["sales://{region}"].replace("{region}", "north");
+await request("resources/read", { uri });
+```
+
+`names/2` maps each name or URI the app's server gives (the key) to the
+one the client uses (the value). `Sake.UI.tool_name/2` and
+`Sake.UI.resource_uri/2` resolve one at a time, for a `render/1` that
+builds its document itself. They take a module, or the name or URI the
+server gives, and raise for one the app's server does not have. They
+work from the context's `server` and `prefixes` (see `Sake.Context`).
+A server mounted twice, under two prefixes, renders each copy of the
+app with its own names. Served directly, the names are the server's
+own.
+
+The resolved names are ordinary names. A call by one goes through
+the scopes, the middleware and the app-only visibility as any other
+call does. Lookup is unchanged: an unprefixed name is never resolved
+to a prefixed tool.
+
+An app served through a `Sake.Proxy` is the upstream's document, passed
+on as it is. Its names are the upstream's, even when the upstream
+renders them with `names/2`. Through a proxy without a prefix they are
+also the proxy's, and the app works. Through a proxy mounted under a
+prefix, the app's own calls use names the gateway does not list, and
+fail as unknown tools. Mount a proxy whose upstream has apps without a
+prefix, or expect its apps' interactions to fail.
 
 ## Hosts
 

@@ -45,6 +45,21 @@
 
 ### Fixed
 
+- **An MCP App's own calls under a mount prefix.** A mount renamed an
+  app's tools and its `ui://` URI, but the names written into the app's
+  HTML and JavaScript stayed the mounted server's own. So an app served
+  through a prefixed mount called tools the host does not list (the dev
+  server's issue board called `issue_details`, not `up_issue_details`),
+  or a tool of the host that happened to have that name.
+  `Sake.UI.names/2`, `tool_name/2` and `resource_uri/2` give an app the
+  names the client knows, under every prefix between its server and the
+  one the client reached. `Sake.UI.json_script/2` renders them into the
+  document for its script. `Sake.Context` has a new `prefixes` field, set
+  for a mounted component. An app that names its tools this way works
+  served directly, mounted, nested, or mounted twice. An app behind a
+  prefixed `Sake.Proxy` still uses its upstream's names; this is now
+  documented. See "Names under a mount" in `guides/apps.md`.
+
 - **A task of a tool the `:after_list` plugs hide is not found.** An
   `:after_list` plug that drops a tool hides it for calls too, but
   `tasks/get`, `tasks/update` and `tasks/cancel` checked only the task's

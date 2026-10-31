@@ -129,6 +129,10 @@ working with their own names and URIs:
   `invoice://7`, from anywhere.
 - Arguments, template parameters and completions are the component's
   own, unchanged.
+- The names inside an MCP App's document are not rewritten. An app that
+  calls its tools by name renders those names with `Sake.UI.names/2`,
+  under the mounts' prefixes (see "Names under a mount" in
+  `guides/apps.md`).
 - A skill's manifest moves with it, every file's URI under the prefix,
   with the same digests: the files are the same bytes (see
   `guides/skills.md`).
@@ -271,6 +275,11 @@ upstream's era, whichever it is, to clients of either era.
   name is already taken, by the proxy's own or by any other component of
   the server it is mounted in, is left out: an upstream never shadows a
   local component.
+
+An upstream's MCP App is its document as the upstream rendered it:
+under the proxy's prefix, the tool calls the app makes by its upstream's
+names do not resolve. A proxy whose upstream has apps works without a
+prefix (see "Names under a mount" in `guides/apps.md`).
 
 What an upstream sends is untrusted: a definition that is not shaped as
 its kind is left out, a tool's name must be one Sake accepts, and no

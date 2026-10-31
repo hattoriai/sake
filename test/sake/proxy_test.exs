@@ -250,6 +250,48 @@ defmodule Sake.ProxyTest do
     end
   end
 
+  describe "an upstream's MCP App" do
+    # The names the app's document was rendered with, by its upstream.
+    defp app_names(client, uri) do
+      {:ok, [%Sake.Content{text: html}]} = read_resource(client, uri)
+
+      [json] =
+        Regex.run(~r/<script type="application\/json" id="sake-names">(.*?)<\/script>/s, html,
+          capture: :all_but_first
+        )
+
+      JSON.decode!(json)
+    end
+
+    test "through a proxy without a prefix, the app's own calls reach their tools", %{url: url} do
+      start_proxy(Proxy, url)
+      client = connect(Proxy, ui: true)
+
+      names = app_names(client, "ui://sake-dev/issue-board")
+      assert names["tools"] == %{"issue_details" => "issue_details"}
+
+      assert {:ok, %ToolResult{structured: %{"id" => "1"}}} =
+               call_tool(client, names["tools"]["issue_details"], %{"id" => "1"})
+    end
+
+    # The documented limitation: the proxy passes the upstream's document
+    # on as it is, so under a prefix the app still calls its tools by the
+    # upstream's names, which the gateway does not resolve.
+    test "through a prefixed proxy, the document keeps the upstream's names", %{url: url} do
+      start_proxy(Proxy, url)
+      client = connect(Gateway, ui: true)
+
+      names = app_names(client, "ui://up/sake-dev/issue-board")
+      assert names["tools"] == %{"issue_details" => "issue_details"}
+
+      assert {:error, {:rpc, %{"code" => -32_602, "message" => "Unknown tool: issue_details"}}} =
+               call_tool(client, "issue_details", %{"id" => "1"})
+
+      assert {:ok, %ToolResult{structured: %{"id" => "1"}}} =
+               call_tool(client, "up_issue_details", %{"id" => "1"})
+    end
+  end
+
   describe "mounted" do
     test "a proxy mounted under a prefix, next to local tools and servers", %{url: url} do
       start_proxy(Proxy, url)

@@ -39,6 +39,14 @@ defmodule Sake.Context do
   over stdio (`Sake.Stdio`) and in `Sake.Test`'s in-memory client unless
   the test passes `base_url:`, so a tool that needs it should say so when
   it is missing.
+
+  `server` is the server the component belongs to: for a component of a
+  mounted server, that server, not the one the client reached.
+  `prefixes` are the prefixes of the mounts between them, innermost
+  first (`nil` for a mount without one): `[]` when the client reached the
+  component's own server. An MCP App resolves the names the client knows
+  its tools and resources by from them, with `Sake.UI.tool_name/2` and
+  `Sake.UI.resource_uri/2`.
   """
 
   @type t :: %__MODULE__{}
@@ -63,7 +71,8 @@ defmodule Sake.Context do
             task: nil,
             secret: nil,
             reraise: false,
-            base_url: nil
+            base_url: nil,
+            prefixes: []
 
   @spec new(keyword()) :: t()
   def new(opts \\ []) do

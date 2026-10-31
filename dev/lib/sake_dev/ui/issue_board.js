@@ -1,7 +1,9 @@
 // The issue board, an MCP App. It speaks the host's postMessage JSON-RPC
 // directly: ui/initialize, then ui/notifications/initialized; the host
 // sends the tool's input and result as notifications, and a click on a
-// card calls the app-only issue_details tool through the host.
+// card calls the app-only issue_details tool through the host, by the
+// name the host knows it by: the server renders that name into the
+// document (Sake.UI.names/2), as a mount may have prefixed it.
 (() => {
   "use strict";
 
@@ -19,6 +21,7 @@
     });
 
   const $ = (id) => document.getElementById(id);
+  const names = JSON.parse($("sake-names").textContent);
 
   function element(tag, text, className) {
     const el = document.createElement(tag);
@@ -48,7 +51,10 @@
     $("details").textContent = "Loading…";
 
     try {
-      const result = await request("tools/call", { name: "issue_details", arguments: { id } });
+      const result = await request("tools/call", {
+        name: names.tools.issue_details,
+        arguments: { id }
+      });
       const text = (result.content || []).map((c) => c.text).join("\n");
       const issue = result.structuredContent;
 

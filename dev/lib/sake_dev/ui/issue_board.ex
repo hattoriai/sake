@@ -3,7 +3,9 @@ defmodule SakeDev.UI.IssueBoard do
   # An MCP App: the board the `issue_board` tool shows. The document is an
   # EEx template with its script inlined at compile time; the script
   # speaks the host's postMessage JSON-RPC itself, with no SDK and no
-  # build step.
+  # build step. The names it calls its tools by come from `assigns/1`
+  # (`Sake.UI.names/2`), so that it keeps working when a host mounts the
+  # server under a prefix.
   use Sake.UI,
     uri: "ui://sake-dev/issue-board",
     name: "issue_board",
@@ -13,5 +15,7 @@ defmodule SakeDev.UI.IssueBoard do
     prefers_border: true
 
   @impl true
-  def assigns(_ctx), do: %{title: "Issue board"}
+  def assigns(ctx) do
+    %{title: "Issue board", names: Sake.UI.names(ctx, tools: [SakeDev.Tools.IssueDetails])}
+  end
 end
