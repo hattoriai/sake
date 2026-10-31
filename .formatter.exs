@@ -28,6 +28,6 @@ locals_without_parens = [
 [
   import_deps: [:plug],
   locals_without_parens: locals_without_parens,
-  inputs: ["{mix,.formatter,dev}.exs", "{config,lib,test,dev}/**/*.{ex,exs}"],
+  inputs: ["{mix,.formatter,dev}.exs", "{config,lib,test,dev,bench}/**/*.{ex,exs}"],
   export: [locals_without_parens: locals_without_parens]
 ]
