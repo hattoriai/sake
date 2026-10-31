@@ -15,6 +15,19 @@ defmodule Sake.Plug.SSE do
   def event(conn, message),
     do: chunk(conn, ["event: message\ndata: ", Sake.JSON.encode_to_iodata!(message), "\n\n"])
 
+  @doc """
+  Sends a stream's last event. Returns the conn whether or not the write
+  succeeds: a client that has gone gets no answer, and nothing follows on
+  the stream that needs to know.
+  """
+  @spec last_event(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def last_event(conn, message) do
+    case event(conn, message) do
+      {:ok, conn} -> conn
+      {:error, _closed} -> conn
+    end
+  end
+
   @spec comment(Plug.Conn.t()) :: {:ok, Plug.Conn.t()} | {:error, term()}
   def comment(conn), do: chunk(conn, ":\n\n")
 end

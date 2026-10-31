@@ -209,8 +209,7 @@ defmodule Sake.Plug.Stream do
 
   defp finish(conn, id, ctx, outcome) do
     _ = ctx
-    {_, conn} = SSE.event(conn, response(id, Trace.outcome(outcome)))
-    conn
+    SSE.last_event(conn, response(id, Trace.outcome(outcome)))
   end
 
   # The messages a request's stream carries, shared with `Sake.Stdio`.
@@ -324,8 +323,11 @@ defmodule Sake.Plug.Stream do
         end
 
       :sake_shutdown ->
-        {_, conn} =
-          SSE.event(conn, JSONRPC.result(id, %{"resultType" => "complete", "_meta" => meta}))
+        conn =
+          SSE.last_event(
+            conn,
+            JSONRPC.result(id, %{"resultType" => "complete", "_meta" => meta})
+          )
 
         Streams.unregister_listen(opts.server)
         conn
