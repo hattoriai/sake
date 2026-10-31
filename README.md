@@ -1,11 +1,18 @@
 # Sake
 
-[![Hex.pm](https://img.shields.io/hexpm/v/sake.svg)](https://hex.pm/packages/sake)
-[![Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/sake)
-[![CI](https://github.com/hattoriai/sake/actions/workflows/ci.yml/badge.svg)](https://github.com/hattoriai/sake/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-
 ![Sake — MCP for Phoenix](https://raw.githubusercontent.com/hattoriai/sake/main/media/banner.png)
+
+<p>
+  <a href="https://hex.pm/packages/sake">
+    <img alt="Hex Version" src="https://img.shields.io/hexpm/v/sake.svg">
+  </a>
+  <a href="https://hexdocs.pm/sake">
+    <img src="https://img.shields.io/badge/docs-hexdocs-blue" alt="HexDocs">
+  </a>
+  <a href="https://github.com/hattoriai/sake/actions">
+    <img alt="CI Status" src="https://github.com/hattoriai/sake/actions/workflows/ci.yml/badge.svg">
+  </a>
+</p>
 
 **Put your Phoenix app in front of Claude, ChatGPT and every other MCP
 client, with your own users signing in.**
