@@ -4,6 +4,28 @@
 
 ### Added
 
+- **`Sake.Extension`: implement an MCP extension (SEP-2133) on a Sake
+  server.** Before, `extensions:` could only advertise an extension. Sake
+  answered its methods as unknown, so an extension needed a fork or a
+  Plug of its own. `use Sake.Extension, id: "com.example/widgets"`
+  declares methods and notifications, `settings/1` and `handle/3`, and
+  `extensions [...]` in `Sake.Server` serves them. They go through the
+  same endpoints (HTTP, stdio, `Sake.Test`), `:before_request`
+  middleware, scopes and authentication, errors, telemetry and tracing
+  as core methods.
+  - Negotiation: `client: :required` and `since:`, plus extension-defined
+    result types (`result_types:`) sent only to a client that declared
+    the extension. `Sake.Extension.notify/4` sends notifications to
+    `subscriptions/listen` streams that ask for the extension's
+    identifier, and to legacy sessions.
+  - Compile errors: a method of the protocol, two extensions with one
+    method or one identifier, an identifier also in `extensions:`.
+  - Composition: a mounted server's extensions are the parent's. A
+    proxy advertises and serves only the extensions it implements, never
+    an upstream's.
+  - Skills are now served through this machinery. See
+    `guides/extensions.md`.
+
 - **JSON Schema 2020-12 validation.** `Sake.Schema.Validator` validates a
   tool's arguments against its whole input schema. That covers local
   `$ref`s (pointers, `$anchor`s, embedded `$id`s), `allOf`, `anyOf`,

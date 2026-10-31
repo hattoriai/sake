@@ -96,6 +96,7 @@ defmodule Sake.MixProject do
         "guides/tasks.md",
         "guides/apps.md",
         "guides/skills.md",
+        "guides/extensions.md",
         "guides/resources_and_prompts.md",
         "guides/authorization.md",
         "guides/external_auth.md",
@@ -115,7 +116,7 @@ defmodule Sake.MixProject do
       ],
       groups_for_extras: [
         Guides:
-          ~w(guides/quickstart.md guides/tools.md guides/tasks.md guides/apps.md guides/skills.md guides/resources_and_prompts.md guides/authorization.md guides/external_auth.md guides/tenants.md guides/middleware.md guides/composing.md guides/libraries.md guides/client.md guides/stdio.md guides/observability.md guides/testing.md),
+          ~w(guides/quickstart.md guides/tools.md guides/tasks.md guides/apps.md guides/skills.md guides/extensions.md guides/resources_and_prompts.md guides/authorization.md guides/external_auth.md guides/tenants.md guides/middleware.md guides/composing.md guides/libraries.md guides/client.md guides/stdio.md guides/observability.md guides/testing.md),
         Reference: ~w(guides/protocol_versions.md guides/security.md guides/clustering.md)
       ],
       groups_for_modules: [

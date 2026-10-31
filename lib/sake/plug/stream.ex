@@ -376,9 +376,11 @@ defmodule Sake.Plug.Stream do
   def honoured(params, ctx) do
     requested = params["notifications"] || %{}
 
+    extensions = Sake.Server.Extensions.notifying(ctx.server)
+
     requested
     |> Enum.filter(fn
-      {k, true} -> Map.has_key?(@filters, k)
+      {k, true} -> Map.has_key?(@filters, k) or k in extensions
       {"resourceSubscriptions", uris} -> is_list(uris) and uris != []
       _ -> false
     end)
@@ -441,6 +443,17 @@ defmodule Sake.Plug.Stream do
       do: JSONRPC.notification("notifications/tasks", Map.put(task, "_meta", meta))
   end
 
+  # An extension's notification, on a stream that asked for the
+  # extension's identifier.
+  def notification_for({:extension, id, method, params}, honoured, meta) do
+    if honoured[id] == true,
+      do:
+        JSONRPC.notification(
+          method,
+          Map.put(params, "_meta", Map.merge(params["_meta"] || %{}, meta))
+        )
+  end
+
   def notification_for({:resource_updated, uri}, honoured, meta) do
     if uri in (honoured["resourceSubscriptions"] || []),
       do:
@@ -493,6 +506,11 @@ defmodule Sake.Plug.Stream do
               JSONRPC.notification("notifications/resources/updated", %{"uri" => uri})
             ),
           else: legacy_loop(conn, opts, subscribed)
+
+      # An extension's notification: a legacy session has no filter to
+      # ask for it with, so its stream gets them all.
+      {:sake_notify, {:extension, _id, method, params}} ->
+        write_or_stop(conn, opts, subscribed, JSONRPC.notification(method, params))
 
       # Task notifications are for modern listen streams only.
       {:sake_notify, _event} ->

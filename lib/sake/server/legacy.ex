@@ -3,7 +3,7 @@ defmodule Sake.Server.Legacy do
   # The handshake-era methods (revisions 2025-03-26 to 2025-11-25).
 
   alias Sake.{Context, JSONRPC, Protocol, Server}
-  alias Sake.Server.{Dispatch, Skills, UI}
+  alias Sake.Server.{Dispatch, Extensions, UI}
 
   @type outcome ::
           Dispatch.outcome()
@@ -28,7 +28,7 @@ defmodule Sake.Server.Legacy do
               server
               |> Server.capabilities()
               |> UI.advertise(server)
-              |> Skills.advertise(server)
+              |> Extensions.advertise(server, %{ctx | protocol_version: revision})
               |> advertise_auth(ctx),
             "serverInfo" => %{"name" => info.name, "version" => info.version}
           }
@@ -92,12 +92,6 @@ defmodule Sake.Server.Legacy do
   defp dispatch(server, "completion/complete", params, ctx),
     do: Dispatch.complete(server, params, ctx)
 
-  defp dispatch(server, "skills/list", params, ctx), do: Dispatch.skills(server, params, ctx)
-  defp dispatch(server, "skills/get", params, ctx), do: Dispatch.skill(server, params, ctx)
-
-  defp dispatch(server, "resources/directory/read", params, ctx),
-    do: Dispatch.read_directory(server, params, ctx)
-
   defp dispatch(server, "resources/subscribe", %{"uri" => uri}, ctx) when is_binary(uri) do
     case Server.resource(server, uri, ctx) do
       {:ok, %{subscribe: true} = spec, _} ->
@@ -112,8 +106,7 @@ defmodule Sake.Server.Legacy do
   defp dispatch(_server, "resources/unsubscribe", %{"uri" => uri}, _ctx) when is_binary(uri),
     do: {:unsubscribe, uri}
 
-  defp dispatch(_server, _method, _params, _ctx),
-    do: {:error, JSONRPC.code(:method_not_found), "Method not found"}
+  defp dispatch(server, method, params, ctx), do: Extensions.handle(server, method, params, ctx)
 
   # A resource the server's middleware hides is answered by `dispatch/4` as one
   # without subscriptions; the scopes are checked after.

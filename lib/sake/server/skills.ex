@@ -21,23 +21,20 @@ defmodule Sake.Server.Skills do
   @directory "inode/directory"
 
   # ---- the extension
+  #
+  # Skills are served as a `Sake.Extension` is (`Sake.Server.Extensions`
+  # registers this module for a server that has skills): its settings,
+  # and its methods through `handle/3`.
 
-  @doc "The server's extensions, with the skills extension when it serves skills."
-  @spec extensions(map(), module()) :: map()
-  def extensions(ext, server) do
-    if Server.skills?(server),
-      do: Map.put_new(ext, Skill.extension(), %{"directoryRead" => true}),
-      else: ext
-  end
+  @doc "The extension's settings: `resources/directory/read` is served."
+  @spec settings(module()) :: map()
+  def settings(_server), do: %{"directoryRead" => true}
 
-  @doc "The legacy `initialize` capabilities, with the extension."
-  @spec advertise(map(), module()) :: map()
-  def advertise(caps, server) do
-    case extensions(%{}, server) do
-      ext when ext == %{} -> caps
-      ext -> Map.update(caps, "extensions", ext, &Map.merge(&1, ext))
-    end
-  end
+  @doc "Answers the extension's methods."
+  @spec handle(String.t(), map(), Context.t()) :: term()
+  def handle("skills/list", params, ctx), do: list_skills(ctx.server, params, ctx)
+  def handle("skills/get", params, ctx), do: get_skill(ctx.server, params, ctx)
+  def handle("resources/directory/read", params, ctx), do: read_directory(ctx.server, params, ctx)
 
   # ---- the skills a request sees
 

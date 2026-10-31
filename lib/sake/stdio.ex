@@ -222,6 +222,13 @@ defmodule Sake.Stdio do
     {:noreply, state}
   end
 
+  # An extension's notification (`Sake.Extension.notify/4`): a legacy
+  # session has no filter to ask for it with, so it gets them all.
+  def handle_info({:sake_notify, {:extension, _id, method, params}}, state) do
+    write(state, JSONRPC.notification(method, params))
+    {:noreply, state}
+  end
+
   # ---- processes
 
   def handle_info({:EXIT, pid, reason}, %{reader: pid} = state) do
