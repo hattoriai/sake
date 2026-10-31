@@ -68,9 +68,6 @@ defmodule Sake.Skill.Frontmatter do
 
       {:ok, _value, [{n, _} | _]} ->
         {:error, "line #{n} of SKILL.md: unexpected indentation"}
-
-      {:error, _} = error ->
-        error
     end
   catch
     {:frontmatter, n, message} -> {:error, "line #{n} of SKILL.md: #{message}"}
