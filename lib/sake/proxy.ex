@@ -50,6 +50,9 @@ defmodule Sake.Proxy do
     * `:tools` and `:prompts` — `true` (the default), `false`, or
       `[only: names]` / `[except: names]`, by the upstream's names.
     * `:resources` — `true` (the default) or `false`.
+    * `:skills` — `true` to pass on the upstream's skills (the Skills
+      extension, see `Sake.Skill`), or `false` (the default). It needs
+      `:resources`, through which the skill files are read.
     * `:scope` — one or more scopes every proxied component requires.
     * `:scopes` — a map from an upstream tool or prompt name to the
       scopes it requires on top of `:scope`.
@@ -115,6 +118,7 @@ defmodule Sake.Proxy do
     :tools,
     :prompts,
     :resources,
+    :skills,
     :scope,
     :scopes,
     :list_ttl,
@@ -152,7 +156,8 @@ defmodule Sake.Proxy do
   # The upstream's components of `kind` the request may see, as the proxy
   # lists them (not yet under any mount's prefix); none when the upstream
   # cannot be reached or the principal has no credentials for it.
-  @spec components(module(), :tools | :resources | :prompts, Sake.Context.t()) :: [struct()]
+  @spec components(module(), :tools | :resources | :prompts | :skills, Sake.Context.t()) ::
+          [struct()]
   def components(proxy, kind, ctx) do
     case Upstream.list(proxy, kind, ctx) do
       {:ok, specs, ttl} -> Enum.map(specs, &current(&1, ttl, proxy))
@@ -191,6 +196,17 @@ defmodule Sake.Proxy do
   end
 
   @doc false
+  # The upstream's skill whose SKILL.md is at `uri`: one it lists, else
+  # the one its `skills/get` answers with.
+  @spec skill(module(), String.t(), Sake.Context.t()) :: {:ok, Sake.Skill.Spec.t()} | :error
+  def skill(proxy, uri, ctx) do
+    case Enum.find(components(proxy, :skills, ctx), &(&1.uri == uri)) do
+      nil -> Sake.Proxy.Forward.get_skill(proxy, uri, ctx)
+      spec -> {:ok, spec}
+    end
+  end
+
+  @doc false
   # Whether the upstream lists a resource at `uri`, or has a template for
   # it: a URI in a proxied result is renamed under a mount's prefix only
   # then (see `Sake.Server.Mount.outer_result/3`).
@@ -209,11 +225,13 @@ defmodule Sake.Proxy do
     tools = config[:tools] != false
     resources = config[:resources] != false
     prompts = config[:prompts] != false
+    skills = resources and config[:skills] == true
 
     %{
       tools: tools,
       resources: resources,
       prompts: prompts,
+      skills: skills,
       completions: resources or prompts,
       subscribe: resources and Sake.Proxy.Watcher.subscribe?(proxy)
     }

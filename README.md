@@ -72,6 +72,7 @@ OTP 27 or later; CI runs Elixir 1.18 (OTP 27), 1.19 (OTP 28) and 1.20
 | Sampling, roots | yes (deprecated) | yes (sampling tools from 2025-11-25) | yes |
 | Tasks (`io.modelcontextprotocol/tasks`) | yes | — (task tools run synchronously) | — |
 | MCP Apps (`io.modelcontextprotocol/ui`) | yes | yes | yes |
+| Skills (`io.modelcontextprotocol/skills`) | yes | yes | yes |
 | Subscriptions | `subscriptions/listen` stream | `resources/subscribe` | `resources/subscribe` |
 | Batched requests | — (stateless, one at a time) | — | yes |
 | Stdio transport | yes | yes | yes |
@@ -144,6 +145,7 @@ client steps up to meet it. `Sake.Client` speaks all of them. See
 - [Tools](guides/tools.md)
 - [Tasks](guides/tasks.md)
 - [MCP Apps](guides/apps.md)
+- [Skills](guides/skills.md)
 - [Resources and prompts](guides/resources_and_prompts.md)
 - [Authorization](guides/authorization.md)
 - [Bring your own authorization server](guides/external_auth.md)

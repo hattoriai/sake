@@ -38,6 +38,7 @@ defmodule Sake.Proxy.Upstream do
     tools: true,
     prompts: true,
     resources: true,
+    skills: false,
     scope: [],
     scopes: %{},
     list_ttl: 60_000,
@@ -267,19 +268,23 @@ defmodule Sake.Proxy.Upstream do
   remembered for a few seconds, so that an upstream that is down is not
   asked by every request.
   """
-  @spec list(module(), :tools | :resources | :prompts, Sake.Context.t()) ::
+  @spec list(module(), :tools | :resources | :prompts | :skills, Sake.Context.t()) ::
           {:ok, [struct()], pos_integer()} | :error
   def list(proxy, kind, ctx) do
     running!(proxy)
     config = config(proxy)
 
-    with true <- config[kind] != false,
+    with true <- enabled?(config, kind),
          {:ok, key, _headers} <- key(proxy, config, ctx) do
       cached(proxy, kind, key) || fetch(proxy, kind, key, ctx)
     else
       _ -> :error
     end
   end
+
+  # An upstream's skills are passed on only when the proxy says so.
+  defp enabled?(config, :skills), do: config[:skills] == true and config[:resources] != false
+  defp enabled?(config, kind), do: config[kind] != false
 
   # A list from the table is good for what is left of its ttl.
   defp cached(proxy, kind, key) do
@@ -320,6 +325,13 @@ defmodule Sake.Proxy.Upstream do
     end
   end
 
+  # An upstream that does not declare the skills extension has none.
+  defp fetch_kind(session, :skills) do
+    if is_map(get_in(session.server_capabilities || %{}, ["extensions", Sake.Skill.extension()])),
+      do: page(session, "skills/list", "skills", nil, [], nil, 0),
+      else: {:ok, {[], nil}, session}
+  end
+
   defp fetch_kind(session, :tools), do: paged(session, "tools/list", "tools")
   defp fetch_kind(session, :prompts), do: paged(session, "prompts/list", "prompts")
 
@@ -357,7 +369,7 @@ defmodule Sake.Proxy.Upstream do
   defp min_ttl(a, b), do: min(a, b)
 
   @doc "Forgets every principal's list of `kind`, so that the next request asks the upstream."
-  @spec forget_lists(module(), :tools | :resources | :prompts) :: :ok
+  @spec forget_lists(module(), :tools | :resources | :prompts | :skills) :: :ok
   def forget_lists(proxy, kind) do
     if :ets.whereis(proxy) != :undefined,
       do: :ets.match_delete(proxy, {{:list, :_, kind}, :_, :_})

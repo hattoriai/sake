@@ -125,6 +125,15 @@ the same way on both sides: by `Sake.Client` with the matching `grant:`,
 and by an endpoint with `auth: true` whose authorization server offers
 the grant; see `guides/authorization.md`.
 
+Skills (the `io.modelcontextprotocol/skills` extension, SEP-2640, as its
+beta specification has it against base revision 2026-07-28) work on
+every revision too: a server with skills advertises the extension, with
+`directoryRead: true`, in `server/discover` and in its `initialize`
+result, and answers `skills/list`, `skills/get` and
+`resources/directory/read`; `ttlMs` and `cacheScope` are on the modern
+results only. The extension defines no client capability. See
+`guides/skills.md`.
+
 ## Conformance status
 
 The official `@modelcontextprotocol/conformance` suite (the version pinned
@@ -182,8 +191,11 @@ client credentials) belong to no revision. `mix test.conformance
 extensions` runs them in a separate CI step against their own baseline,
 `conformance/expected-failures-extensions.yaml`: every `tasks-*` scenario
 passes (`tasks-status-notifications` is one the suite currently skips),
-the skills scenarios pass as not applicable (Sake declares no skills
-extension), and so do the client auth extensions' grants:
+every skills scenario passes as supported (the server's against a skill
+of the conformance server, with a subdirectory for
+`resources/directory/read`; the client's no-prefetch and verification
+scenarios with `conformance/client.exs` listing skills and loading one,
+see `guides/skills.md`), and so do the client auth extensions' grants:
 `auth/client-credentials-basic` and `auth/client-credentials-jwt` (the
 client credentials grant with a secret and with `private_key_jwt`),
 `auth/wif-jwt-bearer` (a workload's JWT as the grant) and

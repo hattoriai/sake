@@ -3,7 +3,7 @@ defmodule Sake.Server.Legacy do
   # The handshake-era methods (revisions 2025-03-26 to 2025-11-25).
 
   alias Sake.{Context, JSONRPC, Protocol, Server}
-  alias Sake.Server.{Dispatch, UI}
+  alias Sake.Server.{Dispatch, Skills, UI}
 
   @type outcome ::
           Dispatch.outcome()
@@ -25,7 +25,11 @@ defmodule Sake.Server.Legacy do
           %{
             "protocolVersion" => revision,
             "capabilities" =>
-              server |> Server.capabilities() |> UI.advertise(server) |> advertise_auth(ctx),
+              server
+              |> Server.capabilities()
+              |> UI.advertise(server)
+              |> Skills.advertise(server)
+              |> advertise_auth(ctx),
             "serverInfo" => %{"name" => info.name, "version" => info.version}
           }
           |> then(
@@ -87,6 +91,12 @@ defmodule Sake.Server.Legacy do
 
   defp dispatch(server, "completion/complete", params, ctx),
     do: Dispatch.complete(server, params, ctx)
+
+  defp dispatch(server, "skills/list", params, ctx), do: Dispatch.skills(server, params, ctx)
+  defp dispatch(server, "skills/get", params, ctx), do: Dispatch.skill(server, params, ctx)
+
+  defp dispatch(server, "resources/directory/read", params, ctx),
+    do: Dispatch.read_directory(server, params, ctx)
 
   defp dispatch(server, "resources/subscribe", %{"uri" => uri}, ctx) when is_binary(uri) do
     case Server.resource(server, uri, ctx) do

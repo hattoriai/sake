@@ -49,6 +49,65 @@ defmodule Sake.Proxy.Specs do
     |> Enum.map(&%{&1 | proxy: proxy, scopes: config[:scope]})
   end
 
+  def build(proxy, :skills, entries, config) do
+    for(entry <- Enum.take(entries, @max_entries), spec = skill(entry), spec != nil, do: spec)
+    |> Enum.uniq_by(& &1.uri)
+    |> Enum.map(&%{&1 | proxy: proxy, scopes: config[:scope]})
+  end
+
+  @doc """
+  An upstream's skill entry as a spec: one that is not shaped as the
+  extension says, or whose manifest is past its limits, is left out.
+  """
+  @spec skill(term()) :: Sake.Skill.Spec.t() | nil
+  def skill(%{"uri" => uri, "frontmatter" => %{} = frontmatter} = entry)
+      when is_binary(uri) and byte_size(uri) <= 2048 do
+    with %{"name" => name, "description" => description}
+         when is_binary(name) and is_binary(description) <- frontmatter,
+         true <- String.ends_with?(uri, "/" <> name <> "/SKILL.md"),
+         true <- Regex.match?(~r/^[A-Za-z][A-Za-z0-9+.\-]*:\/\//, uri),
+         {:ok, resources} <- skill_resources(entry["resources"], uri) do
+      skill = %Sake.Skill{
+        uri: uri,
+        frontmatter: frontmatter,
+        resources: resources,
+        meta: map(entry["_meta"])
+      }
+
+      %Sake.Skill.Spec{uri: uri, skill: skill}
+    else
+      _ -> nil
+    end
+  end
+
+  def skill(_entry), do: nil
+
+  defp skill_resources("dynamic", _uri), do: {:ok, :dynamic}
+
+  defp skill_resources(list, uri) when is_list(list) and length(list) <= 512 do
+    root = String.replace_suffix(uri, "/SKILL.md", "/")
+
+    resources =
+      for %{"uri" => file, "digest" => digest, "size" => size} <- list,
+          skill_file?(file, digest, size, uri, root),
+          do: %{uri: file, digest: digest, size: size}
+
+    cond do
+      length(resources) != length(list) -> :error
+      not Enum.any?(resources, &(&1.uri == uri)) -> :error
+      resources |> Enum.map(& &1.size) |> Enum.sum() > Sake.Skill.max_size() -> :error
+      true -> {:ok, Enum.uniq_by(resources, & &1.uri)}
+    end
+  end
+
+  defp skill_resources(_resources, _uri), do: :error
+
+  defp skill_file?(file, digest, size, uri, root) do
+    is_binary(file) and is_binary(digest) and is_integer(size) and size >= 0 and
+      (file == uri or String.starts_with?(file, root)) and
+      Regex.match?(~r/^sha256:[0-9a-f]{64}$/, digest)
+  end
+
   @doc "A resource the upstream does not list, for a URI the proxy was asked to read."
   @spec unlisted(module(), String.t(), keyword()) :: Resource.Spec.t()
   def unlisted(proxy, uri, config) do

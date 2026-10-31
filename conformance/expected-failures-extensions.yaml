@@ -1,8 +1,9 @@
 # Baseline of the extension scenarios (`./run.sh extensions`), kept apart
 # from expected-failures.yaml because extensions are not part of any
 # revision. The same rules apply: a new failure or a stale entry fails the
-# run. The skills scenarios (sep-2640-*) pass because Sake declares no
-# skills extension, which the suite reports as not applicable.
+# run. The skills scenarios (sep-2640-*) run as supported: the
+# conformance server serves a skill (SakeDev.Conformance.Skills), and
+# client.exs lists skills and loads one.
 server: []
 
 # Every client scenario passes: the client credentials, JWT bearer and

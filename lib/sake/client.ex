@@ -76,6 +76,7 @@ defmodule Sake.Client do
   @modern_errors [-32_020, -32_021, -32_022]
   @legacy_errors [-32_601, -32_602]
   @max_retries 3
+  @max_pages 1000
   @tasks_extension "io.modelcontextprotocol/tasks"
   @probe_timeout 10_000
 
@@ -491,6 +492,136 @@ defmodule Sake.Client do
     end
   end
 
+  @doc """
+  Whether the server declared the Skills extension
+  (`io.modelcontextprotocol/skills`, see `Sake.Skill`): only then does it
+  answer `list_skills/1` and `get_skill/2`. To a client that does not
+  ask, a server's skills are ordinary resources.
+  """
+  @spec skills?(Session.t()) :: boolean()
+  def skills?(%Session{server_capabilities: caps}),
+    do: is_map(get_in(caps || %{}, ["extensions", Sake.Skill.extension()]))
+
+  @doc """
+  The skills the server lists: each entry as the server sent it, with
+  the `uri` of its `SKILL.md`, its `frontmatter`, and its `resources` (the
+  manifest, each file's `uri`, `digest` and `size`, or `"dynamic"`). A
+  listing may be partial, or empty: a skill can still be loaded by URI,
+  with `get_skill/2`. Listing reads no skill file.
+  """
+  @spec list_skills(Session.t()) :: {:ok, [map()], Session.t()} | {:error, term(), Session.t()}
+  def list_skills(session), do: paged(session, "skills/list", "skills")
+
+  @doc """
+  The entry of the skill whose `SKILL.md` is at `uri`, whether the server
+  lists it or not: `{:error, {:rpc, %{"code" => -32602}}, session}` when it
+  serves none there.
+  """
+  @spec get_skill(Session.t(), String.t()) ::
+          {:ok, map(), Session.t()} | {:error, term(), Session.t()}
+  def get_skill(session, uri) do
+    case rpc(session, "skills/get", %{"uri" => uri}) do
+      {:ok, %{"skill" => %{} = skill}, session} -> {:ok, skill, session}
+      {:ok, _result, session} -> {:error, :invalid_result, session}
+      error -> error
+    end
+  end
+
+  @doc """
+  Reads one of the skill's files, at `uri`, and checks it against the
+  skill's `entry` (from `list_skills/1` or `get_skill/2`) with
+  `Sake.Skill.verify/3`: the file must be in the entry's manifest, with
+  its size and digest, and a `SKILL.md` must have the entry's
+  frontmatter. Content that fails is not returned:
+  `{:error, {:skill_verification, reason}, session}`, after which the
+  host may get the entry again (`get_skill/2`) and start over.
+
+  A dynamic entry (`"resources": "dynamic"`) has nothing to check
+  against, and is refused unless `dynamic: true` is given; its files must
+  still be within the skill's directory.
+
+  Which skill to load, when, and whether the person approves it, is the
+  host's to decide; the extension asks that no file is read before the
+  skill is loaded.
+  """
+  @spec read_skill_file(Session.t(), map(), String.t(), keyword()) ::
+          {:ok, binary(), Session.t()} | {:error, term(), Session.t()}
+  def read_skill_file(session, entry, uri, opts \\ []) do
+    with :ok <- readable(entry, uri, opts),
+         {:ok, result, session} <- rpc(session, "resources/read", %{"uri" => uri}) do
+      case file_bytes(result, uri) do
+        {:ok, bytes} -> verified(entry, uri, bytes, session)
+        :error -> {:error, {:skill_verification, :no_content}, session}
+      end
+    else
+      {:error, reason} -> {:error, {:skill_verification, reason}, session}
+      error -> error
+    end
+  end
+
+  defp readable(%{"resources" => "dynamic", "uri" => skill_uri}, uri, opts) do
+    cond do
+      opts[:dynamic] != true -> {:error, :dynamic}
+      uri == skill_uri -> :ok
+      String.starts_with?(uri, String.replace_suffix(skill_uri, "SKILL.md", "")) -> :ok
+      true -> {:error, :unlisted}
+    end
+  end
+
+  defp readable(%{"resources" => list}, uri, _opts) when is_list(list) do
+    if Enum.any?(list, &(is_map(&1) and &1["uri"] == uri)), do: :ok, else: {:error, :unlisted}
+  end
+
+  defp readable(_entry, _uri, _opts), do: {:error, :invalid_entry}
+
+  defp verified(%{"resources" => "dynamic"}, _uri, bytes, session), do: {:ok, bytes, session}
+
+  defp verified(entry, uri, bytes, session) do
+    case Sake.Skill.verify(entry, uri, bytes) do
+      :ok -> {:ok, bytes, session}
+      {:error, reason} -> {:error, {:skill_verification, reason}, session}
+    end
+  end
+
+  # The bytes of the file: a text is its UTF-8, a blob its decoded base64.
+  defp file_bytes(%{"contents" => contents}, uri) when is_list(contents) do
+    case Enum.find(contents, &(is_map(&1) and &1["uri"] == uri)) do
+      %{"text" => text} when is_binary(text) -> {:ok, text}
+      %{"blob" => blob} when is_binary(blob) -> Base.decode64(blob)
+      _ -> :error
+    end
+  end
+
+  defp file_bytes(_result, _uri), do: :error
+
+  @doc """
+  The direct children of a directory resource (a skill's root, or a
+  directory within it): files, and subdirectories with the
+  `inode/directory` MIME type, to descend into with another call. Only
+  for a server that declared `directoryRead: true` in the Skills
+  extension. A directory read is not part of a skill's manifest: a file
+  it shows that the entry does not list is not the skill's (see
+  `read_skill_file/4`).
+  """
+  @spec read_resource_directory(Session.t(), String.t()) ::
+          {:ok, [map()], Session.t()} | {:error, term(), Session.t()}
+  def read_resource_directory(session, uri), do: directory_pages(session, uri, nil, [], 0)
+
+  defp directory_pages(session, uri, cursor, acc, page) do
+    params = if cursor, do: %{"uri" => uri, "cursor" => cursor}, else: %{"uri" => uri}
+
+    with {:ok, result, session} <- rpc(session, "resources/directory/read", params) do
+      items = acc ++ List.wrap(result["resources"])
+
+      case result["nextCursor"] do
+        nil -> {:ok, items, session}
+        ^cursor -> {:error, :pagination_loop, session}
+        _next when page + 1 >= @max_pages -> {:error, :pagination_loop, session}
+        next -> directory_pages(session, uri, next, items, page + 1)
+      end
+    end
+  end
+
   @spec list_prompts(Session.t()) :: {:ok, [map()], Session.t()} | {:error, term(), Session.t()}
   def list_prompts(session), do: paged(session, "prompts/list", "prompts")
 
@@ -600,8 +731,6 @@ defmodule Sake.Client do
   def close(_session), do: :ok
 
   # ---- the request loop (pagination, MRTR retries)
-
-  @max_pages 1000
 
   defp paged(session, method, key, cursor \\ nil, acc \\ [], page \\ 0) do
     params = if cursor, do: %{"cursor" => cursor}, else: %{}

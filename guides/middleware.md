@@ -80,7 +80,7 @@ And, by event:
 | Event | Runs | Also in the payload | Sake reads back |
 |---|---|---|---|
 | `:before_request` | before every request, any method, except the legacy `initialize` | `:params` | `:assigns` |
-| `:after_list` | after `tools/list`, `resources/list`, `resources/templates/list` and `prompts/list` have applied scopes and MCP Apps visibility, before paging; and before any call reaches a component | `:kind` (`:tools`, `:resources`, `:prompts`), `:items` | `:items` |
+| `:after_list` | after `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list` and `skills/list` have applied scopes and MCP Apps visibility, before paging; and before any call reaches a component | `:kind` (`:tools`, `:resources`, `:prompts`, `:skills`), `:items` | `:items` |
 | `:before_call` | before a tool runs, after its arguments were validated | `:tool`, `:arguments` | `:arguments`, `:assigns` |
 | `:after_call` | after the tool returned, or after its task ended | `:tool`, `:arguments`, `:result` | `:result` |
 | `:before_read` | before a resource is read | `:resource`, `:uri`, `:params` | `:params`, `:assigns` |

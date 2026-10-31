@@ -82,6 +82,7 @@ defmodule Sake.Server do
       @sake_tools []
       @sake_resources []
       @sake_prompts []
+      @sake_skills []
       Module.register_attribute(__MODULE__, :sake_scopes, accumulate: true)
       Module.register_attribute(__MODULE__, :sake_middleware, accumulate: true)
       Module.register_attribute(__MODULE__, :sake_mounts, accumulate: true)
@@ -89,7 +90,16 @@ defmodule Sake.Server do
       @sake_proxy false
 
       import Sake.Server,
-        only: [scope: 2, tools: 1, resources: 1, prompts: 1, middleware: 2, mount: 1, mount: 2]
+        only: [
+          scope: 2,
+          tools: 1,
+          resources: 1,
+          prompts: 1,
+          skills: 1,
+          middleware: 2,
+          mount: 1,
+          mount: 2
+        ]
 
       @before_compile Sake.Server
     end
@@ -101,6 +111,13 @@ defmodule Sake.Server do
   defmacro tools(list), do: quote(do: @sake_tools(unquote(list)))
   defmacro resources(list), do: quote(do: @sake_resources(unquote(list)))
   defmacro prompts(list), do: quote(do: @sake_prompts(unquote(list)))
+
+  @doc """
+  The server's skills: `Sake.Skill` modules, each a skill packaged with
+  the server, and `Sake.Skill.Catalog` modules, whose skills the host
+  gives at runtime. See `guides/skills.md`.
+  """
+  defmacro skills(list), do: quote(do: @sake_skills(unquote(list)))
 
   defmacro middleware(event, plugs),
     do: quote(do: @sake_middleware({unquote(event), unquote(plugs)}))
@@ -135,6 +152,13 @@ defmodule Sake.Server do
                     @sake_authentication
                   )
 
+      @sake_skill_specs Sake.Server.compile_skills!(
+                          __MODULE__,
+                          @sake_skills,
+                          @sake_mounted,
+                          @sake_authentication
+                        )
+
       @sake_pipelines Sake.Server.compile_middleware!(__MODULE__, Enum.reverse(@sake_middleware))
 
       @impl Sake.Server
@@ -164,6 +188,7 @@ defmodule Sake.Server do
       def __sake__(:tools), do: elem(@sake_specs, 0)
       def __sake__(:resources), do: elem(@sake_specs, 1)
       def __sake__(:prompts), do: elem(@sake_specs, 2)
+      def __sake__(:skills), do: @sake_skill_specs
 
       def __sake__(:scopes),
         do: unquote(__MODULE__).scopes(Enum.reverse(@sake_scopes), @sake_mounted)
@@ -230,6 +255,30 @@ defmodule Sake.Server do
     check_unique!(server, "prompt", Enum.map(p, & &1.name))
     check_uis!(server, t, r)
     {t, r, p}
+  end
+
+  @doc false
+  # The server's skills, then each mounted server's under its prefix: a
+  # skill's URI may be listed once in all of them.
+  def compile_skills!(server, skills, mounts \\ [], required \\ nil) do
+    own =
+      Enum.map(skills, fn module ->
+        Code.ensure_compiled!(module)
+
+        if not function_exported?(module, :spec, 0) or
+             not match?(%Sake.Skill.Spec{}, module.spec()) do
+          raise ArgumentError,
+                "#{inspect(server)}: skills takes Sake.Skill and Sake.Skill.Catalog modules, " <>
+                  "got #{inspect(module)}"
+        end
+
+        module.spec()
+      end)
+
+    specs = authenticated(own ++ mounted(mounts, :skills), required, server)
+    check_unique!(server, "skill", for(%{uri: uri} <- specs, uri != nil, do: uri))
+    check_unique!(server, "skill", for(%{catalog: true, mount: nil} = s <- specs, do: s.module))
+    specs
   end
 
   # The server's `authentication:`, for every component it lists.
@@ -368,6 +417,14 @@ defmodule Sake.Server do
   @spec tools(module(), Sake.Context.t()) :: [Sake.Tool.Spec.t()]
   def tools(server, ctx), do: components(server, :tools, ctx)
 
+  @doc """
+  The server's skills as the request sees them: its own and its mounted
+  servers', each catalog's (`Sake.Skill.Catalog`) for the request, and
+  those its proxies list. A skill whose URI is already taken is left out.
+  """
+  @spec skills(module(), Sake.Context.t()) :: [Sake.Skill.Spec.t()]
+  def skills(server, ctx), do: Sake.Server.Skills.list(server, ctx)
+
   @doc "The server's resources as the request sees them; see `tools/2`."
   @spec resources(module(), Sake.Context.t()) :: [Sake.Resource.Spec.t()]
   def resources(server, ctx), do: components(server, :resources, ctx)
@@ -431,9 +488,10 @@ defmodule Sake.Server do
   defp server_of([], proxy), do: proxy
   defp server_of(chain, _proxy), do: chain |> List.last() |> elem(0)
 
+  @doc false
   # A proxied component through the mounts between its proxy and the
   # server; one whose name or URI a prefix cannot take is left out.
-  defp wrap_chain(spec, chain) do
+  def wrap_chain(spec, chain) do
     Enum.reduce_while(chain, [spec], fn {server, opts}, [spec] ->
       case Sake.Server.Mount.try_wrap(spec, server, opts) do
         {:ok, spec} -> {:cont, [spec]}
@@ -443,6 +501,8 @@ defmodule Sake.Server do
   end
 
   defp key(%Sake.Resource.Spec{uri: uri}), do: uri
+  defp key(%Sake.Skill.Spec{uri: nil, module: module}), do: module
+  defp key(%Sake.Skill.Spec{uri: uri}), do: uri
   defp key(%{name: name}), do: name
 
   @doc """
@@ -538,7 +598,8 @@ defmodule Sake.Server do
     end)
   end
 
-  defp unwrap_uri(chain, uri) do
+  @doc false
+  def unwrap_uri(chain, uri) do
     chain
     |> Enum.reverse()
     |> Enum.reduce_while({:ok, uri}, fn {_server, opts}, {:ok, uri} ->
@@ -613,10 +674,11 @@ defmodule Sake.Server do
     resources = server.__sake__(:resources)
     prompts = server.__sake__(:prompts)
     proxied = proxied(server)
+    skills = server.__sake__(:skills) != [] or proxied.skills
 
     %{"logging" => %{}}
     |> put_capability(tools != [] or proxied.tools, "tools", %{"listChanged" => true})
-    |> put_capability(resources != [] or proxied.resources, "resources", %{
+    |> put_capability(resources != [] or skills or proxied.resources, "resources", %{
       "listChanged" => true,
       "subscribe" => proxied.subscribe or Enum.any?(resources, & &1.subscribe)
     })
@@ -628,6 +690,12 @@ defmodule Sake.Server do
     )
   end
 
+  @doc false
+  # Whether the server serves skills: its own, its mounted servers', or
+  # a proxy's that passes its upstream's on.
+  @spec skills?(module()) :: boolean()
+  def skills?(server), do: server.__sake__(:skills) != [] or proxied(server).skills
+
   defp put_capability(caps, true, name, value), do: Map.put(caps, name, value)
   defp put_capability(caps, false, _name, _value), do: caps
 
@@ -638,12 +706,34 @@ defmodule Sake.Server do
   # capabilities a client gets do not depend on who asks, nor on whether
   # an upstream is reachable at that moment.
   defp proxied(server) do
-    none = %{tools: false, resources: false, prompts: false, completions: false, subscribe: false}
+    none = %{
+      tools: false,
+      resources: false,
+      prompts: false,
+      skills: false,
+      completions: false,
+      subscribe: false
+    }
 
     server.__sake__(:sources)
     |> Enum.map(fn {proxy, _chain} -> Sake.Proxy.exposes(proxy) end)
     |> Enum.reduce(none, &Map.merge(&2, &1, fn _key, a, b -> a or b end))
   end
+
+  @doc false
+  # The proxies' components of `kind` for the request, through the
+  # mounts between them and the server, none whose key a static
+  # component has taken.
+  def proxied_components(server, kind, static, ctx) do
+    case server.__sake__(:sources) do
+      [] -> []
+      sources -> server_authentication(server, dynamic(sources, kind, static, ctx))
+    end
+  end
+
+  @doc false
+  # The server's `authentication:` on a component known at runtime.
+  def with_server_authentication(server, spec), do: hd(server_authentication(server, [spec]))
 
   @doc false
   # Whether the server lists components it learns at runtime, from a

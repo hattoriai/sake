@@ -53,7 +53,7 @@ defmodule Sake.Middleware do
   | Event | Runs | Also in the payload | A plug may change |
   |---|---|---|---|
   | `:before_request` | before every request, any method (not the legacy `initialize`) | `:params` | `:assigns` |
-  | `:after_list` | after Sake's own scope and MCP Apps filtering of `tools/list`, `resources/list`, `resources/templates/list` and `prompts/list`, and before any call reaches a component (below) | `:kind` (`:tools`, `:resources` or `:prompts`), `:items` (the specs) | `:items` |
+  | `:after_list` | after Sake's own scope and MCP Apps filtering of `tools/list`, `resources/list`, `resources/templates/list`, `prompts/list` and `skills/list`, and before any call reaches a component (below) | `:kind` (`:tools`, `:resources`, `:prompts` or `:skills`), `:items` (the specs) | `:items` |
   | `:before_call` | before a tool runs, after its arguments were validated | `:tool`, `:arguments` | `:arguments`, `:assigns` |
   | `:after_call` | after a tool ran, or its task ended | `:tool`, `:arguments`, `:result` | `:result` |
   | `:before_read` | before a resource is read | `:resource`, `:uri`, `:params` | `:params`, `:assigns` |
@@ -62,7 +62,9 @@ defmodule Sake.Middleware do
   | `:after_get` | after a prompt was rendered | `:prompt`, `:arguments`, `:result` | `:result` |
 
   `:tool`, `:resource` and `:prompt` are the component's spec
-  (`Sake.Tool.Spec`, `Sake.Resource.Spec`, `Sake.Prompt.Spec`).
+  (`Sake.Tool.Spec`, `Sake.Resource.Spec`, `Sake.Prompt.Spec`); the
+  `:items` of `kind: :skills` are `Sake.Skill.Spec`s, and a read of a
+  skill's file has the skill's in its `:resource`'s `skill` field.
   `:arguments` are what the component receives (atom keys), `:params`
   a resource template's parameters, and `:result` the result as the
   client gets it (a `CallToolResult`, `ReadResourceResult` or

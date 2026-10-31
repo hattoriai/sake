@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Added
+
+- **Skills over MCP** (the `io.modelcontextprotocol/skills` extension,
+  SEP-2640, as its beta specification has it against base revision
+  2026-07-28). A library or app can ship the workflows that use its
+  tools as skills: a `SKILL.md` and its files, which a client finds when
+  it connects and loads when its model needs them. Before, a server
+  could only put that text in an ordinary resource or its instructions,
+  which no client discovers as a skill. See `guides/skills.md`.
+  - `use Sake.Skill, dir: "..."` compiles a skill directory into a
+    module, checking it (frontmatter, name, the 512-file and 16 MiB
+    limits) and computing its manifest, each file's size and SHA-256
+    digest. `skills [...]` in `Sake.Server` lists it.
+  - `Sake.Skill.Catalog` serves skills the host gives at runtime, from
+    `Sake.Skill.build/2` (a complete manifest) or `Sake.Skill.dynamic/2`
+    (`"resources": "dynamic"`), listed in full, in part or not at all,
+    and found by URI either way.
+  - A server with skills declares the extension with
+    `directoryRead: true`, on every revision. It answers `skills/list`,
+    `skills/get` and `resources/directory/read`, serves the files with
+    `resources/read`, and lists each `SKILL.md` in `resources/list` for
+    clients without the extension. A server without skills declares and
+    answers nothing new.
+  - A mounted server's skills take its prefix (`skill://billing/refunds/SKILL.md`),
+    their digests unchanged; `scope:`, `authentication:`, `only:`,
+    `except:` and `:after_list` plugs (`kind: :skills`) apply to them as
+    to other components.
+  - `Sake.Proxy` passes its upstream's skills on with `skills: true`
+    (off by default).
+  - `Sake.Client.skills?/1`, `list_skills/1`, `get_skill/2`,
+    `read_skill_file/4` (which checks each file against the skill's
+    manifest and frontmatter with `Sake.Skill.verify/3`) and
+    `read_resource_directory/2`, and their `Sake.Test` counterparts.
+  - The conformance suite's skills scenarios run as supported, server
+    and client, where they passed as not applicable before.
+
+  For an app, nothing changes until it lists a skill. An `:after_list`
+  plug of a server with skills is now also called with `kind: :skills`;
+  one that matches only some kinds needs a clause that passes the rest
+  on. `Sake.Resource.Spec` has a new `skill` field.
+
 ### Fixed
 
 - **A task of a tool the `:after_list` plugs hide is not found.** An

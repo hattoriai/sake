@@ -11,7 +11,7 @@ defmodule SakeDev.ConformanceServer do
     version: Sake.version(),
     instructions: "Fixtures for the official MCP conformance suite."
 
-  alias SakeDev.Conformance.{Prompts, Resources, Tools}
+  alias SakeDev.Conformance.{Prompts, Resources, Skills, Tools}
 
   tools [
     Tools.TestSimpleText,
@@ -64,4 +64,6 @@ defmodule SakeDev.ConformanceServer do
     Prompts.TestPromptWithImage,
     Prompts.TestInputRequiredResultPrompt
   ]
+
+  skills [Skills.PdfProcessing]
 end
