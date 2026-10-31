@@ -45,6 +45,24 @@ defmodule Sake.TasksTest do
     tools [AdminExport, SakeDev.Conformance.Tools.SlowCompute]
   end
 
+  defmodule Revocable do
+    # Lets a principal reach the tools until the test revokes it, as a host
+    # that answers who may use its server from its own data does.
+    def init(opts), do: opts
+
+    def call(%{items: _} = payload, _opts) do
+      if :persistent_term.get({__MODULE__, :revoked}, false),
+        do: {:cont, %{payload | items: []}},
+        else: {:cont, payload}
+    end
+  end
+
+  defmodule Gated do
+    use Sake.Server, name: "gated", version: "1"
+    tools [SakeDev.Conformance.Tools.SlowCompute]
+    middleware :after_list, [Revocable]
+  end
+
   defmodule Capped do
     use Sake.Server, name: "capped", version: "1"
     tools [SakeDev.Conformance.Tools.SlowCompute, SakeDev.Conformance.Tools.FailingJob]
@@ -623,6 +641,29 @@ defmodule Sake.TasksTest do
       assert {:ok, %{"status" => "working"}} = get_task(alice, id)
       assert :ok = cancel_task(alice, id)
       assert {:ok, %{"status" => "cancelled"}} = get_task(alice, id)
+    end
+
+    test "a task of a tool the :after_list plugs now hide is as unknown as any other" do
+      on_exit(fn -> :persistent_term.erase({Revocable, :revoked}) end)
+      ana = connect(Gated, scope: "ana")
+
+      assert {:ok, {:task, %{"taskId" => id}}} =
+               call_tool_async(ana, "slow_compute", %{"seconds" => 60})
+
+      assert {:ok, %{"status" => "working"}} = get_task(ana, id)
+
+      :persistent_term.put({Revocable, :revoked}, true)
+
+      for refused <- [get_task(ana, id), update_task(ana, id, %{}), cancel_task(ana, id)] do
+        assert {:error,
+                {:rpc,
+                 %{"code" => -32_602, "message" => "Failed to retrieve task: Task not found"}}} =
+                 refused
+      end
+
+      :persistent_term.put({Revocable, :revoked}, false)
+      assert {:ok, %{"status" => "working"}} = get_task(ana, id)
+      assert :ok = cancel_task(ana, id)
     end
 
     test "a task without a scope stays its owner's whatever the token's scopes" do

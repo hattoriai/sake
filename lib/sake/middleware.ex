@@ -88,7 +88,10 @@ defmodule Sake.Middleware do
   completion or a subscription reaches a component, Sake runs the
   `:after_list` plugs again with `:items` holding just that component
   (and `:method` naming the request), and a component they drop is
-  answered as one that does not exist. So the list and the call always
+  answered as one that does not exist. A task's `tasks/get`,
+  `tasks/update` and `tasks/cancel` ask them about the task's tool the
+  same way, and a task of a tool they drop is answered as a task that
+  does not exist. So the list and the call always
   agree, from one plug. With `:after_list` plugs, list results are
   `cacheScope: "private"`, as they now differ between principals.
 

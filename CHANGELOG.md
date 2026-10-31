@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **A task of a tool the `:after_list` plugs hide is not found.** An
+  `:after_list` plug that drops a tool hides it for calls too, but
+  `tasks/get`, `tasks/update` and `tasks/cancel` checked only the task's
+  owner and scopes. A principal the plugs stopped letting in (a revoked
+  user, say) could still read the result of a task it started before,
+  answer it or cancel it. These requests now ask the plugs about the
+  task's tool, as a call does, and a task of a tool they drop, or that the
+  server no longer has, is answered as a task that does not exist. So is
+  a task a `subscriptions/listen` request names.
+
 - **`ctx.client_info` on a legacy session over HTTP.** On the
   handshake-era revisions (2025-03-26, 2025-06-18, 2025-11-25) through
   `Sake.Plug`, a component's `ctx.client_info` was always `%{}`: the
