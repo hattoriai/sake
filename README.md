@@ -253,6 +253,23 @@ expected to fail, and each has a documented reason in
 | `input-required-result-ignore-extra-params` | server | Answers without the signed request state are asked again |
 | `elicitation-sep1034-client-defaults` | client | The client doesn't answer server requests on the standalone GET stream |
 
+## Performance
+
+On a 4-vCPU cloud VM, with a tool that does nothing, so the numbers
+measure Sake:
+
+- **About 70 µs of CPU per tool call.** Two cores answer about 8,500
+  calls a second over HTTP, with a p99 of 2.3 ms at 10 connections.
+- **About 20 KiB per open stream.** One broadcast reaches 9,000 open
+  streams in about a third of a second.
+- **Authorization adds 30–60 µs** with the ETS store, cached
+  introspection or your own callback, and more for signature checks
+  (DPoP, JWTs) or a database token store.
+
+The scripts are in `bench/`, so you can rerun them on your own hardware.
+The [performance guide](guides/performance.md) has every result and the
+method behind it.
+
 ## Not there yet
 
 - **SSE resumability.** A dropped stream isn't replayed from
@@ -274,7 +291,7 @@ features you use. Signed JWTs and DPoP need `{:jose, "~> 1.11"}`.
 - **Auth:** [Authorization](guides/authorization.md) · [Bring your own authorization server](guides/external_auth.md) · [Multi-tenant endpoints](guides/tenants.md) · [Security](guides/security.md)
 - **Protocol:** [Tasks](guides/tasks.md) · [MCP Apps](guides/apps.md) · [Skills](guides/skills.md) · [Protocol versions](guides/protocol_versions.md) · [Stdio](guides/stdio.md)
 - **Architecture:** [Middleware](guides/middleware.md) · [Composing and proxying](guides/composing.md) · [Shipping a server in a library](guides/libraries.md) · [The client](guides/client.md)
-- **Operations:** [Observability](guides/observability.md) · [Running on several nodes](guides/clustering.md)
+- **Operations:** [Observability](guides/observability.md) · [Running on several nodes](guides/clustering.md) · [Performance](guides/performance.md)
 
 ## Security
 
@@ -283,9 +300,9 @@ describes. Please don't open a public issue for one.
 
 ## Contributing
 
-[CONTRIBUTING.md](CONTRIBUTING.md) explains when a change needs an issue
+[CONTRIBUTING.md](https://github.com/hattoriai/sake/blob/main/CONTRIBUTING.md) explains when a change needs an issue
 first and what a pull request needs.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/hattoriai/sake/blob/main/LICENSE).

@@ -120,7 +120,7 @@ load = fn headers, body, connections ->
 end
 
 IO.puts(
-  "# HTTP throughput and latency\n\n#{Bench.environment()}, oha #{elem(System.cmd(oha, ["--version"]), 0) |> String.trim()}, #{duration}s per run\n"
+  "# HTTP throughput and latency\n\n#{Bench.environment()}, #{elem(System.cmd(oha, ["--version"]), 0) |> String.trim()}, #{duration}s per run\n"
 )
 
 IO.puts("| Scenario | Connections | Requests/s | p50 | p95 | p99 | Non-200 |")
