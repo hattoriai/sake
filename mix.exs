@@ -43,7 +43,7 @@ defmodule Sake.MixProject do
 
   defp deps do
     [
-      {:bandit, "~> 1.5", only: [:dev, :test]},
+      {:bandit, "~> 1.14 and >= 1.14.1", only: [:dev, :test]},
       {:benchee, "~> 1.3", only: :dev},
       {:bypass, "~> 2.1", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
@@ -51,13 +51,14 @@ defmodule Sake.MixProject do
       {:ecto, "~> 3.13", optional: true},
       {:ecto_sql, "~> 3.13", optional: true},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
-      {:jose, "~> 1.11", optional: true},
+      {:jose, "~> 1.11 and >= 1.11.13", optional: true},
       {:opentelemetry, "~> 1.7", only: :test},
       {:opentelemetry_api, "~> 1.5", optional: true},
       {:phoenix, "~> 1.7.14 or ~> 1.8", optional: true},
-      {:phoenix_html, "~> 4.1", optional: true},
+      {:phoenix_html, "~> 4.4", optional: true},
       {:phoenix_pubsub, "~> 2.1", optional: true},
       {:plug, "~> 1.16"},
+      {:plug_crypto, "~> 2.2 and >= 2.2.1"},
       {:postgrex, ">= 0.0.0", only: [:dev, :test]},
       {:req, "~> 0.5"},
       {:stream_data, "~> 1.1", only: :test},
