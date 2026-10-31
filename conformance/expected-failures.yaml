@@ -6,10 +6,6 @@
 # lists one check of a scenario whose other checks must pass. See
 # guides/protocol_versions.md for the reasoning behind each entry.
 server:
-  # No resumability (see guides/protocol_versions.md): a legacy POST
-  # stream carries no priming event and no `retry` field, which the
-  # scenario reports as warnings.
-  - server-sse-polling
   # Sake honours `inputResponses` only with the signed `requestState` it
   # issued for them (see guides/tools.md). The scenario sends answers with
   # no state, to a question it never asked; Sake ignores them and asks
@@ -17,10 +13,6 @@ server:
   - input-required-result-ignore-extra-params
 
 client:
-  # The client does not resume a dropped SSE stream (see
-  # guides/protocol_versions.md); it has no reconnection logic to send the
-  # GET request this scenario looks for.
-  - sse-retry
   # The fixture server sends its `elicitation/create` request unrelated to
   # the tool call, so it can only travel on a standalone GET stream; the
   # client never opens one (see guides/protocol_versions.md), so the

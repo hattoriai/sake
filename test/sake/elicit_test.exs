@@ -342,6 +342,11 @@ defmodule Sake.ElicitTest do
 
       body = Sake.JSONRPC.request(5, "tools/call", %{"name" => "confirm", "arguments" => %{}})
 
+      # Other tests' streams may outlive their connections (resumable
+      # streams), with their questions still registered: only a new one is
+      # this test's.
+      before = registered_requests()
+
       task =
         Task.async(fn ->
           HTTP.sse(url <> "/mcp", body, headers, fn events ->
@@ -349,7 +354,7 @@ defmodule Sake.ElicitTest do
           end)
         end)
 
-      request_id = wait_for_elicit_id(3_000)
+      request_id = wait_for_elicit_id(before, 3_000)
 
       answer = %{
         "jsonrpc" => "2.0",
@@ -369,12 +374,15 @@ defmodule Sake.ElicitTest do
     end
   end
 
-  defp wait_for_elicit_id(timeout) do
+  defp registered_requests,
+    do: Registry.select(Sake.Plug.Streams, [{{{:request, :"$1"}, :_, :_}, [], [:"$1"]}])
+
+  defp wait_for_elicit_id(before, timeout) do
     deadline = System.monotonic_time(:millisecond) + timeout
 
     Stream.repeatedly(fn ->
       Process.sleep(20)
-      Registry.select(Sake.Plug.Streams, [{{{:request, :"$1"}, :_, :_}, [], [:"$1"]}])
+      registered_requests() -- before
     end)
     |> Enum.find_value(fn
       [id | _] ->

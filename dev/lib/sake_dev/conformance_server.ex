@@ -22,6 +22,7 @@ defmodule SakeDev.ConformanceServer do
     Tools.TestToolWithLogging,
     Tools.TestErrorHandling,
     Tools.TestToolWithProgress,
+    Tools.TestReconnection,
     Tools.TestElicitation,
     Tools.TestElicitationSep1034Defaults,
     Tools.TestElicitationSep1330Enums,

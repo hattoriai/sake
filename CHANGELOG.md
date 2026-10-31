@@ -4,6 +4,25 @@
 
 ### Added
 
+- **Resumable SSE streams** on legacy sessions (revisions 2025-03-26 to
+  2025-11-25, "Resumability and Redelivery"):
+  - **Server:** every event of a call's stream and of the session's `GET`
+    stream has an ID, and a stream opens with `retry:` (a priming event
+    on 2025-11-25). A call runs on when its connection drops, its events
+    kept in a bounded buffer (`sse_buffer: [events:, age:]`); a `GET`
+    with `Last-Event-ID` replays the events after it, then goes on live.
+    An unknown, foreign or evicted ID gets an HTTP 400. With a pubsub the
+    `GET` may land on any node. `Sake.Progress.close_stream/1` closes a
+    call's connection for the 2025-11-25 polling pattern. New
+    `Sake.Plug` options `resumable:` (`false` opts out), `sse_retry:` and
+    `sse_buffer:`.
+  - **Client:** a legacy call's stream that ends before the response is
+    resumed with `GET` and `Last-Event-ID`, after the server's `retry`
+    or a backoff, up to `max_reconnects:` (default 3) attempts in a row;
+    then `{:error, :stream_lost, session}`.
+  - The conformance scenarios `server-sse-polling` and `sse-retry` pass,
+    and leave the expected failures.
+
 - **Recoverable task execution.** A persistent task store kept a task's
   state, but its run was a process of the node that started it. When
   that node went away, the task stayed `working` until it expired, with
@@ -121,6 +140,11 @@
   on. `Sake.Resource.Spec` has a new `skill` field.
 
 ### Fixed
+
+- `Sake.Client` took any answer to its `server/discover` probe for a
+  modern server's, even one without `supportedVersions`: a legacy server
+  that answers every method with an empty result was spoken to as a
+  modern one. Such a result now means legacy, and the client initializes.
 
 - **A proxied tool's schema and structured result keep what the
   upstream sent.** An upstream input schema without a top-level `type`

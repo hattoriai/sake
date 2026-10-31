@@ -243,14 +243,12 @@ It covers the server and client scenarios of 2025-06-18, 2025-11-25 and
 2026-07-28, the authorization-server scenarios, and the extension
 scenarios (tasks, skills, and client auth extensions including DPoP).
 
-Every extension and auth scenario passes. Four core scenarios are
+Every extension and auth scenario passes. Two core scenarios are
 expected to fail, and each has a documented reason in
 [protocol versions](guides/protocol_versions.md):
 
 | Scenario | Side | Why |
 |---|---|---|
-| `server-sse-polling` | server | No SSE resumability yet |
-| `sse-retry` | client | No SSE resumability yet |
 | `input-required-result-ignore-extra-params` | server | Answers without the signed request state are asked again |
 | `elicitation-sep1034-client-defaults` | client | The client doesn't answer server requests on the standalone GET stream |
 
@@ -273,8 +271,6 @@ method behind it.
 
 ## Not there yet
 
-- **SSE resumability.** A dropped stream isn't replayed from
-  `Last-Event-ID`. The client has to retry the request.
 - **No Redis store.** State lives in ETS or in your Ecto repo.
 - **Pre-1.0.** The API can still change between minor versions. Each
   change is in the [changelog](CHANGELOG.md).

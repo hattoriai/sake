@@ -34,6 +34,22 @@ defmodule Sake.Progress do
 
   def log(_ctx, _level, _data), do: :ok
 
+  @doc """
+  Closes the connection of the call's SSE stream early, without ending the
+  call (the 2025-11-25 "SSE polling"): the client reconnects with `GET`
+  and `Last-Event-ID` after the stream's `retry:` interval, and gets what
+  the call sent meanwhile, its response included. For a long call that
+  should not hold a connection open (a slow export, a wait on a person).
+  Only on a resumable stream of a legacy session (see "Resumable streams"
+  in `Sake.Plug`); anywhere else (the modern revision, stdio, a stream
+  that is not resumable, a call that is not streamed) it does nothing.
+  """
+  @spec close_stream(Sake.Context.t()) :: :ok
+  def close_stream(%Sake.Context{}) do
+    if owner = Sake.Plug.Resumable.owner(), do: send(owner, :sake_close_stream)
+    :ok
+  end
+
   @doc false
   # Whether a client-sent level is one of the eight syslog levels MCP uses.
   @spec level?(term()) :: boolean()

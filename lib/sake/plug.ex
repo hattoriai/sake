@@ -15,10 +15,37 @@ defmodule Sake.Plug do
   needs this set explicitly; `:any` allows any `Origin`), `json_limit:`
   (bytes, default 4 MB), `keepalive:` (ms between SSE
   comments, default 15 000), `secret:` (binary or `{m, f, a}`; default the
-  `Sake` configuration), `reraise:` (re-raise tool exceptions, for tests).
+  `Sake` configuration), `reraise:` (re-raise tool exceptions, for tests),
+  and, for the handshake-era revisions' resumable streams (below),
+  `resumable:` (default `true`), `sse_retry:` (ms a client waits before it
+  reconnects, default 1 000) and `sse_buffer:` (`events:`, default 100,
+  and `age:`, ms, default 300 000: how many events a stream keeps for a
+  client to resume after, and for how long).
 
   The endpoint serves the modern protocol (2026-07-28) and the three
   handshake-era revisions on the same path.
+
+  ## Resumable streams
+
+  On a handshake-era session (2025-03-26 to 2025-11-25), the SSE streams
+  of calls and of `GET` are resumable ("Resumability and Redelivery"):
+  each event has an ID, the stream keeps its last events, and a dropped
+  connection does not end the call. A client that reconnects with `GET`
+  and `Last-Event-ID` gets the events it missed, then the rest of the
+  stream: a call's progress, its questions, its response. On 2025-11-25
+  the stream starts with the priming event (an ID and empty data) and a
+  `retry:`, and a handler may close its connection early with
+  `Sake.Progress.close_stream/1` (SSE polling): the client resumes with
+  `GET`. A `Last-Event-ID` that names no stream of the session (another
+  session's, an unknown one, one that ended or was given up after
+  `sse_buffer`'s `age` without a connection) gets a `400`.
+
+  A stream lives on the node that started it. With the `Sake` child's
+  `pubsub:`, a reconnect that lands on another node is served from it;
+  without one, a reconnect must reach the same node (session affinity, as
+  for the rest of a legacy session). `resumable: false` keeps the
+  streams as before: a dropped connection ends the call. The modern
+  revision has no resumability, and stdio no SSE.
   """
 
   @behaviour Plug
@@ -51,6 +78,28 @@ defmodule Sake.Plug do
       secret: opts[:secret],
       reraise: opts[:reraise] || false
     }
+    |> Map.merge(resumable(opts))
+  end
+
+  # Resumable streams (see "Resumable streams" above).
+  defp resumable(opts) do
+    %{
+      resumable: opts[:resumable] != false,
+      sse_retry: opts[:sse_retry] || 1_000,
+      sse_buffer: sse_buffer!(opts[:sse_buffer] || [])
+    }
+  end
+
+  defp sse_buffer!(opts) do
+    events = Keyword.get(opts, :events, 100)
+    age = Keyword.get(opts, :age, 300_000)
+
+    if not (is_integer(events) and events > 0 and is_integer(age) and age > 0) do
+      raise ArgumentError,
+            "Sake.Plug sse_buffer: takes events: and age: (ms), positive integers, got #{inspect(opts)}"
+    end
+
+    [events: events, age: age]
   end
 
   @impl true
