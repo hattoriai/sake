@@ -22,6 +22,8 @@ defmodule SakeTest.FakeOAuth do
   #   * `:call_scopes` — the scopes `tools/call` needs (a 403 otherwise);
   #     with `:deny_calls`, every call is refused with them anyway.
   #   * `:legacy` — answer as a 2025-06-18 server instead.
+  #   * `:tool_pages` — `tools/list` answers in that many pages, one tool
+  #     (`t1`, `t2`, ...) each, the cursor being the next page's number.
   #   * `:grant` — the scopes every token gets, whatever was asked for.
   #   * `:expires_in`, `:refresh` (default true) — the token answers.
   #   * `:token_type` — the `token_type` they give (default "Bearer").
@@ -195,6 +197,12 @@ defmodule SakeTest.FakeOAuth do
     if needed -- scopes != [] or opts[:deny_calls] == true,
       do: {:forbidden, needed},
       else: {"result", %{"content" => [%{"type" => "text", "text" => message["params"]["name"]}]}}
+  end
+
+  defp answer("tools/list", message, _scopes, %{tool_pages: pages}) do
+    n = String.to_integer(get_in(message, ["params", "cursor"]) || "1")
+    page = %{"tools" => [%{"name" => "t#{n}", "inputSchema" => %{"type" => "object"}}]}
+    {"result", if(n < pages, do: Map.put(page, "nextCursor", "#{n + 1}"), else: page)}
   end
 
   defp answer(_method, _message, _scopes, _opts), do: {"result", %{"tools" => []}}

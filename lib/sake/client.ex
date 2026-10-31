@@ -76,7 +76,7 @@ defmodule Sake.Client do
 
   require Logger
 
-  alias Sake.Client.{Auth, Inputs, Session, ToolResult, Transport}
+  alias Sake.Client.{Auth, Inputs, Page, ReadResult, Session, ToolResult, Transport}
   alias Sake.{Content, JSONRPC, Protocol, Schema, Trace}
 
   # The errors only a modern server sends; a legacy server answers the
@@ -87,6 +87,15 @@ defmodule Sake.Client do
   @max_retries 3
   @max_pages 1000
   @tasks_extension "io.modelcontextprotocol/tasks"
+
+  # The paginated lists: their method and the key of their entries.
+  @lists %{
+    tools: {"tools/list", "tools"},
+    resources: {"resources/list", "resources"},
+    resource_templates: {"resources/templates/list", "resourceTemplates"},
+    prompts: {"prompts/list", "prompts"},
+    skills: {"skills/list", "skills"}
+  }
   @probe_timeout 10_000
 
   # A probe that ends in one of these was answered by a modern server, or
@@ -385,13 +394,144 @@ defmodule Sake.Client do
 
   def set_log_level(session, level), do: {:ok, %{session | log_level: to_string(level)}}
 
+  @doc """
+  Every tool the server lists, all pages fetched (one request per page).
+  The session remembers them, for `call_tool/3`'s `Mcp-Param-*` headers.
+  For a large catalog, see `list_tools_page/2` and `reduce_list/5`.
+  """
   @spec list_tools(Session.t()) ::
           {:ok, [Sake.Tool.Spec.t()], Session.t()} | {:error, term(), Session.t()}
   def list_tools(session) do
-    with {:ok, result, session} <- paged(session, "tools/list", "tools") do
-      specs = result |> Enum.map(&tool_spec/1) |> Enum.reject(&is_nil/1)
+    with {:ok, specs, session} <- paged(session, :tools) do
       {:ok, specs, %{session | tools: Map.new(specs, &{&1.name, &1})}}
     end
+  end
+
+  @typedoc "A paginated list, for `reduce_list/5`."
+  @type list_kind :: :tools | :resources | :resource_templates | :prompts | :skills
+
+  @doc """
+  One page of the server's tools (one request): the page from `cursor`,
+  or the first without one. The page's `next_cursor` asks for the next,
+  and its `cache` says how long the page stays fresh and whether it may
+  be shared (see `Sake.Client.CacheInfo`). The session remembers the
+  page's tools, for `call_tool/3`.
+  """
+  @spec list_tools_page(Session.t(), String.t() | nil) ::
+          {:ok, Page.t(), Session.t()} | {:error, term(), Session.t()}
+  def list_tools_page(session, cursor \\ nil), do: list_page(session, :tools, cursor)
+
+  @doc "One page of the server's resources (one request); see `list_tools_page/2`."
+  @spec list_resources_page(Session.t(), String.t() | nil) ::
+          {:ok, Page.t(), Session.t()} | {:error, term(), Session.t()}
+  def list_resources_page(session, cursor \\ nil), do: list_page(session, :resources, cursor)
+
+  @doc "One page of the server's resource templates (one request); see `list_tools_page/2`."
+  @spec list_resource_templates_page(Session.t(), String.t() | nil) ::
+          {:ok, Page.t(), Session.t()} | {:error, term(), Session.t()}
+  def list_resource_templates_page(session, cursor \\ nil),
+    do: list_page(session, :resource_templates, cursor)
+
+  @doc "One page of the server's prompts (one request); see `list_tools_page/2`."
+  @spec list_prompts_page(Session.t(), String.t() | nil) ::
+          {:ok, Page.t(), Session.t()} | {:error, term(), Session.t()}
+  def list_prompts_page(session, cursor \\ nil), do: list_page(session, :prompts, cursor)
+
+  @doc """
+  Goes through a list's entries, fetching a page only when the entries
+  before it are done with, and stopping as soon as `fun` says so: `fun`
+  gets each entry and the accumulator, and returns `{:cont, acc}` or
+  `{:halt, acc}`. A page is never fetched after a halt.
+
+      # The first 50 tools, however large the catalog.
+      {:ok, tools, session} =
+        Sake.Client.reduce_list(session, :tools, [], fn tool, acc ->
+          acc = [tool | acc]
+          if length(acc) == 50, do: {:halt, acc}, else: {:cont, acc}
+        end)
+
+  Returns `{:ok, acc, session}`, the session as the last request left it
+  (a refreshed token included). A request that fails ends it with
+  `{:error, reason, session}`, with that session too, and the
+  accumulator is dropped: resume from the last page's `next_cursor`
+  with the `list_*_page` calls when the entries so far matter. A server
+  that sends the same cursor again, or more than `max_pages:` pages
+  (1000 by default), ends it with `{:error, :pagination_loop, session}`.
+
+  `kind` is `:tools` (`Sake.Tool.Spec`s; the session remembers them, as
+  with `list_tools_page/2`), `:resources`, `:resource_templates`,
+  `:prompts` or `:skills`. Options: `cursor:` to start from a page other
+  than the first, `max_pages:`.
+  """
+  @spec reduce_list(
+          Session.t(),
+          list_kind(),
+          acc,
+          (term(), acc -> {:cont, acc} | {:halt, acc}),
+          keyword()
+        ) :: {:ok, acc, Session.t()} | {:error, term(), Session.t()}
+        when acc: term()
+  def reduce_list(session, kind, acc, fun, opts \\ []) when is_map_key(@lists, kind) do
+    reduce_pages(session, kind, opts[:cursor], acc, fun, 0, opts[:max_pages] || @max_pages)
+  end
+
+  defp reduce_pages(session, kind, cursor, acc, fun, page, max_pages) do
+    with {:ok, %Page{} = p, session} <- list_page(session, kind, cursor) do
+      case reduce_entries(p.entries, acc, fun) do
+        {:halt, acc} ->
+          {:ok, acc, session}
+
+        {:cont, acc} ->
+          next_page(session, kind, {cursor, p.next_cursor}, acc, fun, page, max_pages)
+      end
+    end
+  end
+
+  defp next_page(session, _kind, {_cursor, nil}, acc, _fun, _page, _max_pages),
+    do: {:ok, acc, session}
+
+  defp next_page(session, _kind, {same, same}, _acc, _fun, _page, _max_pages),
+    do: {:error, :pagination_loop, session}
+
+  defp next_page(session, _kind, _cursors, _acc, _fun, page, max_pages)
+       when page + 1 >= max_pages,
+       do: {:error, :pagination_loop, session}
+
+  defp next_page(session, kind, {_cursor, next}, acc, fun, page, max_pages),
+    do: reduce_pages(session, kind, next, acc, fun, page + 1, max_pages)
+
+  defp reduce_entries(entries, acc, fun) do
+    Enum.reduce_while(entries, {:cont, acc}, fn entry, {:cont, acc} ->
+      case fun.(entry, acc) do
+        {:cont, acc} -> {:cont, {:cont, acc}}
+        {:halt, acc} -> {:halt, {:halt, acc}}
+      end
+    end)
+  end
+
+  defp list_page(session, kind, cursor) do
+    {method, key} = Map.fetch!(@lists, kind)
+    params = if cursor, do: %{"cursor" => cursor}, else: %{}
+
+    with {:ok, result, session} <- rpc(session, method, params) do
+      page = Page.from_result(result, key)
+
+      case kind do
+        :tools ->
+          specs = page.entries |> Enum.map(&tool_spec/1) |> Enum.reject(&is_nil/1)
+          tools = Map.merge(session.tools, Map.new(specs, &{&1.name, &1}))
+          {:ok, %{page | entries: specs}, %{session | tools: tools}}
+
+        _ ->
+          {:ok, page, session}
+      end
+    end
+  end
+
+  # Every page; the entries in order.
+  defp paged(session, kind) do
+    with {:ok, acc, session} <- reduce_list(session, kind, [], &{:cont, [&1 | &2]}),
+         do: {:ok, Enum.reverse(acc), session}
   end
 
   @doc """
@@ -480,16 +620,32 @@ defmodule Sake.Client do
   end
 
   @spec list_resources(Session.t()) :: {:ok, [map()], Session.t()} | {:error, term(), Session.t()}
-  def list_resources(session), do: paged(session, "resources/list", "resources")
+  def list_resources(session), do: paged(session, :resources)
 
   @spec list_resource_templates(Session.t()) ::
           {:ok, [map()], Session.t()} | {:error, term(), Session.t()}
-  def list_resource_templates(session),
-    do: paged(session, "resources/templates/list", "resourceTemplates")
+  def list_resource_templates(session), do: paged(session, :resource_templates)
 
+  @doc """
+  The resource's contents. `read_resource_result/2` also gives the
+  read's cache metadata.
+  """
   @spec read_resource(Session.t(), String.t()) ::
           {:ok, [Content.t()], Session.t()} | {:error, term(), Session.t()}
   def read_resource(session, uri) do
+    with {:ok, result, session} <- read_resource_result(session, uri),
+         do: {:ok, result.contents, session}
+  end
+
+  @doc """
+  Reads a resource (one request), with what the server says about caching
+  the read: a `Sake.Client.ReadResult` with the `contents`, the `cache`
+  (`ttlMs` and `cacheScope`, see `Sake.Client.CacheInfo`) and the
+  result's `meta`.
+  """
+  @spec read_resource_result(Session.t(), String.t()) ::
+          {:ok, ReadResult.t(), Session.t()} | {:error, term(), Session.t()}
+  def read_resource_result(session, uri) do
     with {:ok, result, session} <- rpc(session, "resources/read", %{"uri" => uri}) do
       # The `_meta` of each contents item (an MCP App's CSP, say) becomes
       # the embedded resource's.
@@ -501,7 +657,12 @@ defmodule Sake.Client do
         )
         |> Enum.reject(&match?({:error, _}, &1))
 
-      {:ok, contents, session}
+      {:ok,
+       %ReadResult{
+         contents: contents,
+         cache: Sake.Client.CacheInfo.from_result(result),
+         meta: result["_meta"] || %{}
+       }, session}
     end
   end
 
@@ -523,7 +684,7 @@ defmodule Sake.Client do
   with `get_skill/2`. Listing reads no skill file.
   """
   @spec list_skills(Session.t()) :: {:ok, [map()], Session.t()} | {:error, term(), Session.t()}
-  def list_skills(session), do: paged(session, "skills/list", "skills")
+  def list_skills(session), do: paged(session, :skills)
 
   @doc """
   The entry of the skill whose `SKILL.md` is at `uri`, whether the server
@@ -636,7 +797,7 @@ defmodule Sake.Client do
   end
 
   @spec list_prompts(Session.t()) :: {:ok, [map()], Session.t()} | {:error, term(), Session.t()}
-  def list_prompts(session), do: paged(session, "prompts/list", "prompts")
+  def list_prompts(session), do: paged(session, :prompts)
 
   @spec get_prompt(Session.t(), String.t(), map()) ::
           {:ok, map(), Session.t()} | {:error, term(), Session.t()}
@@ -744,27 +905,6 @@ defmodule Sake.Client do
   def close(_session), do: :ok
 
   # ---- the request loop (pagination, MRTR retries)
-
-  defp paged(session, method, key, cursor \\ nil, acc \\ [], page \\ 0) do
-    params = if cursor, do: %{"cursor" => cursor}, else: %{}
-
-    with {:ok, result, session} <- rpc(session, method, params) do
-      items = acc ++ List.wrap(result[key])
-      next_page(result["nextCursor"], cursor, page, session, method, key, items)
-    end
-  end
-
-  defp next_page(nil, _cursor, _page, session, _method, _key, items), do: {:ok, items, session}
-
-  defp next_page(next, cursor, _page, session, _method, _key, _items) when next == cursor,
-    do: {:error, :pagination_loop, session}
-
-  defp next_page(_next, _cursor, page, session, _method, _key, _items)
-       when page + 1 >= @max_pages,
-       do: {:error, :pagination_loop, session}
-
-  defp next_page(next, _cursor, page, session, method, key, items),
-    do: paged(session, method, key, next, items, page + 1)
 
   defp rpc(session, method, params, opts \\ []),
     do: traced(session, method, params, fn -> exchange(session, method, params, opts) end)

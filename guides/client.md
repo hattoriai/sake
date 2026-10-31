@@ -216,6 +216,92 @@ sends between calls), with a `resources/subscribe` for each URI. It
 blocks while the stream lasts, so run it in a process of its own, and
 stop that process to stop listening.
 
+## Large catalogs and caching
+
+`list_tools/1`, `list_resources/1`, `list_resource_templates/1` and
+`list_prompts/1` fetch every page before they return: one request per
+page, which suits a small server. A gateway in front of many servers, or
+a server with thousands of tools, can go page by page instead.
+
+`list_tools_page/2` (and `list_resources_page/2`,
+`list_resource_templates_page/2`, `list_prompts_page/2`) sends one
+request and returns a `Sake.Client.Page`: its `entries`, the
+`next_cursor` to ask for the next page with (`nil` on the last), and
+its `cache`.
+
+```elixir
+{:ok, page, session} = Sake.Client.list_tools_page(session)
+# ... later, maybe from a UI's "more" button:
+{:ok, next, session} = Sake.Client.list_tools_page(session, page.next_cursor)
+```
+
+`reduce_list/5` goes through a list's entries and fetches the next page
+only when it needs to: it stops as soon as the function says so, and
+never fetches a page after that.
+
+```elixir
+# Up to 200 tools whose names start with "github_", however large the catalog.
+{:ok, tools, session} =
+  Sake.Client.reduce_list(session, :tools, [], fn tool, acc ->
+    acc = if String.starts_with?(tool.name, "github_"), do: [tool | acc], else: acc
+    if length(acc) == 200, do: {:halt, acc}, else: {:cont, acc}
+  end)
+```
+
+Each page's request goes through the session's authorization like any
+other, so a token refreshed partway through is in the session that
+`reduce_list/5` returns, on success and on error alike. Keep that
+session. A failed page ends the enumeration with `{:error, reason,
+session}`. A server that sends the same cursor twice, or more than
+`max_pages:` pages (1000 by default), ends it with
+`{:error, :pagination_loop, session}`.
+
+### Which calls make requests
+
+Every function in this section sends a request each time it is called;
+the client caches nothing. The `list_*_page` calls send one, `reduce_list/5`
+one per page it reaches, `list_*` one per page of the whole list, and
+`read_resource/2` and `read_resource_result/2` one each.
+`Sake.Client.CacheInfo.fresh?/2` sends none: it only does arithmetic on
+the metadata.
+
+### Cache metadata
+
+On 2026-07-28, list pages and resource reads carry `ttlMs` and
+`cacheScope`. The client exposes them as a `Sake.Client.CacheInfo`: the
+`cache` of a `Sake.Client.Page`, and of the `Sake.Client.ReadResult`
+that `read_resource_result/2` returns (`read_resource/2` keeps returning
+the contents alone).
+
+```elixir
+{:ok, %Sake.Client.ReadResult{contents: contents, cache: cache}, session} =
+  Sake.Client.read_resource_result(session, "docs://readme")
+
+Sake.Client.CacheInfo.fresh?(cache)  # still within ttlMs?
+cache.scope                          # :public, :private or nil
+```
+
+Sake leaves the caching policy to you (`Sake.Proxy` has its own cache for
+the catalogs it forwards). A policy that respects the metadata:
+
+- **Expiry.** Reuse an entry only while `fresh?/2` holds. A `ttl_ms` of
+  `0` means never reuse it. A `nil` `ttl_ms` (every legacy server, and
+  a modern one that gave none) carries no hint: choose your own lifetime,
+  or don't cache at all.
+- **Identity.** Key a `:public` entry by the server's URL; it is the same
+  for every client of that server. Key a `:private` entry, or one with
+  no scope, by the URL **and** the principal: the token's subject or the
+  credentials. Add the capabilities you declared when they change what
+  the server shows (`ui: true`, say). Never serve a private entry to
+  another principal.
+- **Invalidation.** Drop a list when `listen/3` reports its
+  `notifications/*/list_changed`, and a read when it reports
+  `notifications/resources/updated` for its URI. Drop everything private
+  when the credentials change: a new sign-in, another principal, or
+  changed scopes. A refreshed token for the same principal can keep it.
+  Drop everything on reconnect (a new `connect/2`, or a legacy session
+  that ended), since the server may have changed in between.
+
 ## Raw requests
 
 `request/4` sends any request and returns its result as the server sent
