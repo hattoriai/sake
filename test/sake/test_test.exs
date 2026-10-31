@@ -469,10 +469,12 @@ defmodule Sake.TestTest do
         receive do: (:stop -> exit(:shutdown))
       end)
 
-    assert_receive {:client, client}
+    # Connecting may take longer than assert_receive's default 100 ms on a
+    # loaded machine; what the test checks is the DOWN below.
+    assert_receive {:client, client}, 5_000
     ref = Process.monitor(client.pid)
     send(pid, :stop)
-    assert_receive {:DOWN, ^ref, :process, _, _}
+    assert_receive {:DOWN, ^ref, :process, _, _}, 5_000
   end
 
   test "session/1 hands the session to Sake.Client" do
