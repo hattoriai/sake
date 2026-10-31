@@ -1,8 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-10-31)
 
 ### Added
+
+- **`mix sake.release_check`**, for work on Sake itself: the `release`
+  alias runs it before it publishes to Hex and tags. It checks the
+  changelog's heading, the `{:sake, ...}` requirements in the docs,
+  `SECURITY.md`, a clean and up-to-date `main`, and that the tag is new.
 
 - **Paged client lists and cache metadata.**
   - **Paging:** `Sake.Client.list_tools_page/2`, `list_resources_page/2`,

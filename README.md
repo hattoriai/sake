@@ -43,7 +43,7 @@ The official MCP conformance suite runs in CI on every commit (see
 
 ```elixir
 def deps do
-  [{:sake, "~> 0.4"}, {:bandit, "~> 1.5"}]
+  [{:sake, "~> 0.5"}, {:bandit, "~> 1.5"}]
 end
 ```
 
