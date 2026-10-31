@@ -5,6 +5,7 @@ defmodule Sake.Server.Tasks do
   # `tasks/get`, `tasks/update` and `tasks/cancel`. See `Sake.Tasks`.
 
   alias Sake.{Context, JSONRPC}
+  alias Sake.Server.Middleware
   alias Sake.Tasks
   alias Sake.Tasks.{Record, Worker}
 
@@ -105,11 +106,15 @@ defmodule Sake.Server.Tasks do
 
   # A task of another owner (another principal, or the same one through
   # another client, resource or server) is as unknown as a task that never
-  # existed. The owner's token must still carry the scopes the tool
-  # required, as for calling it.
+  # existed, and so is a task of a tool the `:after_list` plugs now hide, or
+  # the server no longer has: they decide a task as they decide a call of
+  # its tool, so a principal they stopped letting in can't read, answer or
+  # cancel a task it started before. The owner's token must still carry the
+  # scopes the tool required, as for calling it.
   defp find(%{"taskId" => id}, ctx) when is_binary(id) do
     with {:ok, %Record{principal: owner} = record} <- Tasks.fetch(id),
-         true <- owner == Tasks.owner(ctx) do
+         true <- owner == Tasks.owner(ctx),
+         :ok <- listed(record, ctx) do
       if Sake.Server.allowed?(record, ctx), do: {:ok, record}, else: {:forbidden, record.scopes}
     else
       _ -> not_found()
@@ -117,6 +122,13 @@ defmodule Sake.Server.Tasks do
   end
 
   defp find(_params, _ctx), do: {:error, JSONRPC.code(:invalid_params), "Missing taskId"}
+
+  defp listed(%Record{tool: tool}, %Context{server: server} = ctx) when not is_nil(server) do
+    with {:ok, spec} <- Sake.Server.tool(server, tool, ctx),
+         do: Middleware.listed(:tools, spec, ctx)
+  end
+
+  defp listed(_record, _ctx), do: :error
 
   defp not_found,
     do: {:error, JSONRPC.code(:invalid_params), "Failed to retrieve task: Task not found"}
