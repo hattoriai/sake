@@ -162,6 +162,24 @@
   one that matches only some kinds needs a clause that passes the rest
   on. `Sake.Resource.Spec` has a new `skill` field.
 
+### Security
+
+- **Safe floors for dependencies with advisories.** The requirements
+  now exclude the versions that the EEF advisories name:
+  - `jose` (optional) is `~> 1.11 and >= 1.11.13`: the AES-GCM tag
+    forgery, the RSAES-PKCS1-v1_5 padding oracle, ECDSA signature
+    malleability and five more (EEF-CVE-2026-65625 to 65632).
+  - `phoenix_html` (optional) is `~> 4.4`: attribute injection in
+    `attributes_escape/1` (EEF-CVE-2026-117645).
+  - `plug_crypto` is now a direct requirement, `~> 2.2 and >= 2.2.1`,
+    because Sake calls `Plug.Crypto` itself: the secret key base in
+    stack trace arguments (EEF-CVE-2026-105963).
+  - `bandit` (dev and test only) is `>= 1.14.1`: twelve HTTP/1.1,
+    HTTP/2 and WebSocket advisories.
+
+  `cowlib` 2.21.0 (EEF-CVE-2026-43966) stays in the lock: it has no
+  fixed release yet, and it comes only from `bypass` in the tests.
+
 ### Fixed
 
 - `Sake.Client` took any answer to its `server/discover` probe for a
