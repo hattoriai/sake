@@ -34,6 +34,15 @@ defmodule Sake.Client do
   received. A server that sends more ends the request with
   `{:error, :response_too_large}`.
 
+  On a legacy session, a call's SSE stream that ends before the response,
+  after the server numbered its events, is resumed: the client waits the
+  server's `retry:` (or a backoff of its own, from one second, doubling)
+  and asks for the rest with a GET carrying `Last-Event-ID`, up to
+  `max_reconnects:` times in a row (default 3) without an event in
+  between; then the call fails with `{:error, :stream_lost}`. A server
+  that refuses the GET (an unknown or expired event ID, say) ends the call
+  with its `{:error, {:http, status, body}}`.
+
   `ui: true` declares MCP Apps (see `Sake.UI`), on both eras, for a client
   that renders them: the server then lists its app-only tools and UI
   resources, and each `Sake.Tool.Spec` from `list_tools/1` carries the
@@ -158,6 +167,7 @@ defmodule Sake.Client do
       tasks: Keyword.get(opts, :tasks, true),
       task_timeout: opts[:task_timeout] || 300_000,
       max_response_size: Keyword.get(opts, :max_response_size, 16_777_216),
+      max_reconnects: Keyword.get(opts, :max_reconnects, 3),
       auth: auth,
       req: req
     }
@@ -280,9 +290,9 @@ defmodule Sake.Client do
 
   defp modern_connect(session, opts \\ []) do
     case rpc(session, "server/discover", %{}, opts) do
-      {:ok, result, session} ->
-        supported = result["supportedVersions"] || [Protocol.modern()]
-
+      # A result without `supportedVersions` is no discovery result: a
+      # legacy server that answers any method with an empty result.
+      {:ok, %{"supportedVersions" => [_ | _] = supported} = result, session} ->
         case Enum.find(supported, &(&1 == Protocol.modern())) do
           nil ->
             {:error, {:no_common_version, supported}, session}
@@ -297,6 +307,9 @@ defmodule Sake.Client do
                  server_info: get_in(result, ["_meta", Protocol.meta(:server_info)])
              }}
         end
+
+      {:ok, _result, session} ->
+        {:error, {:rpc, %{"code" => -32_601, "message" => "Not a discovery result"}}, session}
 
       {:error, {:rpc, %{"code" => -32_022, "data" => %{"supported" => supported}}}, session} ->
         {:error, {:no_common_version, supported}, session}

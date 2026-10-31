@@ -21,8 +21,11 @@ defmodule Sake.Plug.Streams do
     # The shutdown notifier starts after the registry, so it stops before
     # it: open listen streams still get to finish while the registry runs.
     children =
-      [{Registry, keys: :duplicate, name: @registry}, __MODULE__.Shutdown] ++
-        relay(opts[:pubsub])
+      [
+        {Registry, keys: :duplicate, name: @registry},
+        {DynamicSupervisor, name: __MODULE__.Owners, strategy: :one_for_one},
+        __MODULE__.Shutdown
+      ] ++ relay(opts[:pubsub])
 
     %{
       id: __MODULE__,
@@ -257,6 +260,38 @@ defmodule Sake.Plug.Streams do
     end)
   end
 
+  # ---- resumable streams (`Sake.Plug.Resumable`) on other nodes
+
+  @doc false
+  # Asks every other node to attach the resumable stream `sid` of the
+  # session `nonce` to the pubsub `topic`, from event `after_n` on: the
+  # node that holds it does (and its events then arrive on the topic).
+  # `:none` without a pubsub.
+  def resume_remote(sid, nonce, after_n, topic),
+    do: to_other_nodes({:sake_resume, node(), sid, nonce, after_n, topic})
+
+  @doc false
+  # The connection on `topic` is gone: the stream `sid` stops sending to it.
+  def detach_remote(sid, topic), do: to_other_nodes({:sake_detach_sse, node(), sid, topic})
+
+  @doc false
+  def pubsub, do: :persistent_term.get({__MODULE__, :pubsub}, nil)
+
+  if Code.ensure_loaded?(Phoenix.PubSub) do
+    @doc false
+    def publish(pubsub, topic, message), do: Phoenix.PubSub.broadcast(pubsub, topic, message)
+
+    @doc false
+    def subscribe(pubsub, topic), do: Phoenix.PubSub.subscribe(pubsub, topic)
+
+    @doc false
+    def unsubscribe(pubsub, topic), do: Phoenix.PubSub.unsubscribe(pubsub, topic)
+  else
+    def publish(_pubsub, _topic, _message), do: :ok
+    def subscribe(_pubsub, _topic), do: :ok
+    def unsubscribe(_pubsub, _topic), do: :ok
+  end
+
   defp ensure_started! do
     Process.whereis(@registry) ||
       raise "Sake.Plug.Streams is not running: add {Sake, ...} to your supervision tree"
@@ -332,6 +367,23 @@ defmodule Sake.Plug.Streams do
         if from_node != node(),
           do: Sake.Plug.Streams.session_local(server, session_nonce, message)
 
+        {:noreply, pubsub}
+      end
+
+      # A GET with `Last-Event-ID` reached another node: the stream, if it
+      # is here (and the session's), sends its events to that connection's
+      # topic, then says it was found; the connection keeps any event that
+      # arrives first until it hears so.
+      def handle_info({:sake_resume, from_node, sid, nonce, after_n, topic}, pubsub) do
+        if from_node != node() and
+             Sake.Plug.Resumable.attach(sid, nonce, after_n, {:topic, topic}) == :ok,
+           do: Sake.Plug.Streams.publish(pubsub, topic, {:sake_sse_found, sid})
+
+        {:noreply, pubsub}
+      end
+
+      def handle_info({:sake_detach_sse, from_node, sid, topic}, pubsub) do
+        if from_node != node(), do: Sake.Plug.Resumable.detach(sid, {:topic, topic})
         {:noreply, pubsub}
       end
     end

@@ -82,14 +82,54 @@ affinity on `Mcp-Session-Id`), or a subscription is lost and an
 answered handler waits until it times out. The modern era keeps no
 session and needs neither.
 
+### Resumable streams
+
+On a legacy session, every SSE stream (a call's response stream and the
+session's `GET` stream) is resumable, as "Resumability and Redelivery"
+describes:
+
+- **Event IDs.** Every event has an `id`, unique across the session's
+  streams: `<stream>.<n>`, the stream's own ID and the event's number.
+  A stream opens with `retry:` (`sse_retry:`, 1 000 ms by default); on
+  2025-11-25 it opens with a priming event, an ID and empty data, so
+  that the client has an ID to resume from before the first message.
+- **A disconnect is not a cancellation.** A call runs in a process of its
+  stream, not in the connection's: when the client goes, the call goes
+  on, and its events are kept in a bounded buffer
+  (`sse_buffer: [events: 100, age: 300_000]`, a count and an age in ms).
+- **Resuming.** A `GET` with `Last-Event-ID` gets the events after that
+  ID, then the live ones, and the stream ends after the call's response.
+  An ID Sake did not give, another session's, one whose next events the
+  buffer has dropped, or one of a stream gone (no connection for the
+  buffer's age) gets an HTTP 400 with a JSON-RPC error: the client starts
+  over rather than miss events.
+- **Polling.** `Sake.Progress.close_stream/1` closes the call's
+  connection (the 2025-11-25 polling pattern for a long call); the call
+  goes on, and the client takes the rest of the stream with `GET`.
+- **Several nodes.** With `{Sake, pubsub: MyApp.PubSub}`, a `GET` that
+  lands on another node than the stream's gets the stream's events
+  through the pubsub. Without one, route a session's requests to one node
+  (session affinity on `Mcp-Session-Id`), or a resumption on another node
+  gets the 400.
+- **Opting out.** `resumable: false` on `Sake.Plug` gives plain
+  streams: no IDs, and a call that ends with its connection.
+
+`Sake.Client` resumes a legacy call's stream that ends before the
+response, after an event ID: it waits the server's `retry` (or a backoff
+of its own, from one second, doubling), sends a `GET` with
+`Last-Event-ID`, and goes on reading there, answering the server's
+requests as on the original stream. After `max_reconnects:` attempts in a
+row (3 by default) without an event in between, the call fails with
+`{:error, :stream_lost, session}`; a server that refuses the `GET` ends
+it with its HTTP error.
+
 ## What is not supported
 
 - **2024-11-05** — the revision before the current three-legacy-revision
   window; Sake does not negotiate it at all.
-- **Resumability** — reconnecting a dropped SSE stream with
-  `Last-Event-ID` and a server-issued `retry` interval (removed from the
-  2026-07-28 revision). Neither `Sake.Plug` nor `Sake.Client` implements
-  this; a dropped stream is simply gone.
+- **Resumability on 2026-07-28** — the revision removed it; a modern
+  call's dropped stream is gone, and a long call is a task instead (see
+  "Resumable streams" above for the legacy revisions).
 - **Server requests on the client's standalone GET stream** — on a
   legacy session, `Sake.Client` opens the `GET` stream only in
   `Sake.Client.listen/3`, and reads notifications from it, not requests.
@@ -163,14 +203,11 @@ on purpose; CI turns red on a *new* failure and on a listed scenario that
 now passes, and the suite counts a warning (an unmet SHOULD) as a failure.
 Currently:
 
-- **`server-sse-polling`** (server, 2025-11-25) — no resumability (above),
-  so a stream carries no priming event and no `retry` field.
 - **`input-required-result-ignore-extra-params`** (server, 2026-07-28) — the
   scenario sends answers with no `requestState`, to a question it never
   asked. Sake honours answers only alongside the signed state it issued
   for them (see `guides/security.md`), so it ignores them and asks again;
   the scenario expected the call to complete.
-- **`sse-retry`** (client) — no resumability (above).
 - **`elicitation-sep1034-client-defaults`** (client) — the fixture server
   sends its elicitation request outside the tool call's response stream,
   so it can only arrive on the standalone GET stream, where the client

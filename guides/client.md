@@ -46,6 +46,15 @@ over HTTP, which end the request with `{:error, :response_too_large}`,
 and a line over stdio, which is dropped with a warning. Raise it for a
 server whose results are larger.
 
+On a legacy session over HTTP, a call's SSE stream that ends before its
+response, after the server numbered its events, is resumed: the client
+waits the server's `retry:` (or a backoff from one second, doubling),
+sends a `GET` with `Last-Event-ID` and reads the rest there. After
+`max_reconnects:` attempts in a row (3 by default) without an event, the
+call fails with `{:error, :stream_lost, session}`; a server that refuses
+the `GET` ends it with `{:error, {:http, status, body}, session}`. See
+"Resumable streams" in `guides/protocol_versions.md`.
+
 The client encodes its requests with `config :sake, :json_library`
 (`JSON` by default; see `guides/tools.md`), so arguments holding structs
 that derive only `Jason.Encoder` need `config :sake, :json_library,
@@ -66,7 +75,8 @@ one the client sent is retried once, and only a second refusal comes back
 as `{:error, {:no_common_version, supported}}`. "Method not found" (`-32601`) or
 "invalid params" (`-32602`) — over HTTP 200 or a 4xx — or a failure with
 no JSON-RPC error at all means "this is a legacy server", and the client
-retries with the legacy `initialize` handshake. Force one era directly
+retries with the legacy `initialize` handshake, as does a result without
+`supportedVersions` (a legacy server that answers any method). Force one era directly
 with `era: :modern` or `era: :legacy` (plus `legacy_version:` to pick which
 of the three legacy revisions to offer) when you already know which the
 server speaks — skipping the probe saves a round trip.

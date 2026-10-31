@@ -390,13 +390,15 @@ defmodule Sake.SamplingTest do
     # with `answer` (a result, or `{:error, error}`), and returns the events.
     defp ask_and_answer(url, headers, tool, args, answer) do
       body = Sake.JSONRPC.request(7, "tools/call", %{"name" => tool, "arguments" => args})
+      # Other tests' resumable streams may still have questions registered.
+      before = registered_requests()
 
       task =
         Task.async(fn ->
           HTTP.sse(url, body, headers, fn events -> Enum.any?(events, &(&1["id"] == 7)) end)
         end)
 
-      request_id = wait_for_request_id(3_000)
+      request_id = wait_for_request_id(before, 3_000)
 
       message =
         case answer do
@@ -480,12 +482,15 @@ defmodule Sake.SamplingTest do
     end
   end
 
-  defp wait_for_request_id(timeout) do
+  defp registered_requests,
+    do: Registry.select(Sake.Plug.Streams, [{{{:request, :"$1"}, :_, :_}, [], [:"$1"]}])
+
+  defp wait_for_request_id(before, timeout) do
     deadline = System.monotonic_time(:millisecond) + timeout
 
     Stream.repeatedly(fn ->
       Process.sleep(20)
-      Registry.select(Sake.Plug.Streams, [{{{:request, :"$1"}, :_, :_}, [], [:"$1"]}])
+      registered_requests() -- before
     end)
     |> Enum.find_value(fn
       [id | _] ->

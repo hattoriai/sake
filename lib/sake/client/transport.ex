@@ -41,6 +41,7 @@ defmodule Sake.Client.Transport do
         Auth.headers(session.auth, "POST", session.url, session.headers)
 
     id = message["id"]
+    cursor = make_ref()
 
     result =
       Req.post(
@@ -55,9 +56,16 @@ defmodule Sake.Client.Transport do
           receive_timeout: Keyword.get(opts, :timeout, 300_000)
         ] ++
           session.req ++
-          [into: fn {:data, data}, {req, resp} -> stream(data, {req, resp}, session, id) end]
+          [into: fn {:data, data}, acc -> stream(data, acc, session, id, cursor) end]
       )
 
+    case resumable(result, session, id, Process.delete(cursor)) do
+      {:resume, session, last} -> resume(session, id, last, opts, 1)
+      :no -> outcome(result, session, id)
+    end
+  end
+
+  defp outcome(result, session, id) do
     case result do
       {:ok, %Req.Response{private: %{sake_throw: {:throw, value}}}} ->
         throw(value)
@@ -85,23 +93,84 @@ defmodule Sake.Client.Transport do
     end
   end
 
+  # ---- resumability (legacy revisions, "Resumability and Redelivery")
+  #
+  # A legacy server may number its SSE events and end a call's stream
+  # before the response (a dropped connection, or the 2025-11-25 polling
+  # pattern, where it closes the stream on purpose after a `retry:`). The
+  # client then waits `retry` ms (or a backoff of its own), and asks for
+  # the rest of the stream with a GET carrying `Last-Event-ID`, up to
+  # `max_reconnects` times in a row without an event in between.
+
+  # A stream that ended without the call's response, after an event ID.
+  defp resumable(result, %Session{era: :legacy} = session, id, %{id: last} = cursor)
+       when is_binary(last) and id != nil do
+    case result do
+      {:ok, %Req.Response{status: 200, private: private} = resp}
+      when not is_map_key(private, :sake_throw) and not is_map_key(private, :sake_too_large) ->
+        if content_type(resp) == :sse and
+             not Enum.any?(private[:sake_events] || [], &final?(&1, id)),
+           do:
+             {:resume, resp |> capture_session(session) |> then(&capture_nonce(resp, &1)), cursor},
+           else: :no
+
+      {:error, _reason} ->
+        {:resume, session, cursor}
+
+      _ ->
+        :no
+    end
+  end
+
+  defp resumable(_result, _session, _id, _cursor), do: :no
+
+  defp resume(session, _id, _last, _opts, attempt) when attempt > session.max_reconnects,
+    do: {:error, :stream_lost}
+
+  defp resume(session, id, last, opts, attempt) do
+    Process.sleep(last[:retry] || backoff(attempt))
+
+    headers =
+      [{"accept", "text/event-stream"}, {"last-event-id", last.id}] ++
+        era_headers(session, %{}, []) ++
+        Auth.headers(session.auth, "GET", session.url, session.headers)
+
+    cursor = make_ref()
+    Process.put(cursor, last)
+
+    result =
+      Req.get(
+        session.url,
+        [
+          headers: headers,
+          retry: false,
+          decode_body: false,
+          receive_timeout: Keyword.get(opts, :timeout, 300_000)
+        ] ++
+          session.req ++
+          [into: fn {:data, data}, acc -> stream(data, acc, session, id, cursor) end]
+      )
+
+    next = Process.delete(cursor)
+    # Each event received makes a new run of attempts.
+    attempt = if next.id == last.id, do: attempt + 1, else: 1
+
+    case resumable(result, session, id, next) do
+      {:resume, session, next} -> resume(session, id, next, opts, attempt)
+      :no -> outcome(result, session, id)
+    end
+  end
+
+  defp backoff(attempt), do: min(1_000 * Integer.pow(2, attempt - 1), 30_000)
+
   # ---- body handling: JSON bodies arrive as one chunk; SSE bodies as many
 
   # Neither a JSON body nor an event still being received may grow past
   # the session's `max_response_size`: the request stops there.
-  defp stream(data, {req, resp}, session, id) do
+  defp stream(data, {req, resp}, session, id, cursor) do
     case content_type(resp) do
       :sse ->
-        {events, buffer} = parse_sse((resp.private[:sake_buffer] || "") <> data)
-        resp = put_in(resp.private[:sake_buffer], buffer)
-
-        {resp, done?} = handle_events(events, resp, session, id)
-
-        cond do
-          done? -> {:halt, {req, resp}}
-          byte_size(buffer) > session.max_response_size -> too_large(req, resp)
-          true -> {:cont, {req, resp}}
-        end
+        stream_sse(data, {req, resp}, session, id, cursor)
 
       :json ->
         body = (resp.body || "") <> data
@@ -109,6 +178,21 @@ defmodule Sake.Client.Transport do
         if byte_size(body) > session.max_response_size,
           do: too_large(req, resp),
           else: {:cont, {req, %{resp | body: body}}}
+    end
+  end
+
+  defp stream_sse(data, {req, resp}, session, id, cursor) do
+    {fields, buffer} = parse_sse_fields((resp.private[:sake_buffer] || "") <> data)
+    resp = put_in(resp.private[:sake_buffer], buffer)
+    track(cursor, fields)
+    events = for %{data: json} <- fields, json != nil, do: json
+
+    {resp, done?} = handle_events(events, resp, session, id)
+
+    cond do
+      done? -> {:halt, {req, resp}}
+      byte_size(buffer) > session.max_response_size -> too_large(req, resp)
+      true -> {:cont, {req, resp}}
     end
   end
 
@@ -327,11 +411,38 @@ defmodule Sake.Client.Transport do
 
   defp param_headers(_, _), do: []
 
+  # The last event ID and `retry` seen on a stream, kept in the process
+  # dictionary: they must outlive a stream that ends in a transport error.
+  defp track(cursor, fields) do
+    Process.put(
+      cursor,
+      Enum.reduce(fields, Process.get(cursor) || %{id: nil}, fn field, acc ->
+        acc
+        |> then(&if(field.id, do: %{&1 | id: nonempty(field.id)}, else: &1))
+        |> then(&if(field.retry, do: Map.put(&1, :retry, field.retry), else: &1))
+      end)
+    )
+  end
+
+  # An empty ID resets the last event ID (the SSE spec).
+  defp nonempty(""), do: nil
+  defp nonempty(id), do: id
+
+  @doc false
+  # The JSON messages of the complete events in `buffer`, and the rest.
+  def parse_sse(buffer) do
+    {fields, rest} = parse_sse_fields(buffer)
+    {for(%{data: json} <- fields, json != nil, do: json), rest}
+  end
+
   @doc false
   # Events end at a blank line, lines at CRLF, LF or CR (the SSE spec):
   # line ends become LF first. A CR at the very end of the buffer may be
   # the first half of a CRLF split across chunks, so it waits for the next.
-  def parse_sse(buffer) do
+  # Each complete event is `%{id:, retry:, data:}`: its ID and `retry`
+  # (`nil` when absent) and its JSON message (`nil` for none, as in a
+  # priming event).
+  def parse_sse_fields(buffer) do
     {buffer, cr} =
       if String.ends_with?(buffer, "\r"),
         do: {binary_part(buffer, 0, byte_size(buffer) - 1), "\r"},
@@ -350,15 +461,51 @@ defmodule Sake.Client.Transport do
   end
 
   defp decode_event_block(block) do
-    data =
-      block
-      |> String.split("\n")
-      |> Enum.filter(&String.starts_with?(&1, "data:"))
-      |> Enum.map_join("\n", &(&1 |> String.replace_prefix("data:", "") |> String.trim_leading()))
+    lines = String.split(block, "\n")
+
+    case %{id: event_id(lines), retry: event_retry(lines), data: event_data(lines)} do
+      %{id: nil, retry: nil, data: nil} -> []
+      event -> [event]
+    end
+  end
+
+  defp event_data(lines) do
+    data = lines |> Enum.flat_map(&field(&1, "data")) |> Enum.join("\n")
 
     case data != "" && JSON.decode(data) do
-      {:ok, json} -> [json]
-      _ -> []
+      {:ok, json} -> json
+      _ -> nil
+    end
+  end
+
+  # An ID with a NUL is ignored (the SSE spec), as is a `retry` that is
+  # not all digits.
+  defp event_id(lines) do
+    lines
+    |> Enum.flat_map(&field(&1, "id"))
+    |> Enum.reject(&String.contains?(&1, <<0>>))
+    |> List.last()
+  end
+
+  defp event_retry(lines) do
+    lines
+    |> Enum.flat_map(&field(&1, "retry"))
+    |> Enum.filter(&(&1 =~ ~r/\A\d+\z/))
+    |> Enum.map(&String.to_integer/1)
+    |> List.last()
+  end
+
+  # A field's value: after the name and a colon, one leading space dropped.
+  defp field(line, name) do
+    cond do
+      line == name ->
+        [""]
+
+      String.starts_with?(line, name <> ":") ->
+        [line |> String.replace_prefix(name <> ":", "") |> String.replace_prefix(" ", "")]
+
+      true ->
+        []
     end
   end
 

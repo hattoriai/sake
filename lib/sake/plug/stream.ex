@@ -8,7 +8,7 @@ defmodule Sake.Plug.Stream do
   require Logger
 
   alias Sake.{Context, JSONRPC, Protocol, Trace}
-  alias Sake.Plug.{SSE, Streams}
+  alias Sake.Plug.{Resumable, SSE, Streams}
   alias Sake.Server.Middleware
 
   # `loop/5` demonitors `Task.async/1`'s own monitor ref by hand (there is
@@ -103,7 +103,86 @@ defmodule Sake.Plug.Stream do
 
   defp component(_method, _params, _ctx), do: :error
 
-  defp stream(conn, opts, {:request, id, _method, params} = parsed, ctx, handler) do
+  defp stream(conn, opts, parsed, ctx, handler) do
+    if resumable?(opts, ctx),
+      do: resumable(conn, opts, parsed, ctx, handler),
+      else: plain(conn, opts, parsed, ctx, handler)
+  end
+
+  # A legacy session's stream is resumable (see "Resumable streams" in
+  # `Sake.Plug`): the modern revision has none, and a stream without a
+  # session has nothing to resume it under.
+  defp resumable?(opts, %Context{era: :legacy, conn_assigns: %{sake_session_nonce: nonce}})
+       when is_binary(nonce),
+       do: Map.get(opts, :resumable, false)
+
+  defp resumable?(_opts, _ctx), do: false
+
+  # The call runs in its stream's process (`Sake.Plug.Resumable`), not in
+  # this connection's: a dropped connection leaves it running, its events
+  # kept for the client's GET with `Last-Event-ID`.
+  defp resumable(conn, opts, {:request, id, _method, params} = parsed, ctx, handler) do
+    nonce = ctx.conn_assigns.sake_session_nonce
+    token = get_in(params, ["_meta", "progressToken"])
+
+    run =
+      Trace.bind(fn ->
+        owner = Resumable.owner()
+        ctx = %{ctx | progress: owner_progress(owner, token), transport: owner}
+        run_safely(parsed, ctx, handler)
+      end)
+
+    {:ok, _pid, sid} = Resumable.start_call(opts, nonce, run, id, {:pid, self()})
+    conn = SSE.start(conn)
+
+    case SSE.prime(conn, sid <> ".0", opts.sse_retry, ctx.protocol_version) do
+      {:ok, conn} -> serve(conn, opts, sid, {:pid, self()})
+      {:error, _} -> leave(conn, sid, {:pid, self()})
+    end
+  end
+
+  defp owner_progress(_owner, nil), do: fn _, _ -> :ok end
+
+  defp owner_progress(owner, token) do
+    fn current, {total, message} ->
+      send(owner, {:sake_progress, token, current, total, message})
+    end
+  end
+
+  # Writes the stream's events, each with its ID, until the stream closes
+  # the connection (its call's response was sent, or the handler asked for
+  # it) or the client goes. The stream then stops sending here.
+  defp serve(conn, opts, sid, subscriber) do
+    receive do
+      {:sake_sse, ^sid, {:event, n, message}} ->
+        case SSE.event(conn, message, sid <> "." <> Integer.to_string(n)) do
+          {:ok, conn} -> serve(conn, opts, sid, subscriber)
+          {:error, _} -> leave(conn, sid, subscriber)
+        end
+
+      {:sake_sse, ^sid, :close} ->
+        leave(conn, sid, subscriber)
+    after
+      opts.keepalive ->
+        case SSE.comment(conn) do
+          {:ok, conn} -> serve(conn, opts, sid, subscriber)
+          {:error, _} -> leave(conn, sid, subscriber)
+        end
+    end
+  end
+
+  defp leave(conn, sid, {:pid, _} = subscriber) do
+    Resumable.detach(sid, subscriber)
+    conn
+  end
+
+  defp leave(conn, sid, {:topic, topic}) do
+    _ = Streams.detach_remote(sid, topic)
+    if pubsub = Streams.pubsub(), do: Streams.unsubscribe(pubsub, topic)
+    conn
+  end
+
+  defp plain(conn, opts, {:request, id, _method, params} = parsed, ctx, handler) do
     conn = SSE.start(conn)
     me = self()
     token = get_in(params, ["_meta", "progressToken"])
@@ -173,6 +252,11 @@ defmodule Sake.Plug.Stream do
         # A legacy server request (elicitation, sampling, roots): the server
         # asks on the stream and the handler waits.
         continue(conn, opts, id, ctx, task, JSONRPC.request(request_id, method, params))
+
+      # `Sake.Progress.close_stream/1` on a stream that is not resumable:
+      # closing it would lose the response, so it stays open.
+      :sake_close_stream ->
+        loop(conn, opts, id, ctx, task)
 
       {^task_ref, outcome} ->
         Process.demonitor(task_ref, [:flush])
@@ -466,6 +550,88 @@ defmodule Sake.Plug.Stream do
 
   @spec legacy(Plug.Conn.t(), map(), Sake.Server.Session.session()) :: Plug.Conn.t()
   def legacy(conn, opts, session) do
+    cond do
+      not Map.get(opts, :resumable, false) ->
+        plain_legacy(conn, opts, session)
+
+      last = List.first(get_req_header(conn, "last-event-id")) ->
+        resume(conn, opts, session, last)
+
+      true ->
+        resumable_legacy(conn, opts, session)
+    end
+  end
+
+  # The session's notifications through a resumable stream: kept while the
+  # client is away, for its GET with `Last-Event-ID`.
+  defp resumable_legacy(conn, opts, session) do
+    {:ok, _pid, sid} = Resumable.start_session(opts, session.nonce, {:pid, self()})
+    conn = SSE.start(conn)
+
+    case SSE.prime(conn, sid <> ".0", opts.sse_retry, session.revision) do
+      {:ok, conn} -> serve(conn, opts, sid, {:pid, self()})
+      {:error, _} -> leave(conn, sid, {:pid, self()})
+    end
+  end
+
+  # A GET with `Last-Event-ID`: the stream it names, from the event after
+  # it, here or (with a pubsub) on the node that has it. One that is not
+  # the session's, or is gone, is refused: the client starts over.
+  defp resume(conn, opts, session, last) do
+    case Resumable.parse_id(last) do
+      {:ok, sid, n} ->
+        case Resumable.attach(sid, session.nonce, n, {:pid, self()}) do
+          :ok -> resumed(conn, opts, sid, {:pid, self()})
+          :evicted -> unknown_event(conn)
+          :error -> resume_remote(conn, opts, session, sid, n)
+        end
+
+      :error ->
+        unknown_event(conn)
+    end
+  end
+
+  defp resume_remote(conn, opts, session, sid, n) do
+    case Streams.pubsub() do
+      nil ->
+        unknown_event(conn)
+
+      pubsub ->
+        topic = "sake:sse:" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+        :ok = Streams.subscribe(pubsub, topic)
+        _ = Streams.resume_remote(sid, session.nonce, n, topic)
+
+        receive do
+          {:sake_sse_found, ^sid} -> resumed(conn, opts, sid, {:topic, topic})
+        after
+          2_000 ->
+            Streams.unsubscribe(pubsub, topic)
+            unknown_event(conn)
+        end
+    end
+  end
+
+  # The replayed events are already waiting in the mailbox: the stream
+  # sent them as it attached.
+  defp resumed(conn, opts, sid, subscriber) do
+    conn = SSE.start(conn)
+
+    case Plug.Conn.chunk(conn, ["retry: ", Integer.to_string(opts.sse_retry), "\n\n"]) do
+      {:ok, conn} -> serve(conn, opts, sid, subscriber)
+      {:error, _} -> leave(conn, sid, subscriber)
+    end
+  end
+
+  defp unknown_event(conn) do
+    body =
+      JSONRPC.error(nil, JSONRPC.code(:invalid_request), "Unknown or expired Last-Event-ID")
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(400, Sake.JSON.encode!(body))
+  end
+
+  defp plain_legacy(conn, opts, session) do
     Streams.register_legacy(opts.server, session.nonce)
 
     # A comment at once tells the client the stream is open: the session's
@@ -490,33 +656,11 @@ defmodule Sake.Plug.Stream do
       {:sake_unsubscribe, uri} ->
         legacy_loop(conn, opts, Map.delete(subscribed, uri))
 
-      {:sake_notify, {:list_changed, kind}} ->
-        write_or_stop(
-          conn,
-          opts,
-          subscribed,
-          JSONRPC.notification("notifications/#{kind}/list_changed")
-        )
-
-      {:sake_notify, {:resource_updated, uri}} ->
-        if Map.has_key?(subscribed, uri),
-          do:
-            write_or_stop(
-              conn,
-              opts,
-              subscribed,
-              JSONRPC.notification("notifications/resources/updated", %{"uri" => uri})
-            ),
-          else: legacy_loop(conn, opts, subscribed)
-
-      # An extension's notification: a legacy session has no filter to
-      # ask for it with, so its stream gets them all.
-      {:sake_notify, {:extension, _id, method, params}} ->
-        write_or_stop(conn, opts, subscribed, JSONRPC.notification(method, params))
-
-      # Task notifications are for modern listen streams only.
-      {:sake_notify, _event} ->
-        legacy_loop(conn, opts, subscribed)
+      {:sake_notify, event} ->
+        case legacy_notification(event, subscribed) do
+          nil -> legacy_loop(conn, opts, subscribed)
+          message -> write_or_stop(conn, opts, subscribed, message)
+        end
     after
       opts.keepalive ->
         case SSE.comment(conn) do
@@ -525,6 +669,26 @@ defmodule Sake.Plug.Stream do
         end
     end
   end
+
+  @doc false
+  # What a legacy session's GET stream carries for a broadcast, if
+  # anything: a list change, an update of a resource it subscribed to, an
+  # extension's notification (a legacy session has no filter to ask for
+  # one with, so it gets them all). Task notifications are for modern
+  # listen streams only.
+  @spec legacy_notification(term(), %{String.t() => true}) :: map() | nil
+  def legacy_notification({:list_changed, kind}, _subscribed),
+    do: JSONRPC.notification("notifications/#{kind}/list_changed")
+
+  def legacy_notification({:resource_updated, uri}, subscribed) do
+    if Map.has_key?(subscribed, uri),
+      do: JSONRPC.notification("notifications/resources/updated", %{"uri" => uri})
+  end
+
+  def legacy_notification({:extension, _id, method, params}, _subscribed),
+    do: JSONRPC.notification(method, params)
+
+  def legacy_notification(_event, _subscribed), do: nil
 
   @spec write_or_stop(Plug.Conn.t(), map(), %{String.t() => true}, map()) :: Plug.Conn.t()
   defp write_or_stop(conn, opts, subscribed, message) do
