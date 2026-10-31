@@ -28,7 +28,8 @@ defmodule Sake.Resource do
     `{server, prefix, spec}` for one it mounted (`Sake.Server.mount/2`):
     the server it came from, the mount's prefix, and the spec as that
     server has it. `proxy` is the `Sake.Proxy` whose upstream serves a
-    proxied resource; it has no `module`.
+    proxied resource; it has no `module`. `skill` is the `Sake.Skill.Spec`
+    of the skill a file of which the spec stands for, in a read of it.
     """
     @type t :: %__MODULE__{}
     defstruct [
@@ -50,7 +51,8 @@ defmodule Sake.Resource do
       ttl: nil,
       ui: false,
       mount: nil,
-      proxy: nil
+      proxy: nil,
+      skill: nil
     ]
 
     @spec match(t(), String.t()) :: {:ok, map()} | :error

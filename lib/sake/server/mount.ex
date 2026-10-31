@@ -79,7 +79,7 @@ defmodule Sake.Server.Mount do
               "upstream components: those are known only at runtime"
     end
 
-    specs = Enum.flat_map([:tools, :resources, :prompts], &server.__sake__/1)
+    specs = Enum.flat_map([:tools, :resources, :prompts, :skills], &server.__sake__/1)
 
     case Enum.reject(entries, fn entry -> Enum.any?(specs, &names?(&1, entry)) end) do
       [] ->
@@ -103,6 +103,7 @@ defmodule Sake.Server.Mount do
 
   defp names?(spec, entry) when is_atom(entry), do: spec.module == entry
   defp names?(%Sake.Resource.Spec{uri: uri}, entry), do: uri == entry
+  defp names?(%Sake.Skill.Spec{uri: uri}, entry), do: uri == entry
   defp names?(spec, entry), do: spec.name == entry
 
   @doc "A component's name under the mount's prefix."
@@ -196,6 +197,18 @@ defmodule Sake.Server.Mount do
     end
   end
 
+  # A skill moves under the prefix, every URI of its manifest with it: its
+  # files are the same bytes, so their digests stay what they were. A
+  # catalog's skills are moved when the catalog gives them.
+  defp rename(%Sake.Skill.Spec{skill: nil} = spec, _prefix, _server), do: {:ok, spec}
+
+  defp rename(%Sake.Skill.Spec{skill: skill} = spec, prefix, server) do
+    case skill_uris(skill, prefix) do
+      {:ok, skill} -> {:ok, %{spec | skill: skill, uri: skill.uri}}
+      :error -> {:error, unprefixable(server, skill.uri, prefix)}
+    end
+  end
+
   defp rename(%Sake.Prompt.Spec{} = spec, prefix, _server),
     do: {:ok, %{spec | name: name(prefix, spec.name)}}
 
@@ -205,6 +218,19 @@ defmodule Sake.Server.Mount do
       :error -> {:error, unprefixable(server, spec.uri, prefix)}
     end
   end
+
+  @doc "The skill with its URIs under the mount's prefix; `:error` when one cannot take it."
+  @spec skill_uris(Sake.Skill.t(), String.t() | nil) :: {:ok, Sake.Skill.t()} | :error
+  def skill_uris(skill, nil), do: {:ok, skill}
+
+  def skill_uris(skill, prefix) do
+    {:ok, Sake.Skill.map_uris(skill, &(uri(prefix, &1) |> ok!()))}
+  catch
+    :unprefixable -> :error
+  end
+
+  defp ok!({:ok, uri}), do: uri
+  defp ok!(:error), do: throw(:unprefixable)
 
   defp valid_name(name, server) do
     if Regex.match?(~r/^[A-Za-z0-9_.\-]{1,128}$/, name),

@@ -123,6 +123,27 @@ defmodule Sake.Proxy.Forward do
 
   defp contents(_contents), do: []
 
+  # ---- skills/get
+
+  @doc """
+  The skill the upstream serves at `uri`, by its `skills/get`, as a spec
+  of the proxy, for what is left of the upstream's `ttlMs` (or the
+  proxy's `list_ttl`); `:error` when it serves none.
+  """
+  @spec get_skill(module(), String.t(), Context.t()) :: {:ok, Sake.Skill.Spec.t()} | :error
+  def get_skill(proxy, uri, ctx) do
+    config = Sake.Proxy.Upstream.config(proxy)
+
+    with {:ok, %{"skill" => entry} = result} <-
+           request(proxy, "skills/get", %{"uri" => uri}, ctx, []),
+         %Sake.Skill.Spec{uri: ^uri} = spec <- Sake.Proxy.Specs.skill(entry) do
+      ttl = if is_integer(result["ttlMs"]) and result["ttlMs"] > 0, do: result["ttlMs"]
+      {:ok, %{spec | proxy: proxy, scopes: config[:scope], ttl: ttl || config[:list_ttl]}}
+    else
+      _ -> :error
+    end
+  end
+
   # ---- prompts/get
 
   @doc "Gets the prompt upstream."

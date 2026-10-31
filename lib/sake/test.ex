@@ -514,6 +514,25 @@ defmodule Sake.Test do
   @spec read_resource(Client.t(), String.t()) :: {:ok, [Sake.Content.t()]} | {:error, term()}
   def read_resource(client, uri), do: run(client, &Sake.Client.read_resource(&1, uri))
 
+  @doc "See `Sake.Client.list_skills/1`."
+  @spec list_skills(Client.t()) :: {:ok, [map()]} | {:error, term()}
+  def list_skills(client), do: run(client, &Sake.Client.list_skills/1)
+
+  @doc "See `Sake.Client.get_skill/2`."
+  @spec get_skill(Client.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def get_skill(client, uri), do: run(client, &Sake.Client.get_skill(&1, uri))
+
+  @doc "See `Sake.Client.read_skill_file/4`."
+  @spec read_skill_file(Client.t(), map(), String.t(), keyword()) ::
+          {:ok, binary()} | {:error, term()}
+  def read_skill_file(client, entry, uri, opts \\ []),
+    do: run(client, &Sake.Client.read_skill_file(&1, entry, uri, opts))
+
+  @doc "See `Sake.Client.read_resource_directory/2`."
+  @spec read_resource_directory(Client.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
+  def read_resource_directory(client, uri),
+    do: run(client, &Sake.Client.read_resource_directory(&1, uri))
+
   @doc "See `Sake.Client.list_prompts/1`."
   @spec list_prompts(Client.t()) :: {:ok, [map()]} | {:error, term()}
   def list_prompts(client), do: run(client, &Sake.Client.list_prompts/1)

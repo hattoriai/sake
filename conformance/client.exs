@@ -146,6 +146,49 @@ case Sake.Client.connect(url, on_input: on_input, auth: auth) do
         end
       end)
 
+    # Skills (SEP-2640): the client lists them, as a host does on
+    # connecting, and loads the first, as a host does once its model
+    # needs it: SKILL.md, checked against the entry, then the files the
+    # entry lists, each checked too, stopping at the first that fails.
+    # In `sep-2640-client-no-prefetch` the host never needs the skill, so
+    # it reads nothing: listing alone must not fetch a file.
+    session =
+      with true <- Sake.Client.skills?(session),
+           {:ok, skills, session} <- Sake.Client.list_skills(session) do
+        report.("list_skills", Enum.map(skills, & &1["uri"]))
+
+        case skills do
+          [skill | _] when scenario != "sep-2640-client-no-prefetch" ->
+            files =
+              case skill["resources"] do
+                list when is_list(list) -> Enum.map(list, & &1["uri"]) -- [skill["uri"]]
+                _ -> []
+              end
+
+            Enum.reduce_while([skill["uri"] | files], session, fn uri, session ->
+              case Sake.Client.read_skill_file(session, skill, uri) do
+                {:ok, bytes, session} ->
+                  report.("read_skill_file:#{uri}", byte_size(bytes))
+                  {:cont, session}
+
+                {:error, reason, session} ->
+                  report.("read_skill_file_error:#{uri}", reason)
+                  {:halt, session}
+              end
+            end)
+
+          _ ->
+            session
+        end
+      else
+        false ->
+          session
+
+        {:error, reason, session} ->
+          report.("list_skills_error", reason)
+          session
+      end
+
     {resources, session} =
       case Sake.Client.list_resources(session) do
         {:ok, resources, session} ->

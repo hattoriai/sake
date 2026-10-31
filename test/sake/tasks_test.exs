@@ -181,7 +181,7 @@ defmodule Sake.TasksTest do
       :ok = Supervisor.terminate_child(SakeTest.Supervisor, Sake.Tasks)
 
       assert %{"result" => %{"capabilities" => caps}} = rpc(opts(), "server/discover", %{}, %{})
-      refute Map.has_key?(caps, "extensions")
+      refute Map.has_key?(caps["extensions"] || %{}, "io.modelcontextprotocol/tasks")
 
       assert %{"result" => %{"resultType" => "complete", "isError" => true}} =
                call(opts(), "failing_job", %{})

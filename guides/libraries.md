@@ -162,9 +162,17 @@ A mounted server's middleware runs around its own components, but its
 `:before_request` does not run: put what must run on every request in
 the tools, or in the plugs of the component events (`guides/composing.md`).
 
+## Skills
+
+A workflow that uses several of the library's tools ships as a skill
+with them: a `SKILL.md` and its files in a directory of the library,
+compiled into a `Sake.Skill` module and listed with `skills [...]`. A
+host that mounts the server gets its skills too, under its prefix. See
+`guides/skills.md`.
+
 ## Names are the library's API
 
-Tool names, argument names, resource URIs and scope names reach the
+Tool names, argument names, resource URIs, skill paths and scope names reach the
 host's users: in their clients' permission lists (Claude Code's
 `mcp__<server>__run_report`), in prompts and skills they wrote, in the
 host's `only:` and `except:`, and in its `scopes_for/2`. Renaming one is

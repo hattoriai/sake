@@ -89,7 +89,7 @@ defmodule Sake.Server.Middleware do
   Only components that were offered can come back: one a plug adds is
   dropped, as no call could reach it.
   """
-  @spec filter(:tools | :resources | :prompts, [struct()], Context.t()) ::
+  @spec filter(:tools | :resources | :prompts | :skills, [struct()], Context.t()) ::
           {:ok, [struct()]} | {:halt, term()}
   def filter(kind, specs, ctx) do
     if any?(ctx.server, [:after_list]),
@@ -151,7 +151,8 @@ defmodule Sake.Server.Middleware do
   same plugs that filter the list decide the call, so the two agree. A
   component they drop is `{:halt, :not_found}`.
   """
-  @spec listed(:tools | :resources | :prompts, struct(), Context.t()) :: :ok | {:halt, term()}
+  @spec listed(:tools | :resources | :prompts | :skills, struct(), Context.t()) ::
+          :ok | {:halt, term()}
   def listed(kind, spec, ctx) do
     case filter(kind, [spec], ctx) do
       {:ok, [_]} -> :ok
@@ -161,6 +162,8 @@ defmodule Sake.Server.Middleware do
   end
 
   defp key(%Sake.Resource.Spec{uri: uri}), do: uri
+  defp key(%Sake.Skill.Spec{uri: nil, module: module}), do: module
+  defp key(%Sake.Skill.Spec{uri: uri}), do: uri
   defp key(%{name: name}), do: name
 
   @doc """
@@ -246,6 +249,14 @@ defmodule Sake.Server.Middleware do
     do:
       {:error, JSONRPC.code(:invalid_params),
        "Resource does not support subscriptions: #{params["uri"]}"}
+
+  defp not_found("skills/get", params, _ctx),
+    do: {:error, JSONRPC.code(:invalid_params), "No skill is served at #{params["uri"]}"}
+
+  defp not_found("resources/directory/read", params, _ctx),
+    do:
+      {:error, JSONRPC.code(:invalid_params), "#{params["uri"]} is not a directory resource",
+       %{"uri" => params["uri"]}}
 
   defp not_found(_method, _params, _ctx),
     do: {:error, JSONRPC.code(:method_not_found), "Method not found"}

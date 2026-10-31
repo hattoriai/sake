@@ -101,6 +101,7 @@ With `prefix: "billing"`:
 | resource `invoice://{id}` | resource template `invoice://billing/{id}` |
 | resource `billing://terms` | resource `billing://billing/terms` |
 | MCP App `ui://dashboard` | MCP App `ui://billing/dashboard` |
+| skill `skill://refunds/SKILL.md` | skill `skill://billing/refunds/SKILL.md` |
 
 Names take the prefix and an underscore, as FastMCP's mounts do. URIs
 take the prefix as the first segment after `scheme://`, which keeps the
@@ -128,6 +129,9 @@ working with their own names and URIs:
   `invoice://7`, from anywhere.
 - Arguments, template parameters and completions are the component's
   own, unchanged.
+- A skill's manifest moves with it, every file's URI under the prefix,
+  with the same digests: the files are the same bytes (see
+  `guides/skills.md`).
 
 ## What a mounted server brings
 
@@ -242,7 +246,9 @@ upstream's era, whichever it is, to clients of either era.
 
 - `tools:` and `prompts:` take `true` (the default), `false`, or
   `[only: names]` or `[except: names]`, by the upstream's names;
-  `resources:` takes `true` or `false`.
+  `resources:` takes `true` or `false`, and `skills:` `true` or `false`
+  (the default): with `true`, the upstream's skills are passed on (see
+  "Behind a proxy" in `guides/skills.md`).
 - `scope:` adds required scopes to every proxied component, and
   `scopes:` maps an upstream tool or prompt name to more. They gate the
   proxied components as a local component's `scope:` does: a token

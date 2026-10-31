@@ -14,7 +14,7 @@ defmodule Sake.Server.Dispatch do
 
   alias Sake.{Context, JSONRPC, Protocol, Server}
   alias Sake.Proxy.Forward
-  alias Sake.Server.{Cursor, Middleware, Mount, Results, Tasks, UI}
+  alias Sake.Server.{Cursor, Middleware, Mount, Results, Skills, Tasks, UI}
 
   @type outcome ::
           {:reply, map()}
@@ -74,6 +74,12 @@ defmodule Sake.Server.Dispatch do
   defp dispatch(server, "prompts/get", params, ctx), do: get_prompt(server, params, ctx)
   defp dispatch(server, "completion/complete", params, ctx), do: complete(server, params, ctx)
 
+  defp dispatch(server, "skills/list", params, ctx), do: skills(server, params, ctx)
+  defp dispatch(server, "skills/get", params, ctx), do: skill(server, params, ctx)
+
+  defp dispatch(server, "resources/directory/read", params, ctx),
+    do: read_directory(server, params, ctx)
+
   defp dispatch(server, "tasks/get", params, ctx), do: Tasks.get(server, params, ctx)
   defp dispatch(server, "tasks/update", params, ctx), do: Tasks.update(server, params, ctx)
   defp dispatch(server, "tasks/cancel", params, ctx), do: Tasks.cancel(server, params, ctx)
@@ -108,8 +114,31 @@ defmodule Sake.Server.Dispatch do
         do: Map.put_new(ext, Sake.Tasks.extension(), %{}),
         else: ext
 
-    Map.merge(auth_extensions(ctx), UI.extensions(ext, server))
+    Map.merge(auth_extensions(ctx), ext |> UI.extensions(server) |> Skills.extensions(server))
   end
+
+  # The skills extension's methods, on a server that serves skills; on
+  # any other, as for a method the server does not have.
+  @doc false
+  def skills(server, params, ctx) do
+    if Server.skills?(server),
+      do: Skills.list_skills(server, params, ctx),
+      else: method_not_found()
+  end
+
+  @doc false
+  def skill(server, params, ctx) do
+    if Server.skills?(server), do: Skills.get_skill(server, params, ctx), else: method_not_found()
+  end
+
+  @doc false
+  def read_directory(server, params, ctx) do
+    if Server.skills?(server),
+      do: Skills.read_directory(server, params, ctx),
+      else: method_not_found()
+  end
+
+  defp method_not_found, do: {:error, JSONRPC.code(:method_not_found), "Method not found"}
 
   @doc false
   # The authorization extensions an endpoint with `auth:` advertises. A
@@ -158,17 +187,29 @@ defmodule Sake.Server.Dispatch do
            |> Enum.filter(&(Server.allowed?(&1, ctx) and UI.listed?(&1, ctx)))
            |> listable(:resources, params, ctx) do
       entries = Enum.flat_map(specs, &resource_entries(&1, ctx))
-      {page, next} = page(entries, offset, server)
-      {ttls, page} = Enum.unzip(page)
 
-      {:ok,
-       %{"resources" => page}
-       |> next_cursor(next, ctx)
-       |> cacheable(server, ctx, ttls)
-       |> UI.cache_scope(server)
-       |> Middleware.cache_scope(server, [:after_list])
-       |> dynamic_scope(server)}
+      with {:ok, skill_entries} <- Skills.resource_entries(server, params, ctx) do
+        entries = entries ++ unlisted(skill_entries, entries)
+        {page, next} = page(entries, offset, server)
+        {ttls, page} = Enum.unzip(page)
+
+        {:ok,
+         %{"resources" => page}
+         |> next_cursor(next, ctx)
+         |> cacheable(server, ctx, ttls)
+         |> UI.cache_scope(server)
+         |> Middleware.cache_scope(server, [:after_list])
+         |> Skills.cache_scope(server)
+         |> dynamic_scope(server)}
+      end
     end
+  end
+
+  # A skill's SKILL.md that a resource already lists (an upstream's,
+  # listed by its own resources/list) is listed once.
+  defp unlisted(skill_entries, entries) do
+    uris = MapSet.new(entries, fn {_ttl, entry} -> entry["uri"] end)
+    Enum.reject(skill_entries, fn {_ttl, entry} -> MapSet.member?(uris, entry["uri"]) end)
   end
 
   # Each entry travels with its component's ttl, for the page's `ttlMs`.
@@ -237,15 +278,17 @@ defmodule Sake.Server.Dispatch do
   # What a proxy lists depends on who asks (each principal has its own
   # upstream session, and maybe its own credentials), so no shared cache
   # may keep it.
-  defp dynamic_scope(%{"cacheScope" => _} = result, server) do
+  @doc false
+  def dynamic_scope(%{"cacheScope" => _} = result, server) do
     if Server.dynamic?(server), do: Map.put(result, "cacheScope", "private"), else: result
   end
 
-  defp dynamic_scope(result, _server), do: result
+  def dynamic_scope(result, _server), do: result
 
   # The `:after_list` plugs see what Sake's own checks (scopes, MCP Apps)
   # let through, and before the list is paged, so that pages stay full.
-  defp listable(specs, kind, params, ctx) do
+  @doc false
+  def listable(specs, kind, params, ctx) do
     case Middleware.filter(kind, specs, ctx) do
       {:ok, specs} -> {:ok, specs}
       {:halt, reason} -> Middleware.refusal(reason, params, ctx)
@@ -263,25 +306,28 @@ defmodule Sake.Server.Dispatch do
     end
   end
 
-  defp offset(%{"cursor" => cursor}, ctx) do
+  @doc false
+  def offset(%{"cursor" => cursor}, ctx) do
     case Cursor.decode(ctx.secret, cursor) do
       {:ok, offset} -> {:ok, offset}
       :error -> {:error, JSONRPC.code(:invalid_params), "Invalid cursor"}
     end
   end
 
-  defp offset(_params, _ctx), do: {:ok, 0}
+  def offset(_params, _ctx), do: {:ok, 0}
 
-  defp page(items, offset, server) do
+  @doc false
+  def page(items, offset, server) do
     size = server.__sake__(:page_size)
     page = items |> Enum.drop(offset) |> Enum.take(size)
     next = if length(items) > offset + size, do: offset + size
     {page, next}
   end
 
-  defp next_cursor(result, nil, _ctx), do: result
+  @doc false
+  def next_cursor(result, nil, _ctx), do: result
 
-  defp next_cursor(result, next, ctx),
+  def next_cursor(result, next, ctx),
     do: Map.put(result, "nextCursor", Cursor.encode(ctx.secret, next))
 
   # ---- tools/call
@@ -461,8 +507,8 @@ defmodule Sake.Server.Dispatch do
   @doc false
   def read_resource(server, %{"uri" => uri} = params, ctx) when is_binary(uri) do
     with {:ok, spec, uri_params} <- find_resource(server, uri, ctx),
-         :ok <- listed(:resources, spec, params, ctx),
-         :ok <- allowed(spec, ctx) do
+         :ok <- listed_resource(spec, params, ctx),
+         :ok <- allowed(spec.skill || spec, ctx) do
       with_inputs(uri, %{"uri" => uri}, params, ctx, fn ctx ->
         read_result(spec, uri_params, uri, server, ctx)
       end)
@@ -472,12 +518,39 @@ defmodule Sake.Server.Dispatch do
   def read_resource(_server, _params, _ctx),
     do: {:error, JSONRPC.code(:invalid_params), "resources/read needs a uri"}
 
+  # A skill's file is the skill's to show or hide.
+  defp listed_resource(%{skill: %Sake.Skill.Spec{} = skill}, params, ctx),
+    do: listed(:skills, skill, params, ctx)
+
+  defp listed_resource(spec, params, ctx), do: listed(:resources, spec, params, ctx)
+
   defp read_result(spec, uri_params, uri, server, ctx) do
     payload = %{resource: spec, uri: uri, params: uri_params}
 
     case Middleware.before(:before_read, payload, :params, ctx) do
       {:ok, uri_params, ctx} -> read_spec(spec, uri_params, uri, server, ctx)
       {:halt, reason} -> Middleware.refusal(reason, %{"uri" => uri}, ctx)
+    end
+  end
+
+  # A skill's file is read from its skill (`Sake.Server.Skills`), its
+  # upstream's included.
+  defp read_spec(%{skill: %Sake.Skill.Spec{}} = spec, uri_params, uri, server, ctx) do
+    case Skills.read(spec, uri, ctx) do
+      {:ok, result, ttl} ->
+        with {:ok, result} <- after_read(result, spec, uri_params, uri, ctx) do
+          {:ok,
+           result
+           |> cacheable(server, ctx, [spec.ttl, ttl])
+           |> Middleware.cache_scope(server, [:before_read, :after_read])
+           |> Skills.cache_scope(server)}
+        end
+
+      {:error, :not_found} ->
+        not_found(uri, ctx)
+
+      error ->
+        error
     end
   end
 
@@ -530,7 +603,8 @@ defmodule Sake.Server.Dispatch do
     end
   end
 
-  defp after_read(result, spec, uri_params, uri, ctx) do
+  @doc false
+  def after_read(result, spec, uri_params, uri, ctx) do
     payload = %{resource: spec, uri: uri, params: uri_params, result: result}
 
     case Middleware.after_result(:after_read, payload, ctx) do
@@ -539,13 +613,22 @@ defmodule Sake.Server.Dispatch do
     end
   end
 
+  # The server's own resources, then its skills' files, then its
+  # proxies': a proxy that claims any URI it is given must not take a
+  # local skill's.
   defp find_resource(server, uri, ctx) do
-    case Server.resource(server, uri, ctx) do
-      {:ok, spec, params} ->
-        {:ok, spec, params}
+    with :error <- Server.resource(server, uri),
+         :error <- skill_file(server, uri, ctx),
+         :error <- Server.resource(server, uri, ctx) do
+      {:error, JSONRPC.code(:invalid_params), "Resource not found: #{uri}", %{"uri" => uri}}
+    end
+  end
 
-      :error ->
-        {:error, JSONRPC.code(:invalid_params), "Resource not found: #{uri}", %{"uri" => uri}}
+  defp skill_file(server, uri, ctx) do
+    if Server.skills?(server) do
+      with {:ok, spec} <- Skills.file_resource(server, uri, ctx), do: {:ok, spec, %{}}
+    else
+      :error
     end
   end
 
