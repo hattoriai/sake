@@ -285,6 +285,17 @@ What an upstream sends is untrusted: a definition that is not shaped as
 its kind is left out, a tool's name must be one Sake accepts, and no
 name the upstream sends becomes an atom.
 
+A proxied tool's input and output schemas are passed on as the upstream
+wrote them: composition, references and conditions included. An input
+schema without a top-level `type` gets `"type": "object"`, which the
+specification requires and which accepts nothing it did not, since a
+tool's arguments are always an object. One whose type is something else
+becomes the open object. The proxy does not validate proxied arguments
+itself; the upstream does, against its whole schema. A proxied result's
+`structuredContent` passes through as sent, `[]` and `null` included,
+and is left out for a client whose revision allows only an object there
+(see "Explicit results" in `guides/tools.md`).
+
 ### Credentials
 
 Without a `credentials/1` callback, the proxy calls the upstream with

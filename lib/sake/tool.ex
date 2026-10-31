@@ -24,7 +24,24 @@ defmodule Sake.Tool do
   (`:nil` by default: an optional argument the client left out is `nil`;
   `:omit`: it is left out, at every level, so `execute/2` gets what the
   client sent and tells a left-out argument from one sent as `null`, see
-  `Sake.Schema.validate/3`).
+  `Sake.Schema.validate/3`), `output_schema` (a schema map instead of an
+  `output` block), and `validate_output` (`:warn` by default: a
+  structured result that does not match the output schema is logged;
+  `:error`: the client gets a tool error instead).
+
+  The arguments are validated against the input schema as JSON Schema
+  2020-12 (`Sake.Schema.Validator`). A schema given with `input_schema:`
+  or `output_schema:` is checked when the tool compiles: another
+  `$schema` dialect, a `$dynamicRef`, or a `$ref` that does not resolve
+  within it is a compile error, rather than a promise of validation the
+  calls would not get.
+
+  `execute/2` returns `{:ok, value}` or `{:ok, value, opts}`: a string is
+  the model's text; a map or a non-empty list is `structuredContent`,
+  with its JSON (or `opts[:text]`) for the model; a list of
+  `Sake.Content` is the content itself. A `Sake.Tool.Result` says each
+  part explicitly, for a structured value of any JSON type (`[]`, `nil`,
+  a string, a number, a boolean).
   """
 
   alias Sake.Schema
@@ -80,7 +97,8 @@ defmodule Sake.Tool do
       headers: %{},
       mount: nil,
       proxy: nil,
-      absent: nil
+      absent: nil,
+      validate_output: :warn
     ]
 
     @spec to_wire(t(), String.t()) :: map()
@@ -88,7 +106,7 @@ defmodule Sake.Tool do
       %{"name" => s.name, "description" => s.description || "", "inputSchema" => s.input_schema}
       |> maybe_put("annotations", annotations(s.annotations))
       |> maybe_put("title", if(revision >= "2025-06-18", do: s.title))
-      |> maybe_put("outputSchema", if(revision >= "2025-06-18", do: s.output_schema))
+      |> maybe_put("outputSchema", output_schema(s.output_schema, revision))
       |> maybe_put("icons", if(revision >= "2025-11-25", do: Sake.Tool.icons_to_wire(s.icons)))
       |> maybe_put("_meta", s.meta)
     end
@@ -104,6 +122,18 @@ defmodule Sake.Tool do
         {:title, v} -> {"title", v}
       end)
     end
+
+    # Any output schema from 2026-07-28; from 2025-06-18, whose
+    # structuredContent is an object, only one with an object at its root.
+    defp output_schema(schema, revision) when is_map(schema) do
+      cond do
+        revision >= "2026-07-28" -> schema
+        revision >= "2025-06-18" and schema["type"] == "object" -> schema
+        true -> nil
+      end
+    end
+
+    defp output_schema(_schema, _revision), do: nil
 
     defp maybe_put(m, _k, nil), do: m
     defp maybe_put(m, _k, []), do: m
@@ -166,8 +196,10 @@ defmodule Sake.Tool do
   end
 
   defp build_spec(module, name, opts, args, output_args) do
-    input_schema = opts[:input_schema] || Schema.build(args)
-    output_schema = opts[:output_schema] || output_schema(output_args)
+    input_schema = schema!(module, :input_schema, opts[:input_schema]) || Schema.build(args)
+
+    output_schema =
+      schema!(module, :output_schema, opts[:output_schema]) || output_schema(output_args)
 
     %Spec{
       module: module,
@@ -188,7 +220,8 @@ defmodule Sake.Tool do
       ui: ui_uri!(module, opts[:ui]),
       visibility: visibility!(module, opts[:visibility]),
       headers: Schema.header_paths(input_schema),
-      absent: absent!(module, opts[:absent])
+      absent: absent!(module, opts[:absent]),
+      validate_output: validate_output!(module, opts[:validate_output])
     }
   end
 
@@ -199,6 +232,16 @@ defmodule Sake.Tool do
       raise(
         ArgumentError,
         "#{inspect(module)}: absent: must be :nil or :omit, got #{inspect(other)}"
+      )
+
+  defp validate_output!(_module, nil), do: :warn
+  defp validate_output!(_module, mode) when mode in [:warn, :error], do: mode
+
+  defp validate_output!(module, other),
+    do:
+      raise(
+        ArgumentError,
+        "#{inspect(module)}: validate_output: must be :warn or :error, got #{inspect(other)}"
       )
 
   defp task_support!(_module, nil), do: nil
@@ -236,6 +279,18 @@ defmodule Sake.Tool do
           ArgumentError,
           "#{inspect(module)}: visibility: must list :model, :app or both, got #{inspect(visibility)}"
         )
+  end
+
+  # A schema the tool gives itself is one Sake can validate against all
+  # of: an unsupported dialect, a `$dynamicRef` or a reference that does
+  # not resolve within it would otherwise promise checks no call gets.
+  defp schema!(_module, _key, nil), do: nil
+
+  defp schema!(module, key, schema) do
+    case Sake.Schema.Validator.check_schema(schema) do
+      :ok -> schema
+      {:error, message} -> raise ArgumentError, "#{inspect(module)}: #{key}: #{message}"
+    end
   end
 
   defp output_schema([]), do: nil

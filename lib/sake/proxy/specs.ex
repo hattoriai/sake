@@ -158,7 +158,16 @@ defmodule Sake.Proxy.Specs do
 
   defp tool(_entry), do: nil
 
+  # An upstream's input schema is kept as it is, its composition and
+  # references included: a tool's arguments are always an object, so one
+  # without a top-level `type` gets `"type": "object"`, which the
+  # specification requires and which accepts no argument it did not. One
+  # that is not a schema of objects, or none, becomes the open object.
   defp input_schema(%{"inputSchema" => %{"type" => "object"} = schema}), do: schema
+
+  defp input_schema(%{"inputSchema" => %{} = schema}) when not is_map_key(schema, "type"),
+    do: Map.put(schema, "type", "object")
+
   defp input_schema(_entry), do: %{"type" => "object"}
 
   @hints %{
