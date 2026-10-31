@@ -9,6 +9,13 @@ defmodule Sake.Tasks.Record do
   and `answers` every answer delivered so far, by key; `result` is the
   tool's result once `completed`, and `error` the JSON-RPC error once
   `failed`. Times are UTC, to the millisecond.
+
+  The execution fields: `job` is what a run needs to execute the tool
+  again (`Sake.Tasks.Job`), `attempt` which run this is, `lease_owner`
+  and `lease_until` the run that holds the task and until when (a run
+  renews its lease while it lives; a lapsed one is an orphan, see
+  `Sake.Tasks`), and `handle` the external job a tool handed the task
+  to, if any.
   """
 
   @type status :: :working | :input_required | :completed | :failed | :cancelled
@@ -28,7 +35,12 @@ defmodule Sake.Tasks.Record do
           poll_interval_ms: pos_integer(),
           created_at: DateTime.t(),
           updated_at: DateTime.t(),
-          expires_at: DateTime.t()
+          expires_at: DateTime.t(),
+          job: Sake.Tasks.Job.t() | nil,
+          attempt: pos_integer(),
+          lease_owner: String.t() | nil,
+          lease_until: DateTime.t() | nil,
+          handle: String.t() | nil
         }
 
   defstruct [
@@ -43,6 +55,11 @@ defmodule Sake.Tasks.Record do
     :created_at,
     :updated_at,
     :expires_at,
+    :job,
+    :lease_owner,
+    :lease_until,
+    :handle,
+    attempt: 1,
     status: :working,
     scopes: [],
     input_requests: %{},
@@ -56,6 +73,17 @@ defmodule Sake.Tasks.Record do
   @doc "Whether the task outlived its time-to-live by `now`."
   @spec expired?(t(), DateTime.t()) :: boolean()
   def expired?(%__MODULE__{expires_at: at}, now), do: DateTime.compare(at, now) != :gt
+
+  @doc """
+  Whether the task is an orphan at `now`: live, held by a run whose lease
+  lapsed, and not handed to an external job.
+  """
+  @spec orphan?(t(), DateTime.t()) :: boolean()
+  def orphan?(%__MODULE__{lease_until: %DateTime{} = until, handle: nil} = r, now) do
+    not terminal?(r) and not expired?(r, now) and DateTime.compare(until, now) == :lt
+  end
+
+  def orphan?(_record, _now), do: false
 
   @doc """
   The task on the wire: a `DetailedTask`, with `inputRequests` while it

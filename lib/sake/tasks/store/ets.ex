@@ -72,6 +72,11 @@ defmodule Sake.Tasks.Store.ETS do
   end
 
   @impl true
+  def orphans(_s, now) do
+    for {_id, record} <- :ets.tab2list(@table), Record.orphan?(record, now), do: record
+  end
+
+  @impl true
   def prune(_s, now) do
     Agent.get(__MODULE__, fn nil ->
       for {id, record} <- :ets.tab2list(@table),

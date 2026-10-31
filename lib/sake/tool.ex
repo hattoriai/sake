@@ -27,7 +27,10 @@ defmodule Sake.Tool do
   `Sake.Schema.validate/3`), `output_schema` (a schema map instead of an
   `output` block), and `validate_output` (`:warn` by default: a
   structured result that does not match the output schema is logged;
-  `:error`: the client gets a tool error instead).
+  `:error`: the client gets a tool error instead), and `recovery`
+  (`:fail` by default, or `{:retry, attempts}`: what happens to the
+  tool's task when the process running it dies, see "Recovery" in
+  `Sake.Tasks`).
 
   The arguments are validated against the input schema as JSON Schema
   2020-12 (`Sake.Schema.Validator`). A schema given with `input_schema:`
@@ -52,6 +55,7 @@ defmodule Sake.Tool do
               | {:ok, term(), keyword()}
               | {:error, String.t()}
               | {:error, {:missing_capability, map()}}
+              | {:external, handle :: String.t()}
   @callback complete(arg :: String.t(), partial :: String.t(), ctx :: Sake.Context.t()) ::
               {:ok, [String.t()]} | {:ok, [String.t()], keyword()}
   @doc """
@@ -98,7 +102,8 @@ defmodule Sake.Tool do
       mount: nil,
       proxy: nil,
       absent: nil,
-      validate_output: :warn
+      validate_output: :warn,
+      task_recovery: :fail
     ]
 
     @spec to_wire(t(), String.t()) :: map()
@@ -221,7 +226,8 @@ defmodule Sake.Tool do
       visibility: visibility!(module, opts[:visibility]),
       headers: Schema.header_paths(input_schema),
       absent: absent!(module, opts[:absent]),
-      validate_output: validate_output!(module, opts[:validate_output])
+      validate_output: validate_output!(module, opts[:validate_output]),
+      task_recovery: recovery!(module, opts[:recovery])
     }
   end
 
@@ -232,6 +238,21 @@ defmodule Sake.Tool do
       raise(
         ArgumentError,
         "#{inspect(module)}: absent: must be :nil or :omit, got #{inspect(other)}"
+      )
+
+  # What happens to the tool's task when its run dies (see "Recovery" in
+  # `Sake.Tasks`).
+  defp recovery!(_module, nil), do: :fail
+  defp recovery!(_module, :fail), do: :fail
+
+  defp recovery!(_module, {:retry, attempts}) when is_integer(attempts) and attempts >= 2,
+    do: {:retry, attempts}
+
+  defp recovery!(module, other),
+    do:
+      raise(
+        ArgumentError,
+        "#{inspect(module)}: recovery: must be :fail or {:retry, attempts} with attempts >= 2, got #{inspect(other)}"
       )
 
   defp validate_output!(_module, nil), do: :warn

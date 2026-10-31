@@ -38,6 +38,16 @@ defmodule Sake.Server.Results do
     |> check_output(spec)
   end
 
+  # A tool that hands its work to an external job (`Sake.Tasks`) can only
+  # do so inside a task: called directly, there is nothing to wait on.
+  def tool({:external, _handle}, spec, ctx),
+    do:
+      tool(
+        {:error, "This tool hands its work to an external job, which only a task can wait for."},
+        spec,
+        ctx
+      )
+
   def tool({:error, text}, _spec, _ctx) when is_binary(text) do
     %{"content" => [Content.to_wire(Content.text(text))], "isError" => true}
   end

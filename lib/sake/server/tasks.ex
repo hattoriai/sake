@@ -75,6 +75,7 @@ defmodule Sake.Server.Tasks do
          {:ok, record} <- find(params, ctx) do
       _ = Tasks.update(server, record.id, &cancelled/1)
       :ok = Tasks.stop(record.id)
+      :ok = Sake.Tasks.Runner.cancel(record.id)
       {:ok, %{}}
     end
   end
@@ -82,7 +83,13 @@ defmodule Sake.Server.Tasks do
   defp cancelled(record) do
     if Record.terminal?(record),
       do: record,
-      else: %{record | status: :cancelled, input_requests: %{}}
+      else: %{
+        record
+        | status: :cancelled,
+          input_requests: %{},
+          lease_owner: nil,
+          lease_until: nil
+      }
   end
 
   @doc false

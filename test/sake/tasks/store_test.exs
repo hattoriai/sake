@@ -6,6 +6,7 @@ defmodule Sake.Tasks.StoreETSTest do
   end
 
   use SakeTest.TaskStoreCases
+  use SakeTest.TaskStoreExecutionCases
 end
 
 defmodule Sake.Tasks.StoreEctoTest do
@@ -21,6 +22,7 @@ defmodule Sake.Tasks.StoreEctoTest do
   end
 
   use SakeTest.TaskStoreCases
+  use SakeTest.TaskStoreExecutionCases
 
   test "the migration is reversible" do
     opts = [all: true, log: false, migration_lock: false]

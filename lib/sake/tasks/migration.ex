@@ -10,6 +10,16 @@ if Code.ensure_loaded?(Ecto.Migration) do
         end
 
     Both take `prefix:`.
+
+    A table created before Sake recovered task execution lacks its
+    columns: add them with `add_execution/1` (and remove them with
+    `remove_execution/1`):
+
+        defmodule MyApp.Repo.Migrations.AddSakeTaskExecution do
+          use Ecto.Migration
+          def up, do: Sake.Tasks.Migration.add_execution()
+          def down, do: Sake.Tasks.Migration.remove_execution()
+        end
     """
     use Ecto.Migration
 
@@ -37,6 +47,40 @@ if Code.ensure_loaded?(Ecto.Migration) do
 
       create(index(:sake_tasks, [:expires_at], prefix: prefix))
       create(index(:sake_tasks, [:principal, :status], prefix: prefix))
+      add_execution(opts)
+    end
+
+    @doc "Adds the columns of recoverable execution to a table created before them."
+    @spec add_execution(keyword()) :: :ok
+    def add_execution(opts \\ []) do
+      prefix = opts[:prefix]
+
+      alter table(:sake_tasks, prefix: prefix) do
+        add(:job, :binary)
+        add(:attempt, :integer, null: false, default: 1)
+        add(:lease_owner, :string)
+        add(:lease_until, :utc_datetime_usec)
+        add(:handle, :string)
+      end
+
+      create(index(:sake_tasks, [:status, :lease_until], prefix: prefix))
+      :ok
+    end
+
+    @doc "Removes the columns `add_execution/1` added."
+    @spec remove_execution(keyword()) :: :ok
+    def remove_execution(opts \\ []) do
+      prefix = opts[:prefix]
+      drop(index(:sake_tasks, [:status, :lease_until], prefix: prefix))
+
+      alter table(:sake_tasks, prefix: prefix) do
+        remove(:job)
+        remove(:attempt)
+        remove(:lease_owner)
+        remove(:lease_until)
+        remove(:handle)
+      end
+
       :ok
     end
 

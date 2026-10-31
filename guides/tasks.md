@@ -189,6 +189,160 @@ other tool; a `task: :required` tool is refused with `-32600`, as is a
 proxied call the upstream made a task of (the upstream's task is
 cancelled). A task that ends frees its slot.
 
+A table created before recoverable execution (below) needs its columns:
+run `Sake.Tasks.Migration.add_execution/1` in a migration of its own.
+
+## State and execution
+
+These are two different things:
+
+- **The store keeps a task's state:** its status, its input requests and
+  answers, its result. A persistent store (`Sake.Tasks.Store.Ecto`) lets
+  any node answer `tasks/get` for any task, and keeps the state across
+  restarts.
+- **The runner executes its tool.** The default,
+  `Sake.Tasks.Runner.Local`, runs it in a process of the node that
+  received the call. That process goes with its node: a persistent
+  store keeps the task, but nothing keeps running it.
+
+So Sake makes every run hold a **lease** on its task. A run renews the
+lease every third of `lease` (default 30 seconds) while it lives,
+waiting for the client's input included. When its node goes away (a
+deploy, a crash, an out-of-memory kill), the lease lapses. The reaper of
+every node (every half lease) finds such orphans in the store and
+recovers each under its tool's `recovery:` option:
+
+```elixir
+use Sake.Tool, name: "export", task: :required              # recovery: :fail
+use Sake.Tool, name: "reindex", task: :required, recovery: {:retry, 3}
+```
+
+| `recovery:` | When the run is lost |
+|---|---|
+| `:fail` (default) | The task fails: `-32603` "The task's worker stopped before the task ended.", with `data: {"reason": "worker_lost", "attempts": n}`. The client sees a terminal status, never `working` until expiry. |
+| `{:retry, n}` | The task runs again, from the start, with the same arguments and request context, until it has run `n` times in all; then it fails as above. Answers the client already gave are kept, so a run that asks the same key again gets the same answer at once, and a task lost while waiting for input waits for the same question. |
+
+Only a store every node shares lets another node see an orphan. With
+the ETS store, a node's tasks are gone with it anyway. A custom store
+recovers tasks once it implements `Sake.Tasks.Store`'s `orphans/2`.
+
+### Retry guarantees
+
+A retried task runs **at least once, never exactly once**. The run that
+died may have done some of its work before it died: sent the email,
+charged the card, written half the export. Sake never retries a tool
+that did not opt in. When you opt one in, make running it again
+harmless:
+
+- **Key side effects on the task's ID** (`ctx.task`), which every run of
+  the task shares: an idempotency key for a payment provider, the name
+  of the file it writes.
+- **Check before acting**, from state the tool itself records.
+
+Sake guarantees the rest:
+
+- **One run at a time.** A run first claims the task. A second delivery
+  of a job (a queue's redelivery), or a run started while another holds
+  a live lease, does nothing.
+- **The current run's outcome wins.** A run records its outcome only
+  while it holds the lease. A run that stalled past its lease and was
+  replaced does not overwrite the task, though its side effects have
+  happened.
+- **An ended task stays ended.** A cancelled, completed, failed or
+  expired task is never run again, and a late result is dropped.
+
+## Durable queues
+
+A runner (`Sake.Tasks.Runner`) decides where a task's tool runs. To run
+tasks on a durable job system, give `tasks:` a runner that hands the job
+to it, and have the job system's worker call `Sake.Tasks.run/1`:
+
+```elixir
+defmodule MyApp.TaskRunner do
+  @behaviour Sake.Tasks.Runner
+
+  @impl true
+  def start(job, _opts) do
+    %{"job" => Sake.Tasks.Job.encode(job)} |> MyApp.TaskWorker.new() |> Oban.insert()
+    :ok
+  end
+
+  @impl true
+  def cancel(task_id, _opts), do: MyApp.TaskWorker.cancel_for(task_id)
+
+  # Oban runs a job again after its node dies: Sake's reaper leaves
+  # these tasks to it.
+  @impl true
+  def recovers?, do: true
+end
+
+defmodule MyApp.TaskWorker do
+  use Oban.Worker, queue: :sake_tasks, max_attempts: 3
+
+  @impl true
+  def perform(%Oban.Job{args: %{"job" => job}}) do
+    case Sake.Tasks.Job.decode(job) do
+      {:ok, job} ->
+        Sake.Tasks.run(job)
+        :ok
+
+      :error ->
+        {:cancel, "not a Sake job"}
+    end
+  end
+end
+```
+
+```elixir
+{Sake, secret_key_base: ..., tasks: [store: {Sake.Tasks.Store.Ecto, repo: MyApp.Repo}, runner: MyApp.TaskRunner]}
+```
+
+- **`Sake.Tasks.Job`** carries the task's ID, server, tool, validated
+  arguments and request context (`ctx.scope` included, so keep the
+  scope plain data). `encode/1` signs it with Sake's `secret_key_base`,
+  and `decode/1` refuses anything else.
+- **`Sake.Tasks.run/1`** runs the tool in the worker's process, with
+  the original request's context. It returns `{:skipped, reason}` for a
+  job whose task ended, expired, or is held by a live run, so the queue's
+  redeliveries are harmless.
+- **The original request** has long answered: the client polls
+  `tasks/get` until the queue's worker records the outcome.
+
+Sake does not depend on Oban or any queue: a runner is a module of
+yours. A proxied tool's upstream task always runs in-process, since the
+function that follows it cannot leave its node.
+
+## External jobs
+
+A tool whose work is done by another system (a provider's export API, a
+CI pipeline) can hand the task to it. It returns `{:external, handle}`
+from `execute/2`, and reports the outcome later, from the webhook that
+system calls:
+
+```elixir
+def execute(%{project: project}, ctx) do
+  {:ok, export_id} = ExportAPI.start(project, callback: url_for(ctx.task))
+  {:external, export_id}
+end
+
+# in the webhook's controller, after checking the webhook's signature
+:ok = Sake.Tasks.progress(task_id, export_id, done, total)
+:ok = Sake.Tasks.complete(task_id, export_id, {:ok, %{"url" => url}})
+:ok = Sake.Tasks.fail(task_id, export_id, "The export failed.")
+```
+
+- **While handed off:** the task stays `working` with no lease, since
+  Sake does not watch the other system. It ends when the host reports
+  it, or when it expires.
+- **`complete/3`:** takes what `execute/2` could have returned, and runs
+  it through the tool's result handling and `:after_call` middleware.
+- **`fail/3`:** fails the task with `-32603`.
+- **Refused reports:** both return `:error` for a task that ended (a
+  cancelled one included), expired, or that the handle does not match.
+- **Outside a task:** a tool that returns `{:external, handle}` when
+  called without one gets a tool error, since there is no task to wait
+  on.
+
 ## Security
 
 Task IDs carry 144 random bits. A task belongs to the principal that
@@ -210,7 +364,7 @@ trust to them.
 
 `[:sake, :task, :start]`, `[:sake, :task, :stop]` and
 `[:sake, :task, :exception]` surround the tool's run in the background,
-with `task_id`, `tool` and `server` in the metadata and the final
+with `task_id`, `tool`, `server` and `attempt` in the metadata and the final
 `status` on `:stop` — next to the `[:sake, :server, :request]` span of
 the call that created the task. With OpenTelemetry, the run is an
 `execute_tool` span, the child of that call's span (see
