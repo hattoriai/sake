@@ -71,3 +71,19 @@ defmodule Sake.Tasks.StoreEctoTest do
     assert %{"result" => %{"content" => [%{"text" => "Deleted f."}]}} = wait.(wait, "completed")
   end
 end
+
+defmodule Sake.Tasks.StoreEctoSQLiteTest do
+  # The Ecto store on SQLite, which has no row locks: an update's
+  # transaction is IMMEDIATE there (Sake.Auth.Store.Lock).
+  use ExUnit.Case, async: false
+  alias Ecto.Adapters.SQL.Sandbox
+
+  setup do
+    :ok = Sandbox.checkout(SakeTest.SQLiteRepo)
+    Sandbox.mode(SakeTest.SQLiteRepo, {:shared, self()})
+    module = Sake.Tasks.Store.Ecto
+    %{store: {module, module.init(repo: SakeTest.SQLiteRepo)}}
+  end
+
+  use SakeTest.TaskStoreCases
+end

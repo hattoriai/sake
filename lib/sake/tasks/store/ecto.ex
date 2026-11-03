@@ -10,6 +10,8 @@ if Code.ensure_loaded?(Ecto.Query) do
     @behaviour Sake.Tasks.Store
     import Ecto.Query
 
+    alias Sake.Auth.Store.Lock
+
     alias Sake.Tasks.Record
     alias Sake.Tasks.Store.Ecto.Task, as: Row
 
@@ -18,13 +20,13 @@ if Code.ensure_loaded?(Ecto.Query) do
 
     # A transaction-scoped advisory lock on the owner serializes its
     # inserts, on every node: the count a new task is checked against
-    # cannot change before the task is in.
+    # cannot change before the task is in. On SQLite, the transaction
+    # holds the database's write lock instead (`Sake.Auth.Store.Lock`).
     @impl true
     def insert(%{repo: repo} = s, %Record{} = r, max) do
       {:ok, result} =
-        repo.transaction(fn ->
-          <<key::signed-64, _::binary>> = :crypto.hash(:sha256, "sake_tasks:#{r.principal}")
-          repo.query!("SELECT pg_advisory_xact_lock($1)", [key])
+        Lock.transaction(repo, fn ->
+          :ok = Lock.advisory(repo, "sake_tasks:#{r.principal}")
 
           if max == :infinity or live(s, r.principal, r.created_at) < max do
             {:ok, _} = repo.insert(struct!(Row, [id: r.id] ++ fields(r)), prefix: s.prefix)
@@ -65,8 +67,8 @@ if Code.ensure_loaded?(Ecto.Query) do
     @impl true
     def update(%{repo: repo} = s, id, fun) do
       result =
-        repo.transaction(fn ->
-          query = from(t in Row, where: t.id == ^id, lock: "FOR UPDATE")
+        Lock.transaction(repo, fn ->
+          query = from(t in Row, where: t.id == ^id) |> Lock.locked(repo)
 
           case repo.one(query, prefix: s.prefix) do
             nil ->

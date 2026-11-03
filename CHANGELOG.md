@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **The Ecto stores on SQLite.** `Sake.Auth.Store.Ecto` and
+  `Sake.Tasks.Store.Ecto` locked rows with `SELECT ... FOR UPDATE`, which
+  ecto_sqlite3 refuses ("locks are not supported by SQLite3"). On SQLite,
+  every token request with a code, a device grant or a refresh token
+  failed with a 500, so an OAuth client could never get a token; a task
+  could not be updated, nor (with its Postgres advisory lock) started.
+  On SQLite, those transactions are now `IMMEDIATE`: they hold the
+  database's single write lock from their first statement, so a
+  concurrent revocation or update waits for them, as it waits for the row
+  lock on Postgres. Postgres and MySQL keep `FOR UPDATE`, and Postgres its
+  advisory lock. The stores' shared tests now run on SQLite too.
+
 ## 0.6.0 (2026-11-03)
 
 ### Added

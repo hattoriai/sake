@@ -5,7 +5,12 @@ config :sake, SakeTest.Repo,
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: 10
 
-config :sake, ecto_repos: [SakeTest.Repo]
+config :sake, SakeTest.SQLiteRepo,
+  database: Path.join(System.tmp_dir!(), "sake_test_#{System.get_env("MIX_TEST_PARTITION")}.db"),
+  pool: Ecto.Adapters.SQL.Sandbox,
+  pool_size: 5
+
+config :sake, ecto_repos: [SakeTest.Repo, SakeTest.SQLiteRepo]
 config :logger, level: :warning
 
 config :sake, SakeTest.PhoenixEndpoint,
