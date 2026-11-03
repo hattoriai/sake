@@ -5,7 +5,7 @@
 ```elixir
 def deps do
   [
-    {:sake, "~> 0.5"},
+    {:sake, "~> 0.6"},
     {:bandit, "~> 1.5"}
   ]
 end
