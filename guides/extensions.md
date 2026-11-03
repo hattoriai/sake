@@ -177,7 +177,7 @@ live in a package of its own:
 
 ```elixir
 # the extension package's mix.exs
-{:sake, "~> 0.5"}
+{:sake, "~> 0.6"}
 ```
 
 Hosts that do not list the extension pay nothing for it. A library
