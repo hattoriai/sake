@@ -14,12 +14,10 @@ defmodule SakeTest.AuthCase do
     overrides = tags[:auth] || []
 
     store =
-      if tags[:store] == :ecto do
-        :ok = Sandbox.checkout(SakeTest.Repo)
-        Sandbox.mode(SakeTest.Repo, {:shared, self()})
-        {Sake.Auth.Store.Ecto, repo: SakeTest.Repo}
-      else
-        {Sake.Auth.Store.ETS, []}
+      case tags[:store] do
+        :ecto -> ecto_store(SakeTest.Repo)
+        :sqlite -> ecto_store(SakeTest.SQLiteRepo)
+        _ -> {Sake.Auth.Store.ETS, []}
       end
 
     auth =
@@ -71,5 +69,11 @@ defmodule SakeTest.AuthCase do
         attrs
       )
     )
+  end
+
+  defp ecto_store(repo) do
+    :ok = Sandbox.checkout(repo)
+    Sandbox.mode(repo, {:shared, self()})
+    {Sake.Auth.Store.Ecto, repo: repo}
   end
 end

@@ -2,13 +2,16 @@ if Code.ensure_loaded?(Ecto.Query) do
   defmodule Sake.Auth.Store.Ecto do
     @moduledoc """
     The Ecto store: `store: {Sake.Auth.Store.Ecto, repo: MyApp.Repo}` with
-    the tables from `Sake.Auth.Migration`. Tested on Postgres.
+    the tables from `Sake.Auth.Migration`. Tested on Postgres and SQLite:
+    on SQLite, which has no row locks, the transactions that lock a row
+    elsewhere are `IMMEDIATE`, and hold the database's write lock instead.
     """
     @behaviour Sake.Auth.Store
     import Ecto.Query
 
     alias Sake.Auth.{Client, Code, Consent, DeviceGrant, PushedRequest, TokenRecord}
     alias Sake.Auth.Store.Ecto, as: S
+    alias Sake.Auth.Store.Lock
 
     @impl true
     def init(opts), do: %{repo: Keyword.fetch!(opts, :repo), prefix: opts[:prefix]}
@@ -143,12 +146,12 @@ if Code.ensure_loaded?(Ecto.Query) do
       fence =
         from(c in S.Code,
           where: c.hash == ^code_hash and not is_nil(c.used_at) and is_nil(c.revoked_at),
-          lock: "FOR UPDATE",
           select: c.hash
         )
+        |> Lock.locked(repo)
 
       {:ok, result} =
-        repo.transaction(fn ->
+        Lock.transaction(repo, fn ->
           case repo.one(fence, prefix: s.prefix) do
             nil -> :revoked
             _ -> Enum.each(tokens, &(:ok = put_token(s, &1)))
@@ -270,10 +273,10 @@ if Code.ensure_loaded?(Ecto.Query) do
     # finds it issued.
     @impl true
     def poll_device_grant(%{repo: repo} = s, hash, client_id, now) do
-      query = from(g in S.DeviceGrant, where: g.hash == ^hash, lock: "FOR UPDATE")
+      query = from(g in S.DeviceGrant, where: g.hash == ^hash) |> Lock.locked(repo)
 
       {:ok, answer} =
-        repo.transaction(fn ->
+        Lock.transaction(repo, fn ->
           case repo.one(query, prefix: s.prefix) do
             nil -> :error
             row -> row |> device_grant() |> DeviceGrant.poll(client_id, now) |> polled(s)
@@ -304,12 +307,12 @@ if Code.ensure_loaded?(Ecto.Query) do
       fence =
         from(g in S.DeviceGrant,
           where: g.hash == ^hash and g.status == "issued" and is_nil(g.revoked_at),
-          lock: "FOR UPDATE",
           select: g.hash
         )
+        |> Lock.locked(repo)
 
       {:ok, result} =
-        repo.transaction(fn ->
+        Lock.transaction(repo, fn ->
           case repo.one(fence, prefix: s.prefix) do
             nil -> :revoked
             _ -> Enum.each(tokens, &(:ok = put_token(s, &1)))
@@ -347,12 +350,12 @@ if Code.ensure_loaded?(Ecto.Query) do
       fence =
         from(t in S.Token,
           where: t.hash == ^refresh_hash and t.kind == "refresh" and is_nil(t.revoked_at),
-          lock: "FOR UPDATE",
           select: t.id
         )
+        |> Lock.locked(repo)
 
       {:ok, result} =
-        repo.transaction(fn ->
+        Lock.transaction(repo, fn ->
           case repo.one(fence, prefix: s.prefix) do
             nil -> :revoked
             _ -> Enum.each(tokens, &(:ok = put_token(s, &1)))
@@ -449,7 +452,7 @@ if Code.ensure_loaded?(Ecto.Query) do
     @impl true
     def revoke_family(%{repo: repo} = s, family_id) do
       {:ok, :ok} =
-        repo.transaction(fn ->
+        Lock.transaction(repo, fn ->
           repo.update_all(
             from(c in S.Code, where: c.hash == ^family_id and is_nil(c.revoked_at)),
             [set: [revoked_at: now()]],
@@ -466,9 +469,9 @@ if Code.ensure_loaded?(Ecto.Query) do
             from(t in S.Token,
               where: t.family_id == ^family_id,
               order_by: t.id,
-              lock: "FOR UPDATE",
               select: t.id
-            ),
+            )
+            |> Lock.locked(repo),
             prefix: s.prefix
           )
 

@@ -50,6 +50,7 @@ defmodule Sake.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
       {:ecto, "~> 3.13", optional: true},
       {:ecto_sql, "~> 3.13", optional: true},
+      {:ecto_sqlite3, "~> 0.26", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:jose, "~> 1.11 and >= 1.11.13", optional: true},
       {:opentelemetry, "~> 1.7", only: :test},
