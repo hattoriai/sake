@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Actors: acting as someone, call by call.** `actors MyApp.MCP.Actors`
+  on a server (a `Sake.Actors` module) lists who a principal may act as:
+  their agents, personas, an organization's bot. The server gets the
+  `list_actors` and `act_as` tools, and every other tool an optional
+  `as` argument. Sake takes `as` out before the arguments are validated,
+  checks it against the principal on every call, and sets `ctx.actor`
+  (a `Sake.Actors.Actor`, or `nil` for the principal). So one connection
+  acts as several identities, with no session, as the stateless
+  `2026-07-28` revision needs. Mounted servers' tools get it too, and a
+  proxied upstream never sees `as`. See `guides/actors.md`.
+
 ## 0.5.0 (2026-10-31)
 
 ### Added

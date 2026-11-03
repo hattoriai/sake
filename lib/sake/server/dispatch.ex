@@ -143,7 +143,7 @@ defmodule Sake.Server.Dispatch do
       {page, next} = page(specs, offset, server)
 
       {:ok,
-       %{"tools" => Enum.map(page, &UI.tool_to_wire(&1, ctx))}
+       %{"tools" => Enum.map(page, &(&1 |> UI.tool_to_wire(ctx) |> Sake.Actors.to_wire(&1, ctx)))}
        |> next_cursor(next, ctx)
        |> cacheable(server, ctx, Enum.map(page, & &1.ttl))
        |> UI.cache_scope(server)
@@ -319,14 +319,20 @@ defmodule Sake.Server.Dispatch do
   def call_tool(_server, _params, _ctx),
     do: {:error, JSONRPC.code(:invalid_params), "tools/call needs a tool name"}
 
-  defp call_validated(%{proxy: proxy} = spec, params, ctx) when proxy != nil do
-    raw_args = params["arguments"] || %{}
+  # The actor of the call (`Sake.Actors`) comes out of its arguments first:
+  # `as` is Sake's, not the tool's, and an upstream never sees it.
+  defp call_validated(spec, params, ctx) do
+    case Sake.Actors.resolve(spec, params["arguments"] || %{}, ctx) do
+      {:ok, raw_args, ctx} -> call_acting(spec, raw_args, params, ctx)
+      {:error, message} -> {:ok, Results.tool({:error, message}, spec, ctx)}
+    end
+  end
+
+  defp call_acting(%{proxy: proxy} = spec, raw_args, params, ctx) when proxy != nil do
     with_inputs(spec.name, raw_args, params, ctx, &run_tool(spec, raw_args, &1))
   end
 
-  defp call_validated(spec, params, ctx) do
-    raw_args = params["arguments"] || %{}
-
+  defp call_acting(spec, raw_args, params, ctx) do
     case Sake.Schema.validate(spec.input_schema, raw_args, absent: spec.absent) do
       {:ok, args} ->
         with :ok <- task_capability(spec, ctx) do

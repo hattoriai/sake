@@ -86,6 +86,7 @@ defmodule Sake.Server do
       @sake_prompts []
       @sake_skills []
       @sake_extensions []
+      @sake_actors nil
       Module.register_attribute(__MODULE__, :sake_scopes, accumulate: true)
       Module.register_attribute(__MODULE__, :sake_middleware, accumulate: true)
       Module.register_attribute(__MODULE__, :sake_mounts, accumulate: true)
@@ -100,6 +101,7 @@ defmodule Sake.Server do
           prompts: 1,
           skills: 1,
           extensions: 1,
+          actors: 1,
           middleware: 2,
           mount: 1,
           mount: 2
@@ -130,6 +132,14 @@ defmodule Sake.Server do
   """
   defmacro extensions(list), do: quote(do: @sake_extensions(unquote(list)))
 
+  @doc """
+  The identities a principal may act as, call by call: a `Sake.Actors`
+  module. The server gets the `list_actors` and `act_as` tools, and every
+  other tool an optional `as` argument, whose actor the tool reads as
+  `ctx.actor`. See `Sake.Actors`.
+  """
+  defmacro actors(module), do: quote(do: @sake_actors(unquote(module)))
+
   defmacro middleware(event, plugs),
     do: quote(do: @sake_middleware({unquote(event), unquote(plugs)}))
 
@@ -156,7 +166,7 @@ defmodule Sake.Server do
 
       @sake_specs Sake.Server.compile!(
                     __MODULE__,
-                    @sake_tools,
+                    @sake_tools ++ if(@sake_actors, do: Sake.Actors.tools(), else: []),
                     @sake_resources,
                     @sake_prompts,
                     @sake_mounted,
@@ -185,6 +195,7 @@ defmodule Sake.Server do
       unquote(Sake.Server.list_defs())
       unquote(Sake.Server.setting_defs(opts))
       unquote(Sake.Server.extension_defs())
+      unquote(Sake.Server.actor_defs())
     end
   end
 
@@ -218,6 +229,13 @@ defmodule Sake.Server do
 
       def __sake__(:sources),
         do: unquote(__MODULE__).sources(@sake_proxy, __MODULE__, @sake_mounted)
+    end
+  end
+
+  @doc false
+  def actor_defs do
+    quote do
+      def __sake__(:actors), do: @sake_actors
     end
   end
 

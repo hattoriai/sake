@@ -17,6 +17,10 @@ defmodule Sake.Context do
   session keeps only its `name`, `title` and `version`, which ride in the
   signed session ID. It is `%{}` when the client sent none.
 
+  `actor` is who a tool call acts as for the principal, on a server with
+  `actors` (a `Sake.Actors.Actor`, or `nil` for the principal
+  themselves): see `Sake.Actors`.
+
   `base_url` is the URL of the MCP endpoint the request reached, as the
   client reaches it: scheme, host, the port when it is not the scheme's
   default, and the endpoint's path, without a query or a trailing slash
@@ -56,6 +60,7 @@ defmodule Sake.Context do
             client_info: %{},
             client_capabilities: %{},
             scope: nil,
+            actor: nil,
             token: nil,
             scopes: [],
             request_id: nil,
